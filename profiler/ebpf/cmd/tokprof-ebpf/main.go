@@ -2,7 +2,8 @@
 //
 // Subcommands:
 //
-//	trace     capture LLM exchanges from running processes (Linux amd64, needs root or CAP_BPF)
+//	trace     capture LLM exchanges from running processes (Linux amd64/arm64, needs root or CAP_BPF)
+//	status    count tokprof eBPF programs still loaded in the kernel (leftovers after a crash)
 //	inspect   list which running processes expose a TLS library the eBPF tap could attach to
 //	          (no privileges needed beyond what the current user may read in /proc)
 package main
@@ -28,6 +29,8 @@ func main() {
 		runInspect(os.Args[2:])
 	case "trace":
 		runTrace(os.Args[2:])
+	case "status":
+		runStatus()
 	default:
 		usage()
 		os.Exit(2)
@@ -35,7 +38,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: tokprof-ebpf inspect [--all] [--json]\n       tokprof-ebpf trace (--pid N[,N] | --comm NAME[,NAME] | --all) [--duration D] [--exit-on-stdin-eof]")
+	fmt.Fprintln(os.Stderr, "usage: tokprof-ebpf inspect [--all] [--json]\n       tokprof-ebpf status\n       tokprof-ebpf trace (--pid N[,N] | --comm NAME[,NAME] | --all) [--duration D] [--exit-on-stdin-eof]")
 }
 
 func runInspect(args []string) {

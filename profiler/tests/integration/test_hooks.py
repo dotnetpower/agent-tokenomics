@@ -40,6 +40,31 @@ const base = process.env.MOCK_URL;
 """
 
 
+REQUESTS_CLIENT = r"""
+import os, requests
+base = os.environ["MOCK_URL"]
+msgs = [{"role": "system", "content": "# Role\nBe brief.\n" + "rule. " * 80}, {"role": "user", "content": "hello"}]
+requests.post(base + "/v1/chat/completions", json={"model": "gpt-4o", "messages": msgs})
+r = requests.post(base + "/v1/chat/completions", json={"model": "gpt-4o", "messages": msgs, "stream": True}, stream=True)
+for _ in r.iter_lines():
+    pass
+"""
+
+AIOHTTP_CLIENT = r"""
+import asyncio, os, aiohttp
+base = os.environ["MOCK_URL"]
+msgs = [{"role": "system", "content": "# Role\nBe brief.\n" + "rule. " * 80}, {"role": "user", "content": "hello"}]
+async def main():
+    async with aiohttp.ClientSession() as s:
+        async with s.post(base + "/v1/chat/completions", json={"model": "gpt-4o", "messages": msgs}) as r:
+            await r.read()
+        async with s.post(base + "/v1/chat/completions", json={"model": "gpt-4o", "messages": msgs, "stream": True}) as r:
+            async for _ in r.content:
+                pass
+asyncio.run(main())
+"""
+
+
 @pytest.fixture()
 def mock():
     m = MockProcess()
@@ -108,3 +133,15 @@ def test_hook_never_breaks_the_app_when_gateway_is_unreachable(tmp_path, mock):
     env["PYTHONPATH"] = BOOT_DIR
     r = subprocess.run([sys.executable, "-c", PY_CLIENT], env=env, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.parametrize("lib,script", [("requests", REQUESTS_CLIENT), ("aiohttp", AIOHTTP_CLIENT)])
+def test_python_hook_captures_requests_and_aiohttp(tmp_path, mock, lib, script):
+    pytest.importorskip(lib)
+    out = tmp_path / f"{lib}.jsonl"
+    code = run([sys.executable, "-c", script], out, mock, gateway_env=False, hooks=True)
+    assert code == 0
+    recs = list(read_jsonl(str(out)))
+    assert len(recs) == 2 and sorted(r["stream"] for r in recs) == [False, True]
+    assert all(r["usage"].get("input_total") for r in recs)
+    assert "system" in {s["kind"] for r in recs for s in r["segments"]}

@@ -33,6 +33,13 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install
         run: python -m pip install -e ".[dev]"
+      - name: Install mitmproxy as a separate tool (used by the mitm tests only)
+        if: matrix.python == '3.12'
+        shell: bash
+        run: |
+          python -m pip install uv
+          uv tool install mitmproxy --python 3.12
+          echo "$(uv tool dir --bin)" >> "$GITHUB_PATH"
       - name: Unit and integration tests
         run: python -m pytest
       - name: Self test (mock LLM through the gateway)
@@ -54,3 +61,35 @@ jobs:
       - run: go test ./...
       - run: go build -o bin/tokprof-ebpf ./cmd/tokprof-ebpf
       - run: ./bin/tokprof-ebpf inspect | tail -2
+      - name: Cross-build and vet for other targets
+        run: |
+          GOARCH=arm64 go vet ./...
+          GOOS=darwin GOARCH=arm64 go build ./...
+          GOOS=windows go build ./...
+
+  ebpf-e2e:
+    name: ebpf e2e (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: profiler/ebpf/go.mod
+      - name: Build helper
+        working-directory: profiler/ebpf
+        run: go build -o bin/tokprof-ebpf ./cmd/tokprof-ebpf
+      - name: Kernel facts
+        run: uname -r; ls /sys/kernel/btf/vmlinux
+      - name: Capture real TLS clients (python, node, curl) with the probes
+        working-directory: profiler/ebpf
+        run: sudo -E env "PATH=$PATH" python3 e2e/run_e2e.py --helper bin/tokprof-ebpf
+      - name: Same through `tokprof ebpf`
+        working-directory: profiler/ebpf
+        run: sudo -E env "PATH=$PATH" python3 e2e/run_e2e.py --helper bin/tokprof-ebpf --tokprof
+      - name: Probes are removed when the helper is killed
+        working-directory: profiler/ebpf
+        run: sudo -E env "PATH=$PATH" python3 e2e/crash_cleanup.py --helper bin/tokprof-ebpf

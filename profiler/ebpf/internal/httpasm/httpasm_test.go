@@ -107,7 +107,7 @@ func TestIgnoresNonLLMAndHTTP2(t *testing.T) {
 		a = x
 		x.Feed(4, "c", 1, DirWrite, []byte(request("/upload", `{"file":"x"}`)), now)
 		x.Feed(4, "c", 1, DirRead, []byte("HTTP/1.1 204 No Content\r\n\r\n"), now)
-		x.Feed(4, "c", 2, DirWrite, []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"), now)
+		x.Feed(4, "c", 2, DirWrite, []byte("\x16\x03\x01\x02\x00garbage"), now)
 	})
 	if len(got) != 0 || a.Stats.Ignored != 1 || a.Stats.NonHTTP != 1 {
 		t.Fatalf("got=%v stats=%+v", got, a.Stats)

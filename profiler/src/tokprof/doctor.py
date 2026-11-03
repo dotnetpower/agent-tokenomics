@@ -65,13 +65,19 @@ def run_doctor() -> int:
     redirected = [v for v in ("OPENAI_BASE_URL", "ANTHROPIC_BASE_URL", "AZURE_OPENAI_ENDPOINT") if os.environ.get(v)]
     add("existing base-URL env vars", True, ", ".join(redirected) + " (kept as upstream)" if redirected else "none")
     ebpf_ok, ebpf_note = _ebpf_status()
-    add("eBPF TLS tap (Linux, later release)", ebpf_ok, ebpf_note)
+    add("eBPF TLS tap (Linux)", ebpf_ok, ebpf_note)
+    from .mitm import find_mitmdump
+
+    mitm = find_mitmdump()
+    add("mitmproxy (tokprof mitm; Windows/macOS local capture)", mitm is not None,
+        mitm or "not found; optional. Install outside your project: uv tool install mitmproxy")
 
     print(f"tokprof {__version__} doctor")
     for name, ok, detail in rows:
         print(f"  [{'ok' if ok else '--'}] {name}: {detail}")
     print()
     print("Available capture backends:")
-    print("  gateway (tokprof run / shell): yes, for processes started under tokprof that honor *_BASE_URL env vars")
-    print(f"  eBPF tap for running processes: {'possible' if ebpf_ok else 'not available'} (not implemented yet)")
+    print("  gateway and in-process hooks (tokprof run / shell): yes, for processes started under tokprof")
+    print(f"  eBPF tap for running processes (tokprof ebpf): {'possible' if ebpf_ok else 'not available'}")
+    print(f"  mitmproxy local capture (tokprof mitm): {'possible' if mitm else 'install mitmproxy first'}")
     return 0

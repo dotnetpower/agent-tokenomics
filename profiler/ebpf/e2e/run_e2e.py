@@ -91,6 +91,49 @@ def check_tokprof(path, expected, err_lines):
     return 0 if ok else 1
 
 
+H2_SERVER = r"""
+const http2 = require('http2'), fs = require('fs');
+const [port, key, crt] = process.argv.slice(2);
+const RESP = JSON.stringify({id: 'r1', usage: {prompt_tokens: 77, completion_tokens: 3, total_tokens: 80}, choices: []});
+const SSE1 = 'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n';
+const SSE2 = 'data: {"choices":[],"usage":{"prompt_tokens":77,"completion_tokens":3,"total_tokens":80}}\n\ndata: [DONE]\n\n';
+http2.createSecureServer({key: fs.readFileSync(key), cert: fs.readFileSync(crt)}).on('stream', (st) => {
+  let b = ''; st.on('data', (d) => b += d);
+  st.on('end', () => {
+    if (JSON.parse(b).stream) { st.respond({':status': 200, 'content-type': 'text/event-stream'}); st.write(SSE1); setTimeout(() => st.end(SSE2), 20); }
+    else { st.respond({':status': 200, 'content-type': 'application/json'}); st.end(RESP); }
+  });
+}).listen(+port, '127.0.0.1');
+"""
+
+H2_CLIENT = r"""
+const http2 = require('http2'), fs = require('fs');
+let [flag, url, payload] = process.argv.slice(2);
+if (payload.startsWith('@')) payload = fs.readFileSync(payload.slice(1), 'utf8');
+function go() {
+  const u = new URL(url); let failed = false;
+  const retry = () => { if (!failed) { failed = true; setTimeout(go, 300); } };
+  const c = http2.connect(u.origin, {rejectUnauthorized: false});
+  c.on('error', retry);
+  const req = c.request({':method': 'POST', ':path': u.pathname, 'content-type': 'application/json', authorization: 'Bearer SECRET-TOKEN'});
+  req.on('error', retry);
+  let d = ''; req.on('data', (x) => d += x);
+  req.on('end', () => { console.log(d.length); c.close(); setTimeout(() => process.exit(0), 500); });
+  req.end(payload);
+}
+const t = setInterval(() => { if (fs.existsSync(flag)) { clearInterval(t); go(); } }, 50);
+"""
+
+
+def free_port():
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
 def find_uv_python():
     base = os.path.expanduser("~/.local/share/uv/python")
     if not os.path.isdir(base):
@@ -147,6 +190,21 @@ def main():
                                  "-H", "Authorization: Bearer SECRET-TOKEN", "-d", "@-"],
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         clients["curl"] = curl
+        # HTTP/2 can only be followed from the first byte of a connection, so these clients connect after the
+        # helper is attached: the Node client waits for the flag file, and curl retries until the server appears.
+        h2port = free_port()
+        h2url = f"https://127.0.0.1:{h2port}/v1/chat/completions"
+        h2srv_js, h2cl_js = os.path.join(tmp, "h2srv.js"), os.path.join(tmp, "h2cl.js")
+        open(h2srv_js, "w").write(H2_SERVER)
+        open(h2cl_js, "w").write(H2_CLIENT)
+        clients["node-h2"] = subprocess.Popen(["node", h2cl_js, flag, h2url, body], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        clients["node-h2-sse"] = subprocess.Popen(["node", h2cl_js, flag, h2url, stream], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        bodyfile = os.path.join(tmp, "body.json")
+        open(bodyfile, "w").write(body)
+        clients["curl-h2"] = subprocess.Popen(
+            ["curl", "-sk", "--http2", "--retry", "40", "--retry-delay", "1", "--retry-connrefused", "-X", "POST", h2url,
+             "-H", "Content-Type: application/json", "-H", "Authorization: Bearer SECRET-TOKEN", "-d", "@" + bodyfile],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         time.sleep(1.0)
 
         pids = ",".join(str(p.pid) for p in clients.values())
@@ -177,6 +235,8 @@ def main():
             h.kill()
             return 2
         time.sleep(2.5)  # let it attach to every client (rescan runs every second)
+        h2srv = subprocess.Popen(["node", h2srv_js, str(h2port), key, crt], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(0.5)
         open(flag, "w").close()
         curl.stdin.write(body)
         curl.stdin.close()
@@ -192,6 +252,7 @@ def main():
         time.sleep(0.2)
         out = "".join(out_lines)
         srv.shutdown()
+        h2srv.kill()
 
         if os.environ.get('E2E_DEBUG'):
             print('RAW', out[:1500])

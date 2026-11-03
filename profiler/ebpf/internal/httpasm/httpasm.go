@@ -50,6 +50,7 @@ type conn struct {
 	rbuf      []byte
 	reading   bool
 	bad       bool
+	h2        *h2conn
 	wDamaged  bool // request bytes were truncated by the capture limit
 	rDamaged  bool
 	reqAt     time.Time
@@ -62,7 +63,7 @@ type conn struct {
 type Stats struct {
 	Exchanges  int // emitted
 	Ignored    int // complete HTTP exchanges that were not LLM calls
-	NonHTTP    int // connections that did not look like HTTP/1.x (for example HTTP/2)
+	NonHTTP    int // connections that were neither HTTP/1.x nor HTTP/2 seen from the start (for example TLS in mid-connection)
 	Incomplete int // exchanges dropped because bytes were missing
 	Unreadable int // LLM calls whose response could not be decoded
 }
@@ -98,6 +99,16 @@ func (a *Assembler) Feed(pid uint32, comm string, ssl uint64, dir int, data []by
 	if c.bad {
 		return
 	}
+	if c.h2 != nil {
+		for _, st := range c.h2.feed(dir, data, now) {
+			a.h2exchange(k, c, st)
+		}
+		if c.h2.bad {
+			c.bad, c.h2 = true, nil
+			a.Stats.Incomplete++
+		}
+		return
+	}
 	if dir == DirWrite {
 		if c.reading {
 			a.flush(k, c)
@@ -110,9 +121,21 @@ func (a *Assembler) Feed(pid uint32, comm string, ssl uint64, dir int, data []by
 			return
 		}
 		c.wbuf = append(c.wbuf, data...)
+		if bytes.HasPrefix(h2Preface, c.wbuf) && len(c.wbuf) < len(h2Preface) {
+			return // part of the HTTP/2 preface; wait for the rest
+		}
+		if bytes.HasPrefix(c.wbuf, h2Preface) {
+			c.h2 = newH2()
+			rest := c.wbuf[len(h2Preface):]
+			c.wbuf = nil
+			for _, st := range c.h2.feed(DirWrite, rest, now) {
+				a.h2exchange(k, c, st)
+			}
+			return
+		}
 		if !looksLikeHTTPRequest(c.wbuf) {
 			if a.Debug != nil {
-				a.Debug("pid %d (%s) conn %#x: not HTTP/1.x, first bytes %q", pid, comm, ssl, firstN(c.wbuf, 24))
+				a.Debug("pid %d (%s) conn %#x: not HTTP, first bytes %q", pid, comm, ssl, firstN(c.wbuf, 24))
 			}
 			c.bad, c.wbuf = true, nil
 			a.Stats.NonHTTP++
@@ -364,6 +387,25 @@ func decodeBody(h header, body []byte) ([]byte, bool) {
 		return body, complete
 	}
 	return nil, complete // br/zstd are not decoded; counts fall back to local estimates
+}
+
+// decodeEncoded applies a content-encoding; ok is false when the encoding cannot be decoded.
+func decodeEncoded(body []byte, enc string) ([]byte, bool) {
+	switch enc {
+	case "gzip":
+		r, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return nil, false
+		}
+		out, _ := io.ReadAll(io.LimitReader(r, maxDecoded))
+		return out, true
+	case "deflate":
+		out, _ := io.ReadAll(io.LimitReader(flate.NewReader(bytes.NewReader(body)), maxDecoded))
+		return out, true
+	case "", "identity":
+		return body, true
+	}
+	return nil, false
 }
 
 // dechunk decodes chunked transfer encoding; done is true once the last chunk was seen.

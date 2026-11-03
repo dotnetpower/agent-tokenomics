@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux && (amd64 || arm64)
 
 // Package tap loads the TLS plaintext eBPF program and attaches it to processes.
 package tap
@@ -8,6 +8,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -248,6 +250,32 @@ func closeAll(files map[string][]link.Link) {
 	for _, ls := range files {
 		for _, l := range ls {
 			l.Close()
+		}
+	}
+}
+
+// LoadedPrograms returns how many tokprof TLS programs the kernel currently holds,
+// whichever process loaded them. It needs the same privileges as loading.
+func LoadedPrograms() (int, error) {
+	n := 0
+	var id ebpf.ProgramID
+	for {
+		next, err := ebpf.ProgramGetNextID(id)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return n, nil
+			}
+			return n, err
+		}
+		id = next
+		p, err := ebpf.NewProgramFromID(id)
+		if err != nil {
+			continue
+		}
+		info, err := p.Info()
+		p.Close()
+		if err == nil && strings.HasPrefix(info.Name, "ssl_") {
+			n++
 		}
 	}
 }

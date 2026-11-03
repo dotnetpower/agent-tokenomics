@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build linux && (amd64 || arm64)
 
 package main
 
@@ -68,6 +68,7 @@ func runTrace(args []string) {
 	duration := fs.Duration("duration", 0, "stop after this long (0 = until interrupted)")
 	idle := fs.Duration("idle", 2*time.Second, "treat a response as finished after this much silence")
 	exitOnEOF := fs.Bool("exit-on-stdin-eof", false, "exit (and remove all probes) when stdin closes; used by the Python launcher")
+	crashAfter := fs.Duration("crash-after", 0, "testing only: SIGKILL this process after the delay, to check that the kernel removes the probes")
 	debug := fs.Bool("debug", false, "print the full eBPF verifier log when the program fails to load")
 	verbose := fs.Bool("verbose", false, "log connections that were ignored and why")
 	dump := fs.Bool("dump-events", false, "log every captured chunk (debugging; prints the first bytes of plaintext)")
@@ -147,6 +148,9 @@ func runTrace(args []string) {
 				close(stop)
 			}
 		}()
+	}
+	if *crashAfter > 0 {
+		go func() { time.Sleep(*crashAfter); _ = syscall.Kill(os.Getpid(), syscall.SIGKILL) }()
 	}
 	var deadline <-chan time.Time
 	if *duration > 0 {
@@ -276,4 +280,12 @@ func firstBytes(b []byte, n int) []byte {
 		return b[:n]
 	}
 	return b
+}
+
+func runStatus() {
+	n, err := tap.LoadedPrograms()
+	if err != nil {
+		fatal("%v (needs root or CAP_SYS_ADMIN/CAP_BPF)", err)
+	}
+	fmt.Printf("tokprof eBPF programs loaded in the kernel: %d\n", n)
 }

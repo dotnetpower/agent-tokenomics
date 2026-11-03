@@ -1,7 +1,7 @@
 """tokprof in-process hook for Python (loaded through sitecustomize; standard library only).
 
 Activated only when TOKPROF_PORT and TOKPROF_TOKEN are set by `tokprof run`. It copies LLM request/response
-bodies that httpx sends to the local tokprof gateway's ingest endpoint, so the analysis happens in the
+bodies that httpx, requests and aiohttp send to the local tokprof gateway's ingest endpoint, so the analysis happens in the
 tokprof process. It never modifies requests or responses and swallows its own errors.
 """
 
@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 import zlib
+from urllib.parse import urlsplit
 
 _PORT = os.environ.get("TOKPROF_PORT", "")
 _TOKEN = os.environ.get("TOKPROF_TOKEN", "")
@@ -95,22 +96,26 @@ def _decode(data, encoding):
 
 
 class _Capture:
-    """Collects one exchange and ships it when the response body ends."""
+    """Collects one exchange and ships it when the response body ends.
 
-    def __init__(self, request, response):
+    ``meta`` is called once at the end and returns (status, content-encoding, content-type, already_decoded).
+    """
+
+    def __init__(self, path, request_text, meta):
         self.chunks = []
         self.size = 0
         self.t0 = time.time()
         self.ttfb = None
         self.done = False
-        self.request = request
-        self.response = response
+        self.path = path
+        self.request_text = request_text
+        self.meta = meta
 
     def add(self, chunk):
         if self.ttfb is None:
             self.ttfb = int((time.time() - self.t0) * 1000)
         if self.size < _CAP:
-            self.chunks.append(chunk)
+            self.chunks.append(bytes(chunk))
             self.size += len(chunk)
 
     def finish(self, error=None):
@@ -118,33 +123,57 @@ class _Capture:
             return
         self.done = True
         try:
-            req, resp = self.request, self.response
-            headers = resp.headers
+            status, encoding, ctype, decoded = self.meta()
             body = b"".join(self.chunks)
-            text = _decode(body, headers.get("content-encoding"))
-            content = req.content if isinstance(req.content, (bytes, bytearray)) else b""
+            text = body.decode("utf-8", "replace") if decoded else _decode(body, encoding)
             _send({
-                "path": req.url.path,
-                "request": bytes(content).decode("utf-8", "replace"),
-                "status": resp.status_code,
+                "path": self.path,
+                "request": self.request_text,
+                "status": status,
                 "response": text,
-                "sse": "text/event-stream" in headers.get("content-type", ""),
+                "sse": "text/event-stream" in (ctype or ""),
                 "ts": self.t0,
                 "ttfb_ms": self.ttfb,
+                "latency_ms": int((time.time() - self.t0) * 1000),
                 "error": error,
             })
         except Exception as exc:
             _warn("could not capture a call: %r" % (exc,))
 
 
+def _to_text(body):
+    if isinstance(body, (bytes, bytearray)):
+        return bytes(body).decode("utf-8", "replace")
+    if isinstance(body, str):
+        return body
+    return None  # streamed or form bodies are not captured
+
+
+def _httpx_capture(request, resp):
+    content = request.content if isinstance(request.content, (bytes, bytearray)) else b""
+    headers = resp.headers
+    return _Capture(
+        request.url.path,
+        bytes(content).decode("utf-8", "replace"),
+        lambda: (resp.status_code, headers.get("content-encoding"), headers.get("content-type", ""), False),
+    )
+
+
+def _is_llm_post(method, host, port, path):
+    try:
+        if (method or "").upper() != "POST":
+            return False
+        if host in ("127.0.0.1", "localhost") and str(port) == _PORT:
+            return False  # already going through the gateway
+        return bool(_LLM_PATH.search(path or ""))
+    except Exception:
+        return False
+
+
 def _wanted(request):
     try:
-        if request.method != "POST":
-            return False
         url = request.url
-        if url.host in ("127.0.0.1", "localhost") and str(url.port) == _PORT:
-            return False  # already going through the gateway
-        return bool(_LLM_PATH.search(url.path))
+        return _is_llm_post(request.method, url.host, url.port, url.path)
     except Exception:
         return False
 
@@ -193,7 +222,7 @@ def _patch_httpx(httpx):
         resp = orig_sync(self, request)
         try:
             if _wanted(request):
-                resp.stream = TeeSync(resp.stream, _Capture(request, resp))
+                resp.stream = TeeSync(resp.stream, _httpx_capture(request, resp))
         except Exception as exc:
             _warn("hook error: %r" % (exc,))
         return resp
@@ -202,7 +231,7 @@ def _patch_httpx(httpx):
         resp = await orig_async(self, request)
         try:
             if _wanted(request):
-                resp.stream = TeeAsync(resp.stream, _Capture(request, resp))
+                resp.stream = TeeAsync(resp.stream, _httpx_capture(request, resp))
         except Exception as exc:
             _warn("hook error: %r" % (exc,))
         return resp
@@ -212,21 +241,123 @@ def _patch_httpx(httpx):
     sync_cls._tokprof_patched = True
 
 
-class _Finder:
-    """Patch httpx right after it is first imported."""
+def _patch_requests(requests):
+    from requests.adapters import HTTPAdapter
 
-    _busy = False
+    if getattr(HTTPAdapter, "_tokprof_patched", False):
+        return
+    orig_send = HTTPAdapter.send
+
+    def send(self, request, *args, **kwargs):
+        resp = orig_send(self, request, *args, **kwargs)
+        try:
+            parts = urlsplit(request.url)
+            if _is_llm_post(request.method, parts.hostname, parts.port, parts.path):
+                text = _to_text(request.body)
+                if text is not None:
+                    cap = _Capture(
+                        parts.path, text,
+                        # iter_content yields bytes already decoded by urllib3
+                        lambda: (resp.status_code, None, resp.headers.get("content-type", ""), True),
+                    )
+                    orig_iter = resp.iter_content
+
+                    def iter_content(chunk_size=1, decode_unicode=False):
+                        try:
+                            for chunk in orig_iter(chunk_size, decode_unicode):
+                                cap.add(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
+                                yield chunk
+                        finally:
+                            cap.finish()
+
+                    resp.iter_content = iter_content
+        except Exception as exc:
+            _warn("hook error: %r" % (exc,))
+        return resp
+
+    HTTPAdapter.send = send
+    HTTPAdapter._tokprof_patched = True
+
+
+def _patch_aiohttp(aiohttp):
+    ClientSession = aiohttp.ClientSession
+    if getattr(ClientSession, "_tokprof_patched", False):
+        return
+    orig_request = ClientSession._request
+
+    async def _request(self, method, str_or_url, *args, **kwargs):
+        resp = await orig_request(self, method, str_or_url, *args, **kwargs)
+        try:
+            url = resp.url
+            if _is_llm_post(method, url.host, url.port, url.path):
+                if kwargs.get("json") is not None:
+                    text = json.dumps(kwargs["json"])
+                else:
+                    text = _to_text(kwargs.get("data"))
+                if text is not None:
+                    _tee_aiohttp(resp, url.path, text)
+        except Exception as exc:
+            _warn("hook error: %r" % (exc,))
+        return resp
+
+    ClientSession._request = _request
+    ClientSession._tokprof_patched = True
+
+
+def _tee_aiohttp(resp, path, text):
+    cap = _Capture(
+        path, text,
+        # the parser already removed any content-encoding before feeding the stream
+        lambda: (resp.status, None, resp.headers.get("Content-Type", ""), True),
+    )
+    stream = resp.content
+    for chunk in list(getattr(stream, "_buffer", ())):
+        cap.add(chunk)
+    base = type(stream)
+
+    # StreamReader may use __slots__, so instance attributes are read-only; an empty-slot
+    # subclass with the same layout lets this one instance be tapped.
+    class Tapped(base):
+        __slots__ = ()
+
+        def feed_data(self, data, *a, **k):
+            try:
+                cap.add(data)
+            except Exception:
+                pass
+            return base.feed_data(self, data, *a, **k)
+
+        def feed_eof(self):
+            try:
+                cap.finish()
+            except Exception:
+                pass
+            return base.feed_eof(self)
+
+    stream.__class__ = Tapped
+    if stream.is_eof():
+        cap.finish()
+
+
+_PATCHERS = {"httpx": _patch_httpx, "requests": _patch_requests, "aiohttp": _patch_aiohttp}
+
+
+class _Finder:
+    """Patch each supported HTTP library right after it is first imported."""
+
+    def __init__(self):
+        self._busy = set()
 
     def find_spec(self, name, path=None, target=None):
-        if name != "httpx" or _Finder._busy:
+        if name not in _PATCHERS or name in self._busy:
             return None
         import importlib.util
 
-        _Finder._busy = True
+        self._busy.add(name)
         try:
             spec = importlib.util.find_spec(name)
         finally:
-            _Finder._busy = False
+            self._busy.discard(name)
         if spec is None or spec.loader is None:
             return None
         loader = spec.loader
@@ -235,9 +366,9 @@ class _Finder:
         def exec_module(module):
             orig_exec(module)
             try:
-                _patch_httpx(module)
+                _PATCHERS[name](module)
             except Exception as exc:
-                _warn("could not hook httpx: %r" % (exc,))
+                _warn("could not hook %s: %r" % (name, exc))
 
         loader.exec_module = exec_module
         return spec
@@ -246,10 +377,14 @@ class _Finder:
 def install():
     if not (_PORT and _TOKEN):
         return
-    if "httpx" in sys.modules:
-        try:
-            _patch_httpx(sys.modules["httpx"])
-        except Exception as exc:
-            _warn("could not hook httpx: %r" % (exc,))
-    else:
+    missing = False
+    for name, patcher in _PATCHERS.items():
+        if name in sys.modules:
+            try:
+                patcher(sys.modules[name])
+            except Exception as exc:
+                _warn("could not hook %s: %r" % (name, exc))
+        else:
+            missing = True
+    if missing:
         sys.meta_path.insert(0, _Finder())

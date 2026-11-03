@@ -76,10 +76,10 @@ tokprof compare before.jsonl after.jsonl        # bootstrap interval, for stages
 - **Accuracy.** Providers report only totals, so segment counts are local estimates and the rest is shown as
   *unattributed*. Install `tiktoken` for OpenAI-family models. Check the residual before trusting a breakdown.
 - **Already-running processes (Linux).** `tokprof ebpf --pid <PID>` attaches eBPF probes to the process's TLS library and
-  records its LLM calls without restarting or changing it. It needs root or `CAP_BPF`, and does not see HTTP/2 or Go `crypto/tls`
-  traffic. See the [profiler README](https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler#linux-ebpf-tap-running-processes-no-restart-no-code-change).
+  records its LLM calls without restarting or changing it. It needs root or `CAP_BPF`; it follows HTTP/1.1 and HTTP/2 (for connections
+  opened after it attached) but not Go `crypto/tls`. See the [profiler README](https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler#linux-ebpf-tap-running-processes-no-restart-no-code-change).
 - **Limits today.** Outside the eBPF tap, only processes started under `tokprof` are captured. Clients that neither honor the
-  base-URL variables nor use `httpx` or Node `fetch` are not captured. Windows and macOS have no tap for running processes yet.
+  base-URL variables nor use `httpx`, `requests`, `aiohttp` or Node `fetch` are not captured under `tokprof run`. On Windows and macOS, `tokprof mitm --local <process>` uses mitmproxy's local capture instead (needs administrator rights and trusting the mitmproxy CA).
 
 ## Checks
 

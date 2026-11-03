@@ -70,6 +70,16 @@ def build_parser() -> argparse.ArgumentParser:
     eb.add_argument("--no-tiktoken", action="store_true")
     eb.add_argument("--report", action="store_true")
 
+    mm = sub.add_parser("mitm", help="capture LLM calls of selected processes through mitmproxy (Windows, macOS, or any OS)")
+    mm.add_argument("--local", default="", help="comma-separated process names or PIDs for mitmproxy local capture")
+    mm.add_argument("--mode", default="", help="any mitmproxy mode instead, for example regular@8080")
+    mm.add_argument("--mitmdump", help="path to mitmdump")
+    mm.add_argument("--out")
+    mm.add_argument("--component", action="append", metavar="NAME=@FILE")
+    mm.add_argument("--no-tiktoken", action="store_true")
+    mm.add_argument("--report", action="store_true")
+    mm.add_argument("--trust-help", action="store_true", help="explain how processes can trust the mitmproxy CA, then exit")
+
     rep = sub.add_parser("report", help="summarize a recorded JSONL file")
     rep.add_argument("file")
     rep.add_argument("--format", choices=["text", "md", "json"], default="text")
@@ -162,6 +172,23 @@ def main(argv: Optional[list] = None) -> int:
         code = run_ebpf(
             out, pids=args.pid, comms=args.comm, everything=args.all, helper=args.helper, duration=args.duration,
             components=_components(args.component), use_tiktoken=not args.no_tiktoken, use_sudo=not args.no_sudo,
+        )
+        if args.report and os.path.exists(out):
+            print()
+            _report(out, "text", 5.0)
+        elif os.path.exists(out):
+            print(f"tokprof: view the breakdown with: tokprof report {out}", file=sys.stderr)
+        return code
+    if args.cmd == "mitm":
+        from .mitm import TRUST_HELP, run_mitm
+
+        if args.trust_help:
+            print(TRUST_HELP)
+            return 0
+        out = args.out or _default_out()
+        code = run_mitm(
+            out, local=args.local, mode=args.mode, mitmdump=args.mitmdump, components=_components(args.component),
+            use_tiktoken=not args.no_tiktoken, extra=cmd_tail,
         )
         if args.report and os.path.exists(out):
             print()
