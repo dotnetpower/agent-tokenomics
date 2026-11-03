@@ -170,3 +170,88 @@ def summarize(records: list, gap_s: float = 5.0) -> dict:
         "findings": findings(records, gap_s=gap_s),
         "kinds_order": list(KINDS) + ["residual"],
     }
+
+
+# ---- cost estimate, comparison, and legacy export ---------------------------------------------
+
+def estimate_cost(records: list, prices: dict) -> dict:
+    """Estimate cost from reported usage. prices: {model: {"input", "cached", "output"}} in currency per 1M tokens.
+
+    A "default" entry covers models without their own entry. Treat the result as an estimate: provider prices change.
+    """
+    total = 0.0
+    missing: set = set()
+    for r in records:
+        u = r.get("usage") or {}
+        p = prices.get(r.get("model") or "") or prices.get("default")
+        if not p or u.get("input_total") is None:
+            missing.add(r.get("model") or "?")
+            continue
+        cached = u.get("cached") or 0
+        uncached = max(0, u["input_total"] - cached)
+        total += (uncached * p.get("input", 0) + cached * p.get("cached", p.get("input", 0)) + (u.get("output") or 0) * p.get("output", 0)) / 1_000_000
+    return {"total": total, "models_without_price": sorted(missing)}
+
+
+def _group_metrics(records: list, gap_s: float) -> dict:
+    groups = group_requests(records, gap_s)
+    return {
+        "input_per_request": [sum(_in(r) for r in g) for g in groups],
+        "calls_per_request": [len(g) for g in groups],
+    }
+
+
+def bootstrap_diff(a: list, b: list, n: int = 2000, seed: int = 0) -> Optional[tuple]:
+    """Mean(b) - mean(a) with a 95% percentile bootstrap interval; None when a sample is empty."""
+    import random
+
+    if not a or not b:
+        return None
+    rng = random.Random(seed)
+    diffs = []
+    for _ in range(n):
+        ma = sum(rng.choice(a) for _ in a) / len(a)
+        mb = sum(rng.choice(b) for _ in b) / len(b)
+        diffs.append(mb - ma)
+    diffs.sort()
+    point = sum(b) / len(b) - sum(a) / len(a)
+    return point, diffs[int(0.025 * n)], diffs[int(0.975 * n) - 1]
+
+
+def compare(before: list, after: list, gap_s: float = 5.0) -> dict:
+    ma, mb = _group_metrics(before, gap_s), _group_metrics(after, gap_s)
+    out = {"requests": {"before": len(ma["input_per_request"]), "after": len(mb["input_per_request"])}, "metrics": {}}
+    for name in ("input_per_request", "calls_per_request"):
+        a, b = ma[name], mb[name]
+        bd = bootstrap_diff(a, b)
+        mean_a = sum(a) / len(a) if a else 0.0
+        out["metrics"][name] = {
+            "before_mean": mean_a,
+            "after_mean": (sum(b) / len(b)) if b else 0.0,
+            "diff": bd[0] if bd else None,
+            "ci95": [bd[1], bd[2]] if bd else None,
+            "relative_change_pct": (100 * bd[0] / mean_a) if (bd and mean_a) else None,
+            "significant": bool(bd and (bd[1] > 0 or bd[2] < 0)),
+        }
+    out["reliable"] = min(out["requests"].values()) >= 5
+    return out
+
+
+def to_legacy(records: list, gap_s: float = 5.0) -> list:
+    """Convert records to the JSONL schema used by examples/token_report.py."""
+    rows: list = []
+    for gi, g in enumerate(group_requests(records, gap_s), 1):
+        for r in g:
+            u = r.get("usage") or {}
+            defs = [{"name": s.get("name") or "tool", "tokens": s["tokens"]} for s in r.get("segments", []) if s["kind"] == "tool_def"]
+            rows.append({
+                "session": r.get("conv") or r.get("run") or "s",
+                "turn": gi,
+                "model": r.get("model"),
+                "input_tokens": u.get("input_total", r.get("est_input", 0)),
+                "cached_input_tokens": u.get("cached", 0) or 0,
+                "output_tokens": u.get("output", r.get("output_est") or 0) or 0,
+                "tool_defs": defs,
+                "tool_calls": [{"name": n, "error": None, "output_tokens": 0} for n in r.get("tool_calls", [])],
+            })
+    return rows

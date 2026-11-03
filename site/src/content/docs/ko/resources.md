@@ -75,6 +75,7 @@ sidebar:
 
 | 프로젝트 | 기능 |
 |---------|--------------|
+| [tokprof](https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler)(이 저장소) | 코드를 수정하지 않고 호출마다 입력 토큰을 시스템 프롬프트, 이력, 사용자 프롬프트, 도구 항목으로 분해합니다. 초기 개발 단계입니다. |
 | [alexgreensh/token-optimizer](https://github.com/alexgreensh/token-optimizer) | 에이전트 세션에서 "유령 토큰"과 컨텍스트 품질 저하를 찾아냅니다. |
 | [activeing123/mcptoon](https://github.com/activeing123/mcptoon) | 도구 검색과 컨텍스트 압축을 목표로 하는 MCP 게이트웨이 CLI입니다. |
 | [ccusage/ccusage](https://github.com/ccusage/ccusage) | 로컬 Claude Code 로그로 사용량과 비용 보고서를 만듭니다. |

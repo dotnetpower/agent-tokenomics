@@ -37,3 +37,18 @@ jobs:
         run: python -m pytest
       - name: Self test (mock LLM through the gateway)
         run: python -m tokprof selftest
+
+  ebpf-helper:
+    name: ebpf helper (go build, vet)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: profiler/ebpf
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - run: go vet ./...
+      - run: go build -o bin/tokprof-ebpf ./cmd/tokprof-ebpf
+      - run: ./bin/tokprof-ebpf inspect | tail -2

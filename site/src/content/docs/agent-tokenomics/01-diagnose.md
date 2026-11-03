@@ -18,11 +18,12 @@ sidebar:
 
 ## Collect the request log
 
-You need one record per model call (fields: see the [index](../)). Three ways to get it:
+You need one record per model call (fields: see the [index](../)). Four ways to get it:
 
 1. **Provider usage fields** — log the `usage` object each API response returns (input, cached, output, reasoning tokens).
 2. **Tracing SDK / OpenTelemetry** — instrument the agent so each model call and tool call becomes a span.
 3. **Gateway / proxy** — route model traffic through a gateway that logs every request.
+4. **Profiler without code changes** — [`tokprof`](#profile-without-changing-code-tokprof) runs your existing agent under a local gateway and breaks every call's input tokens down by system prompt, history, user prompt, and tool content.
 
 These platforms can do 2 and 3 for agents you build or operate. Pick one; do not stack several on the same traffic.
 
@@ -53,6 +54,29 @@ export or query the platform's data and map it to the JSONL fields (`session`, `
 
 Using GitHub Copilot in VS Code instead? These do not instrument it; use
 [Agent Debug Logs and the Cache Explorer](../../copilot-tokenomics/02-measure-usage/).
+
+## Profile without changing code: tokprof
+
+[`tokprof`](https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler) (early development, Python 3.9+, no dependency on your agent's project) answers "which part of each request costs the tokens?" for agents you start through it:
+
+```bash
+uv tool install ./profiler            # isolated install, nothing is added to the agent's project
+tokprof run --report -- python my_agent.py      # any command, any language
+tokprof report .tokprof/run-*.jsonl --prices prices.json
+tokprof compare before.jsonl after.jsonl        # bootstrap interval, for stages 3 and 5
+```
+
+- **How it captures.** `tokprof run` starts a gateway on `127.0.0.1` and points `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`,
+  and `AZURE_OPENAI_ENDPOINT` at it **for that command only**. For clients that hard-code their endpoint it also loads
+  in-process hooks (Python `httpx` through `sitecustomize`, Node `fetch` through `--require`). `tokprof start` / `env` /
+  `stop` keeps a background session for new processes in a shell.
+- **What it shows.** Input tokens by system prompt (split by section), history, current prompt, tool definitions, tool
+  calls, and tool results; fixed overhead; per-step token map; calls per request; unused tools; repeated static blocks.
+- **What it stores.** Counts, salted hashes, lengths, and section and tool names. Not prompt text, headers, or keys.
+- **Accuracy.** Providers report only totals, so segment counts are local estimates and the rest is shown as
+  *unattributed*. Install `tiktoken` for OpenAI-family models. Check the residual before trusting a breakdown.
+- **Limits today.** Only processes started under `tokprof` are captured; already-running processes need the planned Linux
+  eBPF tap. Clients that neither honor the base-URL variables nor use `httpx` or Node `fetch` are not captured.
 
 ## Checks
 

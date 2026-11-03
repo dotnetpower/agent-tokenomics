@@ -13,13 +13,16 @@ dependencies = []
 
 [project.optional-dependencies]
 tiktoken = ["tiktoken>=0.7"]
-dev = ["pytest>=8", "tiktoken>=0.7"]
+dev = ["pytest>=8", "tiktoken>=0.7", "httpx>=0.27"]
 
 [project.scripts]
 tokprof = "tokprof.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+tokprof = ["boot/*.py", "boot/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

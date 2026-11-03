@@ -36,6 +36,22 @@ fetch(base + "/chat/completions", {method: "POST", headers: {"Content-Type": "ap
 """
 
 
+HTTPX_CLIENT = r"""
+import os, httpx
+httpx.post(os.environ["TOKPROF_SELFTEST_MOCK"] + "/v1/chat/completions",
+           json={"model": "gpt-4o", "messages": [{"role": "user", "content": "ping from httpx with a hard-coded url"}]})
+"""
+
+
+def _has_httpx() -> bool:
+    try:
+        import httpx  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
 def run_selftest() -> int:
     mock = MockProcess()
     tmp = tempfile.mkdtemp(prefix="tokprof-selftest-")
@@ -59,6 +75,15 @@ def run_selftest() -> int:
                 f'--data-binary @"{body_path}" "$OPENAI_BASE_URL/chat/completions"'
             )
             clients.append(("curl", ["sh", "-c", curl], 1))
+        hook_clients = []
+        if _has_httpx():
+            hook_clients.append(("python httpx (hard-coded URL, in-process hook)", [sys.executable, "-c", HTTPX_CLIENT], 1))
+        os.environ["TOKPROF_SELFTEST_MOCK"] = mock.url
+        for name, cmd, expected in hook_clients:
+            before = len(list(read_jsonl(out))) if os.path.exists(out) else 0
+            code = run_profiled(cmd, out, quiet=True, use_tiktoken=False, gateway_env=False, hooks=True)
+            after = len(list(read_jsonl(out))) if os.path.exists(out) else 0
+            results.append((name, code == 0 and after - before == expected, f"exit={code}, recorded {after - before}/{expected} call(s)"))
         for name, cmd, expected in clients:
             before = len(list(read_jsonl(out))) if os.path.exists(out) else 0
             code = run_profiled(cmd, out, quiet=True, use_tiktoken=False)
@@ -74,6 +99,7 @@ def run_selftest() -> int:
         results.append(("providers seen", {"openai_chat", "openai_responses", "anthropic"} <= providers, ", ".join(sorted(providers))))
     finally:
         mock.stop()
+        os.environ.pop("TOKPROF_SELFTEST_MOCK", None)
         for k, v in saved.items():
             if v is None:
                 os.environ.pop(k, None)

@@ -27,6 +27,33 @@ def _bar(share: float, width: int = 24) -> str:
     return "#" * n + "." * (width - n)
 
 
+def render_cost(records: list, prices: dict) -> str:
+    from .analyze import estimate_cost
+
+    c = estimate_cost(records, prices)
+    line = f"Estimated cost: {c['total']:.4f} (currency units of your price file; prices change, treat as an estimate)"
+    if c["models_without_price"]:
+        line += f"\n  no price for: {', '.join(c['models_without_price'])}"
+    return line
+
+
+def render_compare(result: dict) -> str:
+    lines = [f"Requests: before {result['requests']['before']}, after {result['requests']['after']}"]
+    names = {"input_per_request": "Input tokens per request", "calls_per_request": "LLM calls per request"}
+    for key, m in result["metrics"].items():
+        if m["diff"] is None:
+            lines.append(f"{names[key]}: not enough data")
+            continue
+        ci = m["ci95"]
+        rel = f"{m['relative_change_pct']:+.1f}%" if m["relative_change_pct"] is not None else "n/a"
+        verdict = "significant" if m["significant"] else "within noise"
+        lines.append(f"{names[key]}: {m['before_mean']:,.1f} -> {m['after_mean']:,.1f}  ({rel}; diff {m['diff']:+,.1f}, 95% CI {ci[0]:+,.1f} to {ci[1]:+,.1f}; {verdict})")
+    if not result["reliable"]:
+        lines.append("Warning: fewer than 5 requests on a side; the interval is not reliable. Repeat runs on a fixed task set.")
+    lines.append("Reminder: report task success next to cost; fewer tokens only count if quality held.")
+    return "\n".join(lines)
+
+
 def render_text(records: list, gap_s: float = 5.0) -> str:
     if not records:
         return "No LLM calls recorded."

@@ -19,11 +19,12 @@ sidebar:
 <a id="collect-the-request-log"></a>
 ## 요청 로그 수집
 
-모델 호출마다 한 건씩 기록해야 합니다(필드는 [인덱스](../) 참조). 로그를 얻는 방법은 세 가지입니다.
+모델 호출마다 한 건씩 기록해야 합니다(필드는 [인덱스](../) 참조). 로그를 얻는 방법은 네 가지입니다.
 
 1. **제공자 사용량 필드** — API 응답마다 반환되는 `usage` 객체(입력, 캐시된 입력, 출력, 추론 토큰)를 기록합니다.
 2. **트레이싱 SDK / OpenTelemetry** — 에이전트를 계측해 모델 호출과 도구 호출을 각각 스팬으로 남깁니다.
 3. **게이트웨이 / 프록시** — 모델 트래픽을 모든 요청을 기록하는 게이트웨이로 라우팅합니다.
+4. **코드 수정 없는 프로파일러** — [`tokprof`](#코드-수정-없이-프로파일링하기-tokprof)는 기존 에이전트를 로컬 게이트웨이 아래에서 실행하고, 호출마다 입력 토큰을 시스템 프롬프트, 이력, 사용자 프롬프트, 도구 항목으로 분해합니다.
 
 아래 플랫폼은 직접 만들거나 운영하는 에이전트에서 2번과 3번 방식을 지원합니다. 하나만 선택하고, 같은 트래픽에 여러 개를 겹쳐 쓰지 마세요.
 
@@ -54,6 +55,23 @@ sidebar:
 
 VS Code에서 GitHub Copilot을 사용하나요? 위 플랫폼은 Copilot을 계측하지 않습니다.
 [Agent Debug Logs와 Cache Explorer](../../copilot-tokenomics/02-measure-usage/)를 사용하세요.
+
+## 코드 수정 없이 프로파일링하기: tokprof
+
+[`tokprof`](https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler)(초기 개발 단계, Python 3.9 이상, 에이전트 프로젝트에 의존하지 않음)는 이 도구로 시작한 에이전트에 대해 "각 요청에서 어느 부분이 토큰을 쓰는가"에 답합니다.
+
+```bash
+uv tool install ./profiler            # 격리 설치, 에이전트 프로젝트에는 아무것도 추가되지 않습니다
+tokprof run --report -- python my_agent.py      # 어떤 명령이든, 어떤 언어든
+tokprof report .tokprof/run-*.jsonl --prices prices.json
+tokprof compare before.jsonl after.jsonl        # 부트스트랩 구간, 3단계와 5단계용
+```
+
+- **수집 방식**: `tokprof run`은 `127.0.0.1`에 게이트웨이를 띄우고, **해당 명령에서만** `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `AZURE_OPENAI_ENDPOINT`를 그곳으로 향하게 합니다. 엔드포인트를 코드에 고정한 클라이언트를 위해 프로세스 내부 훅(`sitecustomize`를 통한 Python `httpx`, `--require`를 통한 Node `fetch`)도 함께 로드합니다. `tokprof start` / `env` / `stop`은 셸에서 새로 시작하는 프로세스를 위한 백그라운드 세션을 유지합니다.
+- **보여 주는 것**: 시스템 프롬프트(구간별), 이력, 현재 프롬프트, 도구 정의·호출·결과별 입력 토큰, 고정 오버헤드, 단계별 토큰 지도, 요청당 호출 수, 사용되지 않는 도구, 반복되는 정적 블록.
+- **저장하는 것**: 토큰 수, 솔트 해시, 길이, 구간·도구 이름입니다. 프롬프트 원문, 헤더, 키는 저장하지 않습니다.
+- **정확도**: 제공자는 합계만 알려 주므로 구간별 수치는 로컬 추정치이고 나머지는 *미분류*로 표시됩니다. OpenAI 계열 모델은 `tiktoken`을 설치하세요. 분해 결과를 믿기 전에 잔차를 확인하세요.
+- **현재 한계**: `tokprof`로 시작한 프로세스만 수집합니다. 이미 실행 중인 프로세스는 계획 중인 Linux eBPF 관찰이 필요합니다. 기본 URL 환경 변수를 따르지 않으면서 `httpx`나 Node `fetch`도 쓰지 않는 클라이언트는 수집되지 않습니다.
 
 ## 점검 항목
 

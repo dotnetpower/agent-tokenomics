@@ -64,3 +64,52 @@ def test_reports_render_and_never_crash_on_empty():
 def test_report_tolerates_records_without_usage():
     r = {"ts": 1, "segments": [seg("user_prompt", 10)], "est_input": 10, "usage": {}}
     assert "Calls: 1" in render_text([r])
+
+
+def test_estimate_cost_with_cached_and_default_price():
+    from tokprof.analyze import estimate_cost
+
+    recs = [{"model": "m1", "usage": {"input_total": 1_000_000, "cached": 400_000, "output": 100_000}},
+            {"model": "other", "usage": {"input_total": 1_000_000, "output": 0}}]
+    c = estimate_cost(recs, {"m1": {"input": 2.0, "cached": 0.5, "output": 8.0}})
+    assert abs(c["total"] - (0.6 * 2.0 + 0.4 * 0.5 + 0.1 * 8.0)) < 1e-9 and c["models_without_price"] == ["other"]
+    assert estimate_cost(recs, {"default": {"input": 1.0, "output": 1.0}})["models_without_price"] == []
+
+
+def _requests(n, tokens):
+    out = []
+    for i in range(n):
+        out.append({"ts": i * 100, "latency_ms": 100, "usage": {"input_total": tokens}, "segments": [], "est_input": tokens})
+    return out
+
+
+def test_compare_detects_real_reduction_and_flags_small_samples():
+    from tokprof.analyze import compare
+
+    before = _requests(12, 1000) + _requests(1, 1040)
+    after = _requests(12, 700)
+    for i, r in enumerate(after):
+        r["ts"] += 5000
+    res = compare(before, after)
+    m = res["metrics"]["input_per_request"]
+    assert m["significant"] and m["diff"] < 0 and res["reliable"]
+    small = compare(_requests(2, 1000), _requests(2, 900))
+    assert not small["reliable"]
+
+
+def test_compare_noise_is_not_significant():
+    from tokprof.analyze import compare
+
+    a = [dict(r, usage={"input_total": 1000 + (i % 3) * 50}) for i, r in enumerate(_requests(20, 0))]
+    b = [dict(r, usage={"input_total": 1000 + ((i + 1) % 3) * 50}) for i, r in enumerate(_requests(20, 0))]
+    assert not compare(a, b)["metrics"]["input_per_request"]["significant"]
+
+
+def test_to_legacy_is_compatible_with_token_report_schema():
+    from tokprof.analyze import to_legacy
+
+    r = {"ts": 1, "conv": "c1", "model": "m", "usage": {"input_total": 50, "cached": 10, "output": 3},
+         "segments": [{"kind": "tool_def", "tokens": 7, "name": "search"}], "tool_calls": ["search"]}
+    row = to_legacy([r])[0]
+    assert row["input_tokens"] == 50 and row["cached_input_tokens"] == 10 and row["tool_defs"] == [{"name": "search", "tokens": 7}]
+    assert row["tool_calls"][0]["name"] == "search" and row["session"] == "c1"

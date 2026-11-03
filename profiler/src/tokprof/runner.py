@@ -52,6 +52,21 @@ def build_routes(env: dict, extra_maps: Optional[list] = None):
     return routes, overrides, azure_hosts
 
 
+BOOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "boot")
+
+
+def hook_env(base_env: dict, port: int, token: str) -> dict:
+    """Environment that loads the in-process hooks (Python sitecustomize, Node --require) in child processes."""
+    env = {"TOKPROF_PORT": str(port), "TOKPROF_TOKEN": token}
+    existing = base_env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = BOOT_DIR + (os.pathsep + existing if existing else "")
+    preload = os.path.join(BOOT_DIR, "node_preload.js")
+    node_opts = base_env.get("NODE_OPTIONS", "")
+    flag = '--require "%s"' % preload.replace("\\", "/")
+    env["NODE_OPTIONS"] = (node_opts + " " + flag).strip()
+    return env
+
+
 def run_profiled(
     cmd: list,
     out_path: str,
@@ -60,11 +75,14 @@ def run_profiled(
     extra_maps: Optional[list] = None,
     use_tiktoken: bool = True,
     quiet: bool = False,
+    gateway_env: bool = True,
+    hooks: bool = True,
 ) -> int:
     env = dict(os.environ)
     routes, overrides, azure_hosts = build_routes(env, extra_maps)
     writer = JsonlWriter(out_path)
     run_id = secrets.token_hex(4)
+    ingest_token = secrets.token_hex(16)
     gw = Gateway(
         routes,
         writer.write,
@@ -73,16 +91,25 @@ def run_profiled(
         run_id=run_id,
         azure_hosts=azure_hosts,
         use_tiktoken=use_tiktoken,
+        ingest_token=ingest_token,
     )
     thread = GatewayThread(gw)
     port = thread.start()
     child_env = dict(env)
-    for k, v in overrides.items():
-        child_env[k] = v.format(port=port)
+    if gateway_env:
+        for k, v in overrides.items():
+            child_env[k] = v.format(port=port)
+    if hooks:
+        child_env.update(hook_env(env, port, ingest_token))
     child_env["TOKPROF_ACTIVE"] = "1"
 
     if not quiet:
-        print(f"tokprof: profiling to {out_path} (gateway 127.0.0.1:{port}); only LLM base URLs are redirected", file=sys.stderr)
+        how = []
+        if gateway_env:
+            how.append("LLM base URLs redirected")
+        if hooks:
+            how.append("in-process hooks for Python/Node")
+        print(f"tokprof: profiling to {out_path} (gateway 127.0.0.1:{port}; {', '.join(how) or 'no capture enabled'})", file=sys.stderr)
     code = 1
     proc = None
     try:

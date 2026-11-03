@@ -75,6 +75,7 @@ Read the license and data-handling notes, and review before using them with priv
 
 | Project | What it does |
 |---------|--------------|
+| [tokprof](https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler) (this repository) | Breaks each call's input tokens down by system prompt, history, user prompt, and tool content without code changes; early development. |
 | [alexgreensh/token-optimizer](https://github.com/alexgreensh/token-optimizer) | Finds "ghost tokens" and context-quality decay in agent sessions. |
 | [activeing123/mcptoon](https://github.com/activeing123/mcptoon) | MCP gateway CLI aimed at tool discovery and context compression. |
 | [ccusage/ccusage](https://github.com/ccusage/ccusage) | Usage and cost reports from local Claude Code logs. |

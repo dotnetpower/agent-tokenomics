@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from .counting import get_counter
 from .parse import SSEParser, detect_provider, parse_request, parse_response_json
 from .segment import build_record
+from .upstream import connect_via_proxy, proxy_for
 
 HOP_BY_HOP = {
     "connection", "proxy-connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade",
@@ -189,6 +190,7 @@ class Gateway:
         host: str = "127.0.0.1",
         port: int = 0,
         use_tiktoken: bool = True,
+        ingest_token: Optional[str] = None,
     ):
         self.routes = sorted(routes, key=lambda r: -len(r.prefix))
         self.sink = sink
@@ -199,8 +201,10 @@ class Gateway:
         self.azure_suffixes = azure_suffixes
         self.host, self.port = host, port
         self.use_tiktoken = use_tiktoken
+        self.ingest_token = ingest_token
         self.stats = {"requests": 0, "recorded": 0, "record_errors": 0, "bypassed": 0}
         self._active = 0
+        self._last_request: Optional[float] = None
         # The loop keeps only weak references to tasks created by start_server on Python <= 3.11, so a
         # handler suspended mid-request can be garbage-collected and the request silently dropped.
         self._tasks: set = set()
@@ -218,6 +222,16 @@ class Gateway:
         if self._server:
             self._server.close()
             await self._server.wait_closed()
+
+    async def _open_upstream(self, scheme: str, host: str, port: int):
+        if scheme != "https":
+            return await asyncio.open_connection(host, port)
+        proxy = proxy_for(host)
+        if proxy:
+            loop = asyncio.get_running_loop()
+            sock = await loop.run_in_executor(None, connect_via_proxy, proxy[0], proxy[1], host, port, proxy[2])
+            return await asyncio.open_connection(sock=sock, ssl=self._ctx, server_hostname=host)
+        return await asyncio.open_connection(host, port, ssl=self._ctx, server_hostname=host)
 
     # ---- routing ---------------------------------------------------
     def _resolve(self, path: str):
@@ -285,7 +299,12 @@ class Gateway:
         self.stats["requests"] += 1
 
         if target.startswith("/__tokprof/health"):
-            return await self._respond(writer, 200, "OK", json.dumps({"ok": True, **self.stats}).encode(), "application/json")
+            age = None if self._last_request is None else time.time() - self._last_request
+            return await self._respond(writer, 200, "OK", json.dumps({"ok": True, "last_request_age_s": age, **self.stats}).encode(), "application/json")
+        self._last_request = time.time()
+        if target.startswith("/__tokprof/ingest") and method == "POST":
+            body = await _read_request_body(reader, hd, leftover)
+            return await self._ingest(writer, hd, body)
         if hd.get("expect", "").lower() == "100-continue":
             writer.write(b"HTTP/1.1 100 Continue\r\n\r\n")
             await writer.drain()
@@ -309,9 +328,7 @@ class Gateway:
 
         t0 = time.time()
         try:
-            up_reader, up_writer = await asyncio.open_connection(
-                host, port, ssl=self._ctx if scheme == "https" else None, server_hostname=host if scheme == "https" else None
-            )
+            up_reader, up_writer = await self._open_upstream(scheme, host, port)
         except Exception as exc:
             return await self._respond(writer, 502, "Bad Gateway", f"tokprof: upstream connect failed: {exc}".encode())
 
@@ -401,6 +418,36 @@ class Gateway:
             except Exception as exc:
                 self.stats["record_errors"] += 1
                 self._warn_once("rec:" + type(exc).__name__, f"could not record a call ({exc!r}); traffic is unaffected")
+
+    async def _ingest(self, writer, hd: dict, body: bytes) -> None:
+        """Accept a raw exchange captured by an in-process hook and record it like proxied traffic."""
+        if self.ingest_token is None or hd.get("x-tokprof-token") != self.ingest_token:
+            return await self._respond(writer, 403, "Forbidden", b"tokprof: bad ingest token")
+        try:
+            msg = json.loads(body)
+            path = str(msg.get("path") or "")
+            req_obj = json.loads(msg.get("request") or "null")
+            provider = detect_provider(path, req_obj)
+            if provider and isinstance(req_obj, dict):
+                parsed = parse_request(provider, req_obj)
+                text = msg.get("response") or ""
+                if msg.get("sse"):
+                    sse = SSEParser(provider)
+                    sse.feed(text.encode("utf-8", "replace"))
+                    response = sse.finish()
+                else:
+                    try:
+                        response = parse_response_json(provider, json.loads(text) if text else None)
+                    except ValueError:
+                        response = parse_response_json(provider, None)
+                t0 = float(msg.get("ts") or time.time())
+                await asyncio.get_running_loop().run_in_executor(
+                    None, self._record, parsed, response, path, msg.get("status"), t0, msg.get("ttfb_ms"), msg.get("error")
+                )
+        except Exception as exc:
+            self.stats["record_errors"] += 1
+            self._warn_once("ingest:" + type(exc).__name__, f"could not record an ingested call ({exc!r})")
+        await self._respond(writer, 204, "No Content", b"")
 
     def _record(self, parsed, response, target, status, t0, ttfb, err) -> None:
         counter = get_counter(parsed.model, prefer_tiktoken=self.use_tiktoken)
