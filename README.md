@@ -13,8 +13,8 @@ Docs site (Astro Starlight, GitHub Pages): <https://dotnetpower.github.io/agent-
 
 | Path | Content |
 |------|---------|
-| `site/` | Astro Starlight docs site. English pages in `site/src/content/docs/`; Korean under `ko/` (translation pending). |
-| `examples/` | `token_report.py` — summarize a JSONL request log (overhead, cache hit, unused tools, failure loops); `sample-requests.jsonl`; `count_tokens.py` — token counts of one sentence across languages (needs `tiktoken`); `prompt_budget.py` + `sample-pipeline.json` — static per-step token map for multi-call pipelines (synthetic example); `papers.json` + `fetch_paper_meta.py` + `build_papers.py` — generate the ranked Papers page. |
+| `site/` | Astro Starlight docs site. English pages in `site/src/content/docs/`; Korean under `ko/`. Korean README: [README.ko.md](README.ko.md). |
+| `examples/` | `token_report.py` — summarize a JSONL request log (overhead, cache hit, unused tools, failure loops); `sample-requests.jsonl`; `count_tokens.py` — token counts of one sentence across languages (needs `tiktoken`); `prompt_budget.py` + `sample-pipeline.json` — static per-step token map for multi-call pipelines (synthetic example); `papers.json` + `papers-ko.json` + `fetch_paper_meta.py` + `build_papers.py` — generate the ranked Papers page (English and Korean). |
 | `.github/copilot-instructions.md` | Authoring rules for this repository. |
 
 ## Develop

@@ -8,7 +8,7 @@ Ranking ("authority" proxy, stated openly on the page):
   within a tier: citation count, descending.
 
 Usage:
-    python3 build_papers.py                       # write site/src/content/docs/papers.md
+    python3 build_papers.py                       # write papers.md (and ko/papers.md when papers-ko.json exists)
     python3 build_papers.py --topic caching --top 4   # print a markdown bullet list for one topic
 """
 
@@ -20,7 +20,9 @@ import re
 from pathlib import Path
 
 HERE = Path(__file__).parent
-OUT = HERE.parent / "site" / "src" / "content" / "docs" / "papers.md"
+DOCS = HERE.parent / "site" / "src" / "content" / "docs"
+OUT = DOCS / "papers.md"
+OUT_KO = DOCS / "ko" / "papers.md"
 
 TIER1 = re.compile(
     r"International Conference on Learning Representations|Neural Information Processing Systems|"
@@ -65,6 +67,47 @@ TOPICS = {
     "evaluation": ("Evaluation and statistics", "[Prove](../agent-tokenomics/03-prove/), [Result](../agent-tokenomics/05-result/)"),
     "survey": ("Surveys", "[Resources](../resources/)"),
 }
+
+
+TOPIC_LABELS_KO = {
+    "foundations": "기초",
+    "tokenization": "토큰화와 언어",
+    "long-context": "긴 컨텍스트와 컨텍스트 열화",
+    "caching": "프롬프트/KV 캐싱",
+    "compression": "프롬프트 압축",
+    "format": "출력 형식",
+    "batching": "배치 처리",
+    "routing": "모델 라우팅과 캐스케이드",
+    "reasoning": "효율적인 추론/출력 길이",
+    "agents": "에이전트 비용과 컨텍스트 관리",
+    "tools": "도구 선택과 스키마 크기",
+    "instructions": "지침/컨텍스트 파일",
+    "memory": "메모리와 요약",
+    "evaluation": "평가와 통계",
+    "survey": "서베이",
+}
+LINK_TEXT_KO = {
+    "Concepts": "개념",
+    "Language and tokenization": "언어와 토큰화",
+    "Keep context lean": "컨텍스트를 가볍게 유지하기",
+    "Improve": "개선",
+    "Measure your usage": "사용량 측정",
+    "Prompt and output style": "프롬프트와 출력 스타일",
+    "Instructions and tools": "지침과 도구",
+    "Models, planning, delegation": "모델, 계획, 위임",
+    "Agent modes and budget guards": "에이전트 모드와 예산 보호 장치",
+    "Isolate": "격리",
+    "TokenEconomizer case study": "TokenEconomizer 사례 연구",
+    "MCP audit": "MCP 감사",
+    "Prove": "증명",
+    "Improve: compaction": "개선: 컨텍스트 압축",
+    "Result": "결과",
+    "Resources": "리소스",
+}
+
+
+def ko_where(where: str) -> str:
+    return re.sub(r"\[([^\]]+)\]", lambda m: f"[{LINK_TEXT_KO.get(m.group(1), m.group(1))}]", where)
 
 
 def load() -> list[dict]:
@@ -158,7 +201,9 @@ def inline(r: dict) -> str:
     return f"[{short(r)}](https://arxiv.org/abs/{r['id']}) ({r['venue_short']} {r['year']})"
 
 
-def page(rows: list[dict], retrieved: str) -> str:
+def page(rows: list[dict], retrieved: str, ko: dict | None = None) -> str:
+    if ko is not None:
+        return page_ko(rows, retrieved, ko)
     out = [
         "---",
         "title: Papers",
@@ -221,6 +266,68 @@ def page(rows: list[dict], retrieved: str) -> str:
     return "\n".join(out)
 
 
+def page_ko(rows: list[dict], retrieved: str, ko: dict) -> str:
+    n = len(rows)
+    out = [
+        "---",
+        "title: 논문",
+        f"description: 토큰 절약과 관련된 논문 {n}편을 학회 등급과 인용 수 순으로 정리했습니다.",
+        "sidebar:",
+        "  order: 91",
+        "---",
+        "",
+        f"토큰 절약과 관련된 논문 {n}편을 **{retrieved}** 기준으로 모아 공개된 권위 지표로 순위를 매겼습니다.",
+        "각 항목은 arXiv 페이지로 연결되며, 핵심 내용은 직접 작성한 한 줄 요약입니다.",
+        "",
+        "## 순위 기준",
+        "",
+        "1. **1등급**: 주요 ML/NLP/시스템 학회(ICLR, NeurIPS, ICML, ACL, EMNLP, NAACL, TACL, TMLR, SOSP, MLSys)에서 심사를 통과한 논문입니다.",
+        "2. **2등급**: 그 외 학회·저널에서 심사를 통과한 논문입니다.",
+        "3. **3등급**: 프리프린트(게재 학회 정보 없음)입니다.",
+        "4. 같은 등급 안에서는 **인용 수가 많은 순**입니다.",
+        "",
+        ":::caution[순위는 읽는 순서일 뿐 평가가 아닙니다]",
+        f"- 학회와 인용 수는 {retrieved}에 [Semantic Scholar](https://www.semanticscholar.org/) Graph API에서 가져온 값입니다.",
+        "  연도는 Semantic Scholar가 표시하는 연도이며 첫 프리프린트 연도일 수 있습니다.",
+        "  학회 정보는 최종 게재보다 늦게 반영될 수 있고 인용 수는 계속 변합니다.",
+        "  갱신하려면 `examples/fetch_paper_meta.py`와 `examples/build_papers.py`를 다시 실행합니다.",
+        "- 인용 수는 오래된 기초 논문에 유리합니다. 최근 프리프린트는 새로운 논문이라는 이유만으로 순위가 낮습니다.",
+        "- 심사 통과나 인용 수가 사용 중인 에이전트나 모델에서 결과가 재현된다는 뜻은 아닙니다.",
+        "  모든 결과를 가설로 취급하고 [문제 해결 절차](../agent-tokenomics/)로 직접 검증하세요.",
+        "- 수치는 옮기지 않고 주장만 요약했습니다. 수치를 인용하기 전에 실험 설정을 논문에서 확인하세요.",
+        ":::",
+        "",
+        "## 주제별 적용 위치",
+        "",
+        "| 주제 | 논문 수 | 적용 문서 |",
+        "|------|-------:|-----------|",
+    ]
+    for key, (label, where) in TOPICS.items():
+        cnt = sum(1 for r in rows if r["topic"] == key)
+        out.append(f"| {TOPIC_LABELS_KO[key]} | {cnt} | {ko_where(where)} |")
+    out += [
+        "",
+        "## 순위표",
+        "",
+        "| # | 논문 | 학회 · 연도 | 인용 | 주제 | 핵심 내용 |",
+        "|--:|------|-------------|-----:|------|-----------|",
+    ]
+    for r in rows:
+        venue = "프리프린트" if r["venue_short"] == "preprint" else r["venue_short"]
+        out.append(
+            f"| {r['rank']} | {link(r)} | {venue} · {r['year']} | {r['citations']:,} | {TOPIC_LABELS_KO[r['topic']]} | {ko[r['id']]} |"
+        )
+    out += [
+        "",
+        "## 논문 제안하기",
+        "",
+        "`examples/papers.json`에 항목(arXiv ID, 주제 하나, 직접 작성한 한 줄 요약)과 `examples/papers-ko.json`에 한국어 요약을 추가한 뒤",
+        "스크립트 두 개를 실행하고 PR을 엽니다. 알 수 없는 ID는 메타데이터 수집 단계에서 실패하므로 오타를 방지할 수 있습니다.",
+        "",
+    ]
+    return "\n".join(out)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--topic")
@@ -243,6 +350,15 @@ def main() -> None:
     retrieved = json.loads((HERE / "papers-meta.json").read_text())["retrieved"]
     OUT.write_text(page(rows, retrieved))
     print(f"wrote {OUT} ({len(rows)} papers)")
+    ko_path = HERE / "papers-ko.json"
+    if ko_path.exists():
+        ko = json.loads(ko_path.read_text())
+        missing = [r["id"] for r in rows if r["id"] not in ko]
+        if missing:
+            raise SystemExit(f"papers-ko.json is missing ids: {missing}")
+        OUT_KO.parent.mkdir(parents=True, exist_ok=True)
+        OUT_KO.write_text(page(rows, retrieved, ko))
+        print(f"wrote {OUT_KO}")
 
 
 if __name__ == "__main__":
