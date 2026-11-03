@@ -37,6 +37,11 @@ def _ebpf_status() -> tuple:
                 notes.append(f"kernel option missing: {opt}")
     except Exception:
         notes.append("kernel config not readable (/proc/config.gz); cannot confirm options")
+    from .ebpf import find_helper
+
+    if not find_helper():
+        ok = False
+        notes.append("tokprof-ebpf helper not found (build: cd profiler/ebpf && go build -o bin/tokprof-ebpf ./cmd/tokprof-ebpf)")
     if hasattr(os, "geteuid") and os.geteuid() != 0:
         notes.append("not root: eBPF needs sudo or CAP_BPF/CAP_PERFMON")
     return ok, "; ".join(notes) or "ready"

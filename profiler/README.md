@@ -8,7 +8,8 @@ changing the agent's code and without installing anything into the agent's proje
 > environment variables) plus in-process hooks (Python `httpx`, Node `fetch`) for clients that hard-code their
 > endpoint; OpenAI chat, OpenAI Responses, and Anthropic Messages (including streaming); reports, cost estimate,
 > before/after comparison with a bootstrap interval; background sessions; `doctor` and `selftest`.
-> Planned: Linux eBPF tap for already-running processes, and OS-level local capture on Windows and macOS.
+> Also: a Linux eBPF tap (`tokprof ebpf`) that captures LLM calls of **already-running** processes without restarting
+> or changing them. Planned: OS-level local capture on Windows and macOS.
 
 ## Install (isolated, no dependency on your agent's project)
 
@@ -60,8 +61,8 @@ markdown headings and XML-style tags, and `--component NAME=@file` attributes a 
 
 ## Limits (today)
 
-- Only processes started through `tokprof` (`run`, `shell`, or the environment from `tokprof env`) are captured. Already-running
-  processes need the planned Linux eBPF tap (see `ebpf/`).
+- Outside the eBPF tap, only processes started through `tokprof` (`run`, `shell`, or the environment from `tokprof env`) are captured.
+  Already-running processes need the Linux eBPF tap (see below); Windows and macOS have no equivalent yet.
 - Clients that neither honor the base-URL variables nor use `httpx` or Node `fetch` (for example `requests`, `aiohttp`, `axios`)
   are not captured yet.
 - The gateway opens a new upstream TLS connection per request and asks upstream for uncompressed responses.
@@ -75,16 +76,38 @@ pytest
 tokprof selftest
 ```
 
-## Linux eBPF helper (work in progress)
+## Linux eBPF tap (running processes, no restart, no code change)
 
-`ebpf/` holds `tokprof-ebpf`, a Go helper for observing TLS plaintext of already-running processes on Linux.
-Today it ships one unprivileged subcommand:
+`tokprof ebpf` attaches uprobes to the TLS library of processes that are **already running** and reads the plaintext of
+`SSL_write`/`SSL_read` (and the `_ex` variants), rebuilds HTTP/1.1 exchanges, keeps the ones that look like LLM calls, and records
+them like any other capture. The agent is not modified, restarted or reconfigured.
 
 ```bash
-cd ebpf && go build -o bin/tokprof-ebpf ./cmd/tokprof-ebpf
-./bin/tokprof-ebpf inspect        # which running processes expose SSL_write/SSL_read we could attach to
+cd ebpf && go build -o bin/tokprof-ebpf ./cmd/tokprof-ebpf     # Go 1.25+; the compiled BPF object is committed, clang is not needed
+tokprof doctor                                                    # checks kernel BTF/uprobes and finds the helper
+tokprof ebpf --pid 1234 --report                                  # by PID
+tokprof ebpf --comm node,python --out run.jsonl                   # by name; new matching processes are attached automatically
 ```
 
-It reports, per process, whether OpenSSL entry points are exported by a shared library, present only as local
-symbols in a statically linked binary (as in `uv`-managed Python builds), or absent. Probes that attach to those
-symbols are the next milestone and need `CAP_BPF`/`CAP_PERFMON`.
+- **Privileges:** loading eBPF needs root or `CAP_BPF` + `CAP_PERFMON` + `CAP_SYS_RESOURCE`. `tokprof ebpf` runs the helper through
+  `sudo` (a prompt on a terminal, `sudo -n` otherwise). `tokprof-ebpf inspect` needs none.
+- **Scope is explicit:** you must pass `--pid`, `--comm` or `--all`. `--all` records every LLM call it can parse on the machine.
+- **Privacy:** the helper emits only the request path, host, and the JSON bodies of POSTs that look like LLM calls. Query strings and
+  all headers other than the few used for framing (so no `Authorization`) are dropped inside the helper; the profiler then stores only
+  counts, hashes and names as usual.
+- **Cleanup:** probes are file descriptors owned by the helper process, so the kernel removes them when the helper exits, even if it
+  is killed. Closing the stdin of `tokprof-ebpf trace --exit-on-stdin-eof` (what `tokprof ebpf` does) makes it detach and exit cleanly.
+- **Works with:** OpenSSL-compatible libraries that export `SSL_write`/`SSL_read` (system Python, curl, Node.js) and statically linked
+  builds that keep those symbols in `.symtab` (for example `uv`-managed Python). Verified on Linux x86-64, kernel 6.18.
+- **Does not capture:** HTTP/2 (counted as `non_http`), Go `crypto/tls`, Java, Rust with rustls, processes in another mount namespace,
+  responses compressed with `br`/`zstd` (the response is then estimated locally), and very short-lived processes that finish before the
+  helper attaches (it rescans every second; use `tokprof run` for those). Linux arm64 is not built yet.
+- **Overhead (measured, WSL2):** 3 × 3,000 keep-alive HTTPS POSTs with 4 KiB bodies: mean 0.378 ms without the tap, 0.373 ms with
+  it, 100% of calls captured, no kernel drops. Reproduce with `python3 ebpf/e2e/bench.py --helper ebpf/bin/tokprof-ebpf --sudo`.
+- **Verify:** `python3 ebpf/e2e/run_e2e.py --helper ebpf/bin/tokprof-ebpf --sudo` starts a local HTTPS server and clients (system Python,
+  uv Python, Node `fetch`, curl; JSON, SSE, a 144 KB body), attaches, and compares every captured exchange with what was sent
+  (add `--tokprof` to go through `tokprof ebpf`).
+
+Rebuilding the BPF object after editing `ebpf/bpf/tls.c` needs clang and libbpf headers: `cd ebpf/internal/tap && go generate ./...`.
+
+The helper can also be used directly: `tokprof-ebpf trace --pid N` prints one JSON object per exchange on stdout.

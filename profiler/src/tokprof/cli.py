@@ -58,6 +58,18 @@ def build_parser() -> argparse.ArgumentParser:
     sh.add_argument("--no-hooks", action="store_true")
     sh.add_argument("--no-gateway-env", action="store_true")
 
+    eb = sub.add_parser("ebpf", help="Linux: capture LLM calls of running processes with eBPF, without changing or restarting them")
+    eb.add_argument("--pid", default="", help="comma-separated PIDs to watch")
+    eb.add_argument("--comm", default="", help="comma-separated substrings matched against process name, path and command line")
+    eb.add_argument("--all", action="store_true", help="watch every process (records all LLM calls on this machine)")
+    eb.add_argument("--out")
+    eb.add_argument("--component", action="append", metavar="NAME=@FILE")
+    eb.add_argument("--helper", help="path to the tokprof-ebpf binary")
+    eb.add_argument("--duration", help="stop after this long, for example 5m")
+    eb.add_argument("--no-sudo", action="store_true", help="do not elevate; use when already root or the helper has capabilities")
+    eb.add_argument("--no-tiktoken", action="store_true")
+    eb.add_argument("--report", action="store_true")
+
     rep = sub.add_parser("report", help="summarize a recorded JSONL file")
     rep.add_argument("file")
     rep.add_argument("--format", choices=["text", "md", "json"], default="text")
@@ -136,6 +148,20 @@ def main(argv: Optional[list] = None) -> int:
             use_tiktoken=not args.no_tiktoken,
             gateway_env=not args.no_gateway_env,
             hooks=not args.no_hooks,
+        )
+        if args.report and os.path.exists(out):
+            print()
+            _report(out, "text", 5.0)
+        elif os.path.exists(out):
+            print(f"tokprof: view the breakdown with: tokprof report {out}", file=sys.stderr)
+        return code
+    if args.cmd == "ebpf":
+        from .ebpf import run_ebpf
+
+        out = args.out or _default_out()
+        code = run_ebpf(
+            out, pids=args.pid, comms=args.comm, everything=args.all, helper=args.helper, duration=args.duration,
+            components=_components(args.component), use_tiktoken=not args.no_tiktoken, use_sudo=not args.no_sudo,
         )
         if args.report and os.path.exists(out):
             print()

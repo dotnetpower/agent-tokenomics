@@ -71,7 +71,8 @@ tokprof compare before.jsonl after.jsonl        # 부트스트랩 구간, 3단�
 - **보여 주는 것**: 시스템 프롬프트(구간별), 이력, 현재 프롬프트, 도구 정의·호출·결과별 입력 토큰, 고정 오버헤드, 단계별 토큰 지도, 요청당 호출 수, 사용되지 않는 도구, 반복되는 정적 블록.
 - **저장하는 것**: 토큰 수, 솔트 해시, 길이, 구간·도구 이름입니다. 프롬프트 원문, 헤더, 키는 저장하지 않습니다.
 - **정확도**: 제공자는 합계만 알려 주므로 구간별 수치는 로컬 추정치이고 나머지는 *미분류*로 표시됩니다. OpenAI 계열 모델은 `tiktoken`을 설치하세요. 분해 결과를 믿기 전에 잔차를 확인하세요.
-- **현재 한계**: `tokprof`로 시작한 프로세스만 수집합니다. 이미 실행 중인 프로세스는 계획 중인 Linux eBPF 관찰이 필요합니다. 기본 URL 환경 변수를 따르지 않으면서 `httpx`나 Node `fetch`도 쓰지 않는 클라이언트는 수집되지 않습니다.
+- **이미 실행 중인 프로세스(Linux)**: `tokprof ebpf --pid <PID>`는 프로세스의 TLS 라이브러리에 eBPF 프로브를 연결해, 재시작이나 변경 없이 LLM 호출을 기록합니다. root 또는 `CAP_BPF` 권한이 필요하며 HTTP/2와 Go `crypto/tls` 트래픽은 볼 수 없습니다. 자세한 내용은 [profiler README](https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler#linux-ebpf-tap-running-processes-no-restart-no-code-change)를 참고하세요.
+- **현재 한계**: eBPF 관찰을 제외하면 `tokprof`로 시작한 프로세스만 수집합니다. 기본 URL 환경 변수를 따르지 않으면서 `httpx`나 Node `fetch`도 쓰지 않는 클라이언트는 수집되지 않습니다. Windows와 macOS에는 실행 중인 프로세스용 관찰 기능이 아직 없습니다.
 
 ## 점검 항목
 

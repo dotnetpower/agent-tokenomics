@@ -61,6 +61,46 @@ func Scan(procRoot string) ([]Process, error) {
 	return out, nil
 }
 
+// Scanner inspects processes incrementally and caches per-file results, so a
+// long-running collector can look at new PIDs cheaply.
+type Scanner struct {
+	procRoot string
+	cache    map[string]*fileInfo
+}
+
+func NewScanner(procRoot string) *Scanner {
+	return &Scanner{procRoot: procRoot, cache: map[string]*fileInfo{}}
+}
+
+// PIDs lists the numeric entries under the proc root.
+func (s *Scanner) PIDs() []int {
+	entries, err := os.ReadDir(s.procRoot)
+	if err != nil {
+		return nil
+	}
+	var pids []int
+	for _, e := range entries {
+		if pid, err := strconv.Atoi(e.Name()); err == nil {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+// Signature is a cheap fingerprint (name and executable) that changes when a
+// forked child execs into another program or a PID is reused.
+func (s *Scanner) Signature(pid int) string {
+	base := filepath.Join(s.procRoot, strconv.Itoa(pid))
+	comm, _ := os.ReadFile(filepath.Join(base, "comm"))
+	exe, _ := os.Readlink(filepath.Join(base, "exe"))
+	return strings.TrimSpace(string(comm)) + "|" + exe
+}
+
+// Process inspects one PID.
+func (s *Scanner) Process(pid int) Process {
+	return scanProcess(s.procRoot, pid, s.cache)
+}
+
 func scanProcess(procRoot string, pid int, cache map[string]*fileInfo) Process {
 	base := filepath.Join(procRoot, strconv.Itoa(pid))
 	p := Process{PID: pid, Attach: "no"}

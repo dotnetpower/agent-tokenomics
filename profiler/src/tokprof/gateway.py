@@ -425,6 +425,15 @@ class Gateway:
             return await self._respond(writer, 403, "Forbidden", b"tokprof: bad ingest token")
         try:
             msg = json.loads(body)
+            await asyncio.get_running_loop().run_in_executor(None, self.ingest_message, msg)
+        except Exception as exc:
+            self.stats["record_errors"] += 1
+            self._warn_once("ingest:" + type(exc).__name__, f"could not record an ingested call ({exc!r})")
+        await self._respond(writer, 204, "No Content", b"")
+
+    def ingest_message(self, msg: dict) -> None:
+        """Record one raw exchange ({path, request, response, sse, status, ts, ttfb_ms}) captured outside the gateway."""
+        try:
             path = str(msg.get("path") or "")
             req_obj = json.loads(msg.get("request") or "null")
             provider = detect_provider(path, req_obj)
@@ -441,15 +450,12 @@ class Gateway:
                     except ValueError:
                         response = parse_response_json(provider, None)
                 t0 = float(msg.get("ts") or time.time())
-                await asyncio.get_running_loop().run_in_executor(
-                    None, self._record, parsed, response, path, msg.get("status"), t0, msg.get("ttfb_ms"), msg.get("error")
-                )
+                self._record(parsed, response, path, msg.get("status"), t0, msg.get("ttfb_ms"), msg.get("error"), msg.get("latency_ms"))
         except Exception as exc:
             self.stats["record_errors"] += 1
             self._warn_once("ingest:" + type(exc).__name__, f"could not record an ingested call ({exc!r})")
-        await self._respond(writer, 204, "No Content", b"")
 
-    def _record(self, parsed, response, target, status, t0, ttfb, err) -> None:
+    def _record(self, parsed, response, target, status, t0, ttfb, err, latency_ms=None) -> None:
         counter = get_counter(parsed.model, prefer_tiktoken=self.use_tiktoken)
         rec = build_record(
             parsed=parsed,
@@ -459,7 +465,7 @@ class Gateway:
             components=self.components,
             endpoint=target.split("?", 1)[0],
             status=status,
-            latency_ms=int((time.time() - t0) * 1000),
+            latency_ms=int(latency_ms if latency_ms is not None else (time.time() - t0) * 1000),
             ttfb_ms=ttfb,
             run=self.run_id,
             error=err,
