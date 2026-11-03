@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tokprof"
+version = "0.1.0"
+description = "Token profiler for LLM agents: break down input tokens by system prompt, history, user prompt, and tool-related content without modifying the agent."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+tiktoken = ["tiktoken>=0.7"]
+dev = ["pytest>=8", "tiktoken>=0.7"]
+
+[project.scripts]
+tokprof = "tokprof.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
