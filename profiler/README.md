@@ -56,3 +56,17 @@ uv venv && uv pip install -e ".[dev]"
 pytest
 tokprof selftest
 ```
+
+## Linux eBPF helper (work in progress)
+
+`ebpf/` holds `tokprof-ebpf`, a Go helper for observing TLS plaintext of already-running processes on Linux.
+Today it ships one unprivileged subcommand:
+
+```bash
+cd ebpf && go build -o bin/tokprof-ebpf ./cmd/tokprof-ebpf
+./bin/tokprof-ebpf inspect        # which running processes expose SSL_write/SSL_read we could attach to
+```
+
+It reports, per process, whether OpenSSL entry points are exported by a shared library, present only as local
+symbols in a statically linked binary (as in `uv`-managed Python builds), or absent. Probes that attach to those
+symbols are the next milestone and need `CAP_BPF`/`CAP_PERFMON`.
