@@ -49,12 +49,16 @@ def run_selftest() -> int:
         clients = [("python (urllib)", [sys.executable, "-c", PY_CLIENT], 4)]
         if shutil.which("node"):
             clients.append(("node (fetch)", ["node", "-e", NODE_CLIENT], 1))
-        if shutil.which("curl"):
+        if shutil.which("curl") and os.name != "nt":
+            # Body goes through a file so shell quoting cannot alter it; the URL comes from the child's env.
+            body_path = os.path.join(tmp, "body.json")
+            with open(body_path, "w", encoding="utf-8") as fh:
+                fh.write('{"model":"gpt-4o","messages":[{"role":"user","content":"ping from curl"}]}')
             curl = (
                 'curl -s -o /dev/null -X POST -H "Content-Type: application/json" '
-                '-d \'{"model":"gpt-4o","messages":[{"role":"user","content":"ping from curl"}]}\' "$OPENAI_BASE_URL/chat/completions"'
+                f'--data-binary @"{body_path}" "$OPENAI_BASE_URL/chat/completions"'
             )
-            clients.append(("curl", ["sh", "-c", curl], 1) if os.name != "nt" else ("curl", ["cmd", "/c", "curl -s -o NUL " + "%OPENAI_BASE_URL%/chat/completions -X POST -H \"Content-Type: application/json\" -d \"{\\\"model\\\":\\\"gpt-4o\\\",\\\"messages\\\":[{\\\"role\\\":\\\"user\\\",\\\"content\\\":\\\"ping\\\"}]}\""], 1))
+            clients.append(("curl", ["sh", "-c", curl], 1))
         for name, cmd, expected in clients:
             before = len(list(read_jsonl(out))) if os.path.exists(out) else 0
             code = run_profiled(cmd, out, quiet=True, use_tiktoken=False)
