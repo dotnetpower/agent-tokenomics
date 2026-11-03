@@ -1,0 +1,456 @@
+{
+ "retrieved": "2026-11-03",
+ "source": "Semantic Scholar Graph API",
+ "papers": {
+  "2310.05736": {
+   "title": "LLMLingua: Compressing Prompts for Accelerated Inference of Large Language Models",
+   "year": 2023,
+   "venue": "Conference on Empirical Methods in Natural Language Processing",
+   "citations": 418
+  },
+  "2310.06839": {
+   "title": "LongLLMLingua: Accelerating and Enhancing LLMs in Long Context Scenarios via Prompt Compression",
+   "year": 2023,
+   "venue": "Annual Meeting of the Association for Computational Linguistics",
+   "citations": 658
+  },
+  "2403.12968": {
+   "title": "LLMLingua-2: Data Distillation for Efficient and Faithful Task-Agnostic Prompt Compression",
+   "year": 2024,
+   "venue": "Annual Meeting of the Association for Computational Linguistics",
+   "citations": 487
+  },
+  "2310.06201": {
+   "title": "Compressing Context to Enhance Inference Efficiency of Large Language Models",
+   "year": 2023,
+   "venue": "Conference on Empirical Methods in Natural Language Processing",
+   "citations": 272
+  },
+  "2305.14788": {
+   "title": "Adapting Language Models to Compress Contexts",
+   "year": 2023,
+   "venue": "Conference on Empirical Methods in Natural Language Processing",
+   "citations": 465
+  },
+  "2307.06945": {
+   "title": "In-context Autoencoder for Context Compression in a Large Language Model",
+   "year": 2023,
+   "venue": "International Conference on Learning Representations",
+   "citations": 242
+  },
+  "2304.08467": {
+   "title": "Learning to Compress Prompts with Gist Tokens",
+   "year": 2023,
+   "venue": "Neural Information Processing Systems",
+   "citations": 534
+  },
+  "2310.04408": {
+   "title": "RECOMP: Improving Retrieval-Augmented LMs with Compression and Selective Augmentation",
+   "year": 2023,
+   "venue": "International Conference on Learning Representations",
+   "citations": 340
+  },
+  "2405.13792": {
+   "title": "xRAG: Extreme Context Compression for Retrieval-augmented Generation with One Token",
+   "year": 2024,
+   "venue": "Neural Information Processing Systems",
+   "citations": 174
+  },
+  "2408.03094": {
+   "title": "500xCompressor: Generalized Prompt Compression for Large Language Models",
+   "year": 2024,
+   "venue": "Annual Meeting of the Association for Computational Linguistics",
+   "citations": 57
+  },
+  "2410.12388": {
+   "title": "Prompt Compression for Large Language Models: A Survey",
+   "year": 2024,
+   "venue": "North American Chapter of the Association for Computational Linguistics",
+   "citations": 96
+  },
+  "2404.01077": {
+   "title": "Efficient Prompting Methods for Large Language Models: A Survey",
+   "year": 2024,
+   "venue": "arXiv.org",
+   "citations": 71
+  },
+  "2312.03863": {
+   "title": "Efficient Large Language Models: A Survey",
+   "year": 2023,
+   "venue": "arXiv.org",
+   "citations": 276
+  },
+  "2507.13334": {
+   "title": "A Survey of Context Engineering for Large Language Models",
+   "year": 2025,
+   "venue": "arXiv.org",
+   "citations": 171
+  },
+  "2503.16419": {
+   "title": "Stop Overthinking: A Survey on Efficient Reasoning for Large Language Models",
+   "year": 2025,
+   "venue": "Trans. Mach. Learn. Res.",
+   "citations": 499
+  },
+  "2307.03172": {
+   "title": "Lost in the Middle: How Language Models Use Long Contexts",
+   "year": 2023,
+   "venue": "Transactions of the Association for Computational Linguistics",
+   "citations": 5818
+  },
+  "2404.06654": {
+   "title": "RULER: What's the Real Context Size of Your Long-Context Language Models?",
+   "year": 2024,
+   "venue": "arXiv.org",
+   "citations": 1580
+  },
+  "2402.14848": {
+   "title": "Same Task, More Tokens: the Impact of Input Length on the Reasoning Performance of Large Language Models",
+   "year": 2024,
+   "venue": "Annual Meeting of the Association for Computational Linguistics",
+   "citations": 270
+  },
+  "2308.14508": {
+   "title": "LongBench: A Bilingual, Multitask Benchmark for Long Context Understanding",
+   "year": 2023,
+   "venue": "Annual Meeting of the Association for Computational Linguistics",
+   "citations": 1888
+  },
+  "2406.16008": {
+   "title": "Found in the Middle: Calibrating Positional Attention Bias Improves Long Context Utilization",
+   "year": 2024,
+   "venue": "Annual Meeting of the Association for Computational Linguistics",
+   "citations": 151
+  },
+  "2505.06120": {
+   "title": "LLMs Get Lost In Multi-Turn Conversation",
+   "year": 2025,
+   "venue": "International Conference on Learning Representations",
+   "citations": 562
+  },
+  "2309.17453": {
+   "title": "Efficient Streaming Language Models with Attention Sinks",
+   "year": 2023,
+   "venue": "International Conference on Learning Representations",
+   "citations": 2768
+  },
+  "2302.00093": {
+   "title": "Large Language Models Can Be Easily Distracted by Irrelevant Context",
+   "year": 2023,
+   "venue": "International Conference on Machine Learning",
+   "citations": 1358
+  },
+  "2310.03025": {
+   "title": "Retrieval meets Long Context Large Language Models",
+   "year": 2023,
+   "venue": "International Conference on Learning Representations",
+   "citations": 159
+  },
+  "2309.06180": {
+   "title": "Efficient Memory Management for Large Language Model Serving with PagedAttention",
+   "year": 2023,
+   "venue": "Symposium on Operating Systems Principles",
+   "citations": 9724
+  },
+  "2312.07104": {
+   "title": "SGLang: Efficient Execution of Structured Language Model Programs",
+   "year": 2023,
+   "venue": "Neural Information Processing Systems",
+   "citations": 1783
+  },
+  "2311.04934": {
+   "title": "Prompt Cache: Modular Attention Reuse for Low-Latency Inference",
+   "year": 2023,
+   "venue": "Conference on Machine Learning and Systems",
+   "citations": 417
+  },
+  "2306.14048": {
+   "title": "H2O: Heavy-Hitter Oracle for Efficient Generative Inference of Large Language Models",
+   "year": 2023,
+   "venue": "Neural Information Processing Systems",
+   "citations": 1091
+  },
+  "2404.14469": {
+   "title": "SnapKV: LLM Knows What You are Looking for Before Generation",
+   "year": 2024,
+   "venue": "Neural Information Processing Systems",
+   "citations": 1132
+  },
+  "2305.17118": {
+   "title": "Scissorhands: Exploiting the Persistence of Importance Hypothesis for LLM KV Cache Compression at Test Time",
+   "year": 2023,
+   "venue": "Neural Information Processing Systems",
+   "citations": 598
+  },
+  "2402.02750": {
+   "title": "KIVI: A Tuning-Free Asymmetric 2bit Quantization for KV Cache",
+   "year": 2024,
+   "venue": "International Conference on Machine Learning",
+   "citations": 825
+  },
+  "2405.16444": {
+   "title": "CacheBlend: Fast Large Language Model Serving for RAG with Cached Knowledge Fusion",
+   "year": 2024,
+   "venue": "ACM Transactions on Computer Systems",
+   "citations": 342
+  },
+  "2407.00079": {
+   "title": "Mooncake: A KVCache-centric Disaggregated Architecture for LLM Serving",
+   "year": 2024,
+   "venue": "ACM Transactions on Storage",
+   "citations": 313
+  },
+  "2601.06007": {
+   "title": "Don't Break the Cache: An Evaluation of Prompt Caching for Long-Horizon Agentic Tasks",
+   "year": 2026,
+   "venue": "arXiv.org",
+   "citations": 25
+  },
+  "2305.05176": {
+   "title": "FrugalGPT: How to Use Large Language Models While Reducing Cost and Improving Performance",
+   "year": 2023,
+   "venue": "Trans. Mach. Learn. Res.",
+   "citations": 1247
+  },
+  "2406.18665": {
+   "title": "RouteLLM: Learning to Route LLMs with Preference Data",
+   "year": 2024,
+   "venue": "arXiv.org",
+   "citations": 922
+  },
+  "2310.12963": {
+   "title": "AutoMix: Automatically Mixing Language Models",
+   "year": 2023,
+   "venue": "Neural Information Processing Systems",
+   "citations": 169
+  },
+  "2404.14618": {
+   "title": "Hybrid LLM: Cost-Efficient and Quality-Aware Query Routing",
+   "year": 2024,
+   "venue": "International Conference on Learning Representations",
+   "citations": 519
+  },
+  "2403.12031": {
+   "title": "RouterBench: A Benchmark for Multi-LLM Routing System",
+   "year": 2024,
+   "venue": "arXiv.org",
+   "citations": 300
+  },
+  "2502.18600": {
+   "title": "Chain of Draft: Thinking Faster by Writing Less",
+   "year": 2025,
+   "venue": "arXiv.org",
+   "citations": 324
+  },
+  "2412.18547": {
+   "title": "Token-Budget-Aware LLM Reasoning",
+   "year": 2024,
+   "venue": "Annual Meeting of the Association for Computational Linguistics",
+   "citations": 259
+  },
+  "2412.21187": {
+   "title": "Do NOT Think That Much for 2+3=? On the Overthinking of o1-Like LLMs",
+   "year": 2024,
+   "venue": "arXiv.org",
+   "citations": 605
+  },
+  "2504.05185": {
+   "title": "Concise Reasoning via Reinforcement Learning",
+   "year": 2025,
+   "venue": "arXiv.org",
+   "citations": 69
+  },
+  "2503.04697": {
+   "title": "L1: Controlling How Long A Reasoning Model Thinks With Reinforcement Learning",
+   "year": 2025,
+   "venue": "arXiv.org",
+   "citations": 416
+  },
+  "2502.04463": {
+   "title": "Training Language Models to Reason Efficiently",
+   "year": 2025,
+   "venue": "Neural Information Processing Systems",
+   "citations": 285
+  },
+  "2405.15793": {
+   "title": "SWE-agent: Agent-Computer Interfaces Enable Automated Software Engineering",
+   "year": 2024,
+   "venue": "Neural Information Processing Systems",
+   "citations": 2357
+  },
+  "2407.01489": {
+   "title": "Agentless: Demystifying LLM-based Software Engineering Agents",
+   "year": 2024,
+   "venue": "arXiv.org",
+   "citations": 566
+  },
+  "2508.21433": {
+   "title": "The Complexity Trap: Simple Observation Masking Is as Efficient as LLM Summarization for Agent Context Management",
+   "year": 2025,
+   "venue": "arXiv.org",
+   "citations": 66
+  },
+  "2509.23586": {
+   "title": "Reducing Cost of LLM Agents with Trajectory Reduction",
+   "year": 2025,
+   "venue": "Proc. ACM Softw. Eng.",
+   "citations": 68
+  },
+  "2508.02694": {
+   "title": "Efficient Agents: Building Effective Agents While Reducing Cost",
+   "year": 2025,
+   "venue": "arXiv.org",
+   "citations": 40
+  },
+  "2510.04618": {
+   "title": "Agentic Context Engineering: Evolving Contexts for Self-Improving Language Models",
+   "year": 2025,
+   "venue": "International Conference on Learning Representations",
+   "citations": 505
+  },
+  "2409.07429": {
+   "title": "Agent Workflow Memory",
+   "year": 2024,
+   "venue": "International Conference on Machine Learning",
+   "citations": 451
+  },
+  "2310.08560": {
+   "title": "MemGPT: Towards LLMs as Operating Systems",
+   "year": 2023,
+   "venue": "arXiv.org",
+   "citations": 1764
+  },
+  "2610.22732": {
+   "title": "TokenEconomizer: Experience-Driven Black-Box Cost Control for Coding Agents",
+   "year": 2026,
+   "venue": "",
+   "citations": 0
+  },
+  "2505.03275": {
+   "title": "RAG-MCP: Mitigating Prompt Bloat in LLM Tool Selection via Retrieval-Augmented Generation",
+   "year": 2025,
+   "venue": "arXiv.org",
+   "citations": 41
+  },
+  "2411.15399": {
+   "title": "Less is More: Optimizing Function Calling for LLM Execution on Edge Devices",
+   "year": 2024,
+   "venue": "",
+   "citations": 33
+  },
+  "2506.01056": {
+   "title": "MCP-Zero: Active Tool Discovery for Autonomous LLM Agents",
+   "year": 2025,
+   "venue": "arXiv.org",
+   "citations": 55
+  },
+  "2602.11988": {
+   "title": "Evaluating AGENTS.md: Are Repository-Level Context Files Helpful for Coding Agents?",
+   "year": 2026,
+   "venue": "arXiv.org",
+   "citations": 36
+  },
+  "2308.15022": {
+   "title": "Recursively Summarizing Enables Long-Term Dialogue Memory in Large Language Models",
+   "year": 2023,
+   "venue": "Neurocomputing",
+   "citations": 114
+  },
+  "2410.10813": {
+   "title": "LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory",
+   "year": 2024,
+   "venue": "International Conference on Learning Representations",
+   "citations": 869
+  },
+  "2402.17753": {
+   "title": "Evaluating Very Long-Term Conversational Memory of LLM Agents",
+   "year": 2024,
+   "venue": "Annual Meeting of the Association for Computational Linguistics",
+   "citations": 1082
+  },
+  "2504.19413": {
+   "title": "Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory",
+   "year": 2025,
+   "venue": "European Conference on Artificial Intelligence",
+   "citations": 868
+  },
+  "2305.15425": {
+   "title": "Language Model Tokenizers Introduce Unfairness Between Languages",
+   "year": 2023,
+   "venue": "Neural Information Processing Systems",
+   "citations": 319
+  },
+  "2305.13707": {
+   "title": "Do All Languages Cost the Same? Tokenization in the Era of Commercial Language Models",
+   "year": 2023,
+   "venue": "Conference on Empirical Methods in Natural Language Processing",
+   "citations": 278
+  },
+  "1508.07909": {
+   "title": "Neural Machine Translation of Rare Words with Subword Units",
+   "year": 2015,
+   "venue": "Annual Meeting of the Association for Computational Linguistics",
+   "citations": 9243
+  },
+  "2408.02442": {
+   "title": "Let Me Speak Freely? A Study On The Impact Of Format Restrictions On Large Language Model Performance.",
+   "year": 2024,
+   "venue": "Conference on Empirical Methods in Natural Language Processing",
+   "citations": 142
+  },
+  "2301.08721": {
+   "title": "Batch Prompting: Efficient Inference with Large Language Model APIs",
+   "year": 2023,
+   "venue": "Conference on Empirical Methods in Natural Language Processing",
+   "citations": 154
+  },
+  "2504.13359": {
+   "title": "Cost-of-Pass: An Economic Framework for Evaluating Language Models",
+   "year": 2025,
+   "venue": "International Conference on Learning Representations",
+   "citations": 56
+  },
+  "2407.01502": {
+   "title": "AI Agents That Matter",
+   "year": 2024,
+   "venue": "Trans. Mach. Learn. Res.",
+   "citations": 289
+  },
+  "2406.12045": {
+   "title": "τ-bench: A Benchmark for Tool-Agent-User Interaction in Real-World Domains",
+   "year": 2024,
+   "venue": "arXiv.org",
+   "citations": 1669
+  },
+  "2411.00640": {
+   "title": "Adding Error Bars to Evals: A Statistical Approach to Language Model Evaluations",
+   "year": 2024,
+   "venue": "arXiv.org",
+   "citations": 194
+  },
+  "2408.04667": {
+   "title": "Non-Determinism of\"Deterministic\"LLM Settings",
+   "year": 2024,
+   "venue": "",
+   "citations": 159
+  },
+  "2201.11903": {
+   "title": "Chain of Thought Prompting Elicits Reasoning in Large Language Models",
+   "year": 2022,
+   "venue": "Neural Information Processing Systems",
+   "citations": 23523
+  },
+  "2210.03629": {
+   "title": "ReAct: Synergizing Reasoning and Acting in Language Models",
+   "year": 2022,
+   "venue": "International Conference on Learning Representations",
+   "citations": 13383
+  },
+  "2310.06770": {
+   "title": "SWE-bench: Can Language Models Resolve Real-World GitHub Issues?",
+   "year": 2023,
+   "venue": "International Conference on Learning Representations",
+   "citations": 4683
+  }
+ }
+}

@@ -1,0 +1,21 @@
+{
+  "_comment": "SYNTHETIC example for documentation. Not measured from any real system.",
+  "min_cacheable": 1024,
+  "steps": [
+    {"name": "guardrail", "model": "small", "calls": 1, "fixed_tokens": 800},
+    {"name": "rewrite", "model": "small", "calls": 1, "fixed_tokens": 2500},
+    {"name": "router", "model": "large", "calls": 1, "fixed_tokens": 12000},
+    {"name": "classify", "model": "small", "calls": 1, "fixed_tokens": 2000},
+    {
+      "name": "answer",
+      "model": "large",
+      "calls": 2,
+      "components": [
+        {"name": "rules_and_tools", "tokens": 8000},
+        {"name": "reference_doc", "tokens": 20000}
+      ]
+    },
+    {"name": "follow_up", "model": "small", "calls": 1, "fixed_tokens": 3500},
+    {"name": "final_reply", "model": "large", "calls": 1, "fixed_tokens": 2000}
+  ]
+}

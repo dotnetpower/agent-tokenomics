@@ -1,0 +1,91 @@
+# Copilot instructions for agent-tokenomics
+
+## Project purpose
+
+This repository is a bilingual (English / Korean) knowledge base about **saving tokens** when working with LLMs.
+It is inspired by [microsoft/TokenEconomizer](https://github.com/microsoft/TokenEconomizer) (experience-driven, black-box cost control for coding agents: micro-skills, tool pruning, failure-loop intervention) and covers two tracks:
+
+1. **Track A – VS Code GitHub Copilot**: how a developer reduces token / premium-request consumption in everyday Copilot use.
+2. **Track B – LLM agents (troubleshooting guide)**: how an engineer diagnoses and reduces token cost of an agent they build or operate.
+
+Content is documentation, not a library. Do not add application code unless it is a small, runnable measurement example that supports a document.
+
+## Repository layout
+
+The documentation site is built with **Astro Starlight** and published to GitHub Pages (same setup as `dotnetpower/fdai`: `site/` + `.github/workflows/pages.yml`). Starlight i18n is configured with English as the root locale and Korean as `ko`.
+
+```
+site/                        # Astro Starlight project (astro.config.mjs, package.json)
+  src/content/docs/          # English pages (root locale, URL: /<base>/...)
+    copilot-tokenomics/          # Track A
+    agent-tokenomics/   # Track B
+    glossary.md
+    ko/                      # Korean pages (URL: /<base>/ko/...)
+      copilot-tokenomics/        # same relative paths/filenames as English
+      agent-tokenomics/
+      glossary.md
+examples/                    # optional measurement scripts / sample logs, referenced by docs
+.github/workflows/pages.yml  # build + deploy to GitHub Pages
+.github/copilot-instructions.md
+README.md                    # English landing page; README.ko.md for Korean
+```
+
+- **English-first workflow**: author and merge English pages now; Korean is translated in bulk later. Do not create partial/placeholder Korean pages meanwhile (Starlight falls back to English for missing `ko/` pages).
+- When Korean is added, each page goes at the **same relative path under `ko/`**. Never create a Korean page outside `ko/`. `npm --prefix site run check:pairs` lists untranslated pages (informational until the bulk translation is done).
+- Use lowercase kebab-case filenames. Prefix ordered pages with two digits (`01-`, `02-`).
+- Front matter follows Starlight's schema (`title`, `description`, optional `sidebar.order`); add `track` (`copilot` | `agent`) and `stage` (Track B only) as custom fields only if declared in `content.config.ts`. Put "verified on" dates and sources in the page body (a **Sources** section).
+- Internal links must include the locale prefix and the site base path; use relative links where possible so both locales work.
+- Sidebar entries are defined in `astro.config.mjs` with Starlight `translations` for Korean labels; update them whenever a page is added.
+- Validate locally with `npm --prefix site ci && npm --prefix site run build` before committing site changes.
+
+## Track A – VS Code GitHub Copilot
+
+Cover practical, verifiable levers, e.g. context scoping (`#file`, `#selection`, avoiding whole-workspace context), conversation hygiene (new chat per task, summarizing/compacting), instruction files (`copilot-instructions.md`, `*.instructions.md` with `applyTo`, `AGENTS.md`) kept short, prompt files, tool / MCP server selection (each enabled tool definition is sent on every request), model choice and premium-request multipliers, agent mode vs. ask/edit, and usage visibility.
+Each page: *Problem → Setting/Action → How to verify the effect → Trade-offs*.
+Always state the VS Code / Copilot version or date a setting was verified against; Copilot UI and settings change quickly.
+Billing context (verified 2026-11-03): Copilot moved to usage-based billing with GitHub AI Credits on 2026-06-01 (tokens × model rate); some annual Pro/Pro+ plans remain on legacy premium-request billing. Tactics must say which model they apply to.
+
+## Track B – LLM agent token troubleshooting
+
+Structure the guide as a concepts page followed by a troubleshooting procedure. Each stage is its own page (same names in `en/` and `ko/`):
+
+| # | Stage | Page | Goal |
+|---|-------|------|------|
+| 0 | Concepts (read first) | `00-concepts.md` | Mental model: stateless re-send, request anatomy, agent loop, pricing dimensions, prompt caching, context window / rot, tool costs. Foundation for stages 1–5; no procedure. |
+| 1 | Diagnose current state | `01-diagnose.md` | Measure where tokens go: per-request input/output/cached/reasoning tokens, per-turn and per-session cost, fixed prompt overhead, tool-definition size, context growth curve. |
+| 2 | Isolate the problem | `02-isolate.md` | Attribute cost to a cause category: re-learning repo facts, unused tools, failure loops, bloated tool output, history growth, over-large model, retries. Change one variable at a time. |
+| 3 | Prove the problem | `03-prove.md` | Reproduce with a fixed task set and baseline; quantify waste with counts and confidence (repeat runs). A hypothesis is not accepted without a measured number. |
+| 4 | Improve | `04-improve.md` | Apply targeted fixes mapped to the isolated cause (see catalog below). One fix per experiment. |
+| 5 | Result | `05-result.md` | Re-measure against the baseline: cost, success rate (quality guardrail), latency; record keep/revert decision. |
+
+Every Track B stage page (1–5) contains: *Symptoms → Checks (commands/queries) → Interpretation table → Next step*. Include a worked example and a copy-paste template (checklist or log query) per stage.
+
+Fix catalog for stage 4 (link each to the cause from stage 2):
+- Re-learned facts → short persistent repo facts / micro-skills stated at session start.
+- Unused tools → prune tool definitions; load tools on demand.
+- Failure loops → detect repeated identical errors, redirect once, then surface to the user.
+- Bloated output → truncate/paginate tool results, grep before read, summarize.
+- History growth → compaction, sub-agent isolation, fresh sessions per task.
+- Cost per call → prompt caching (stable prefix first), smaller model for easy steps, batching.
+
+Success is never "fewer tokens" alone: always report the quality metric (pass rate / task success) next to cost.
+
+## Writing rules
+
+- Write English and Korean versions each in natural language; do not machine-translate word for word. Keep code, commands, setting keys, and product names in English in both versions.
+- Korean: use 합니다/입니다 (formal polite) style; keep technical terms consistent via the glossary page (`glossary.md` / `ko/glossary.md`) (EN ↔ KO table: token/토큰, context window/컨텍스트 윈도우, prompt caching/프롬프트 캐싱, tool pruning/도구 가지치기, loop guard/루프 가드). Add new terms there first.
+- Be concise: short paragraphs, tables and checklists over prose, one idea per section.
+- Every quantitative claim needs a source link or a reproducible measurement in `examples/`. Never invent numbers. When citing TokenEconomizer results, quote them as reported (SWE-Bench: 18.4–30.9% lower mean cost, 5 agent–model combinations) and link the paper/project page.
+- Mark product-specific behavior with the date verified. Prefer official docs (GitHub Docs, VS Code docs, provider docs) as sources.
+- Figures taken from talks, decks, READMEs, or third-party tools are "as reported, not independently verified" unless reproduced in `examples/`; state that next to the number, and prefer a primary source (paper, official docs) when one exists. If a deck contradicts a primary source, follow the primary source.
+- `site/src/content/docs/papers.md` is **generated**: edit `examples/papers.json` (arXiv id, one topic, a one-line note in your own words), run `python3 examples/fetch_paper_meta.py` (fails on an unknown id) then `python3 examples/build_papers.py`. Never hand-edit the page, and never state a paper's numbers without reading the paper. Per-page "Further reading (papers)" sections list papers ordered by the same ranking (`build_papers.py --ids ...`).
+- `site/src/content/docs/resources.md` is the curated link list: verify each link resolves (`gh api repos/<owner>/<repo>` or `curl -I`), describe it in your own words, omit star counts and savings percentages, and keep the "not an endorsement" and proxy-privacy notes.
+- Do not copy text, figures, or images from other projects; summarize in your own words and link. This repo is licensed per `LICENSE`; respect third-party licenses.
+- Never include secrets, tokens, private prompts, or customer data in examples or logs; redact before committing.
+- When a real customer, partner, or internal engagement inspires a page: do not name the customer, product, team, people, repositories, branches, deployments, or regions; do not quote real figures; do not cite or link the material. Rebuild the situation as a generic, clearly labeled **synthetic** example with different round numbers (see `examples/sample-pipeline.json`). Get explicit approval before publishing anything derived from non-public material.
+
+## Contribution workflow
+
+- Until the bulk translation, change English pages only. Once a Korean twin exists, a change to the English page must update the Korean page in the same commit/PR (or record a `<!-- TODO(translate) -->` marker plus an issue).
+- Use Markdown/MDX supported by Starlight (CommonMark + GFM tables). Korean text needs CJK-friendly emphasis parsing (`remark-cjk-friendly`, as in fdai). Run the site build and a link checker; otherwise verify relative links manually.
+- Commit messages and PR titles in English, imperative mood (e.g., `Add Track B diagnose guide (en, ko)`).

@@ -1,0 +1,39 @@
+---
+title: agent-tokenomics
+description: Practical ways to save LLM tokens, in two tracks.
+template: splash
+hero:
+  tagline: Spend fewer tokens without making your AI tools worse.
+  actions:
+    - text: Copilot Tokenomics
+      link: copilot-tokenomics/
+      icon: right-arrow
+    - text: Agent Tokenomics
+      link: agent-tokenomics/
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid>
+  <Card title="Track A — Copilot Tokenomics" icon="vscode">
+    For developers using **GitHub Copilot in VS Code**. Understand how usage is billed, measure what
+    each chat costs, and change habits and settings that cut waste.
+  </Card>
+  <Card title="Track B — Agent Tokenomics" icon="magnifier">
+    For engineers who **build or run LLM agents**. A troubleshooting procedure: diagnose the current
+    state, isolate the cause, prove it, improve, and report the result.
+  </Card>
+</CardGrid>
+
+## Principles
+
+1. **Measure first.** No optimization without a number from your own sessions.
+2. **Quality is a guardrail.** Fewer tokens only count if task success holds.
+3. **One change at a time.** Otherwise you cannot tell what worked.
+4. **Cite or measure.** Every quantitative claim links to a source or a reproducible log.
+
+This project is inspired by [microsoft/TokenEconomizer](https://github.com/microsoft/TokenEconomizer),
+which cuts coding-agent cost using micro-skills, tool pruning, and failure-loop intervention.
+See the [case study](agent-tokenomics/case-tokeneconomizer/) the curated [resources](resources/)
+(tools and repositories), and [ranked papers](papers/).

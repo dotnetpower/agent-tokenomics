@@ -1,0 +1,21 @@
+{
+  "name": "agent-tokenomics-site",
+  "type": "module",
+  "version": "0.0.1",
+  "private": true,
+  "description": "agent-tokenomics documentation site (Astro Starlight, GitHub Pages).",
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build",
+    "check:pairs": "node scripts/check-pairs.mjs",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.36.0",
+    "astro": "^5.14.0",
+    "remark-cjk-friendly": "2.3.1",
+    "sharp": "^0.34.0"
+  }
+}
