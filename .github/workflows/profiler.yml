@@ -43,7 +43,7 @@ jobs:
           if command -v cygpath >/dev/null; then BIN="$(cygpath -w "$BIN")"; fi
           echo "$BIN" >> "$GITHUB_PATH"
       - name: Unit and integration tests
-        run: python -m pytest
+        run: python -m pytest -rs
       - name: Self test (mock LLM through the gateway)
         run: python -m tokprof selftest
 
