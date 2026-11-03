@@ -36,7 +36,7 @@ def test_mitm_regular_mode_records_streaming_and_plain_calls(tmp_path):
     port = free_port()
     out = tmp_path / "mitm.jsonl"
     proc = subprocess.Popen(
-        [sys.executable, "-m", "tokprof", "mitm", "--mode", f"regular@{port}", "--out", str(out), "--no-tiktoken"],
+        [sys.executable, "-m", "tokprof", "mitm", "--mode", f"regular@{port}", "--out", str(out), "--no-tiktoken", "--duration", "25"],
         stderr=subprocess.PIPE, text=True,
     )
     try:
@@ -54,11 +54,9 @@ def test_mitm_regular_mode_records_streaming_and_plain_calls(tmp_path):
         sse = post(f"http://127.0.0.1:{port}", mock.url + "/v1/chat/completions", {"model": "gpt-4o", "messages": msgs, "stream": True})
         assert sse.rstrip().endswith(b"[DONE]")
         time.sleep(1.0)
+        proc.wait(timeout=60)  # --duration ends the run on every OS without relying on signals
     finally:
-        proc.send_signal(2 if os.name != "nt" else 15)
-        try:
-            proc.wait(timeout=20)
-        except subprocess.TimeoutExpired:
+        if proc.poll() is None:
             proc.kill()
         mock.stop()
     recs = list(read_jsonl(str(out)))

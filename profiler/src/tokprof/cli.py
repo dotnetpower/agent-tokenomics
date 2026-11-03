@@ -74,6 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     mm.add_argument("--local", default="", help="comma-separated process names or PIDs for mitmproxy local capture")
     mm.add_argument("--mode", default="", help="any mitmproxy mode instead, for example regular@8080")
     mm.add_argument("--mitmdump", help="path to mitmdump")
+    mm.add_argument("--duration", type=float, help="stop after this many seconds")
     mm.add_argument("--out")
     mm.add_argument("--component", action="append", metavar="NAME=@FILE")
     mm.add_argument("--no-tiktoken", action="store_true")
@@ -188,7 +189,7 @@ def main(argv: Optional[list] = None) -> int:
         out = args.out or _default_out()
         code = run_mitm(
             out, local=args.local, mode=args.mode, mitmdump=args.mitmdump, components=_components(args.component),
-            use_tiktoken=not args.no_tiktoken, extra=cmd_tail,
+            use_tiktoken=not args.no_tiktoken, extra=cmd_tail, duration=args.duration,
         )
         if args.report and os.path.exists(out):
             print()

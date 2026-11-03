@@ -58,6 +58,7 @@ def run_mitm(
     components: Optional[dict] = None,
     use_tiktoken: bool = True,
     extra: Optional[list] = None,
+    duration: Optional[float] = None,
     quiet: bool = False,
 ) -> int:
     if bool(local) == bool(mode):
@@ -89,7 +90,15 @@ def run_mitm(
     try:
         while True:
             try:
-                code = proc.wait()
+                code = proc.wait(timeout=duration)
+                break
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+                try:
+                    code = proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    code = 1
                 break
             except KeyboardInterrupt:
                 proc.terminate()
@@ -108,4 +117,4 @@ def run_mitm(
     if not quiet:
         s = gw.stats
         print(f"tokprof: {s['recorded']} LLM call(s) recorded, {s['record_errors']} recording error(s)", file=sys.stderr)
-    return 0 if code in (0, -2, -15, 130) else code
+    return 0 if duration or code in (0, -2, -15, 130) else code

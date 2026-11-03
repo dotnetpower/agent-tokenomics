@@ -129,6 +129,7 @@ uv tool install mitmproxy                     # or: pipx install mitmproxy
 tokprof mitm --trust-help                     # how a process can trust the mitmproxy CA (nothing is installed for you)
 tokprof mitm --local node,python --report     # administrator rights on Windows; one-time extension approval on macOS
 tokprof mitm --mode regular@8080              # any OS: explicit proxy mode, point the agent's HTTPS_PROXY at it
+tokprof mitm --mode regular@8080 --duration 300   # stop by itself after 5 minutes
 ```
 
 - A small mitmproxy addon (`boot/mitm_addon.py`, standard library only) forwards only the request path, request body and response body
