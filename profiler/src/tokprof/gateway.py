@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import re
 import ssl
 import sys
 import threading
@@ -18,9 +20,10 @@ from typing import Callable, Optional
 from urllib.parse import urlsplit
 
 from .counting import get_counter
-from .parse import SSEParser, detect_provider, parse_request, parse_response_json
-from .segment import build_record
-from .upstream import connect_via_proxy, proxy_for
+from .detect import Detector, Verdict, normalize_path
+from .parse import SSEParser, parse_request, parse_response_body
+from .segment import build_record, hash_text
+from .upstream import connect_via_proxy, make_upstream_context, proxy_for
 
 HOP_BY_HOP = {
     "connection", "proxy-connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade",
@@ -191,6 +194,8 @@ class Gateway:
         port: int = 0,
         use_tiktoken: bool = True,
         ingest_token: Optional[str] = None,
+        detector: Optional[Detector] = None,
+        record_hosts: bool = False,
     ):
         self.routes = sorted(routes, key=lambda r: -len(r.prefix))
         self.sink = sink
@@ -202,6 +207,8 @@ class Gateway:
         self.host, self.port = host, port
         self.use_tiktoken = use_tiktoken
         self.ingest_token = ingest_token
+        self.detector = detector or Detector()
+        self.record_hosts = record_hosts or os.environ.get("TOKPROF_RECORD_HOSTS") == "1"
         self.stats = {"requests": 0, "recorded": 0, "record_errors": 0, "bypassed": 0}
         self._active = 0
         self._last_request: Optional[float] = None
@@ -210,7 +217,7 @@ class Gateway:
         self._tasks: set = set()
         self._server: Optional[asyncio.AbstractServer] = None
         self._warned: set = set()
-        self._ctx = ssl.create_default_context()
+        self._ctx = make_upstream_context()
 
     # ---- lifecycle -------------------------------------------------
     async def start(self) -> int:
@@ -316,13 +323,13 @@ class Gateway:
             return await self._respond(writer, 404, "Not Found", b"tokprof: no upstream route for this path")
         scheme, host, port, upath = route
 
-        provider, parsed = None, None
+        verdict, parsed = None, None
         if method == "POST":
             try:
                 obj = json.loads(body) if body else None
-                provider = detect_provider(target, obj)
-                if provider and isinstance(obj, dict):
-                    parsed = parse_request(provider, obj)
+                verdict = self.detector.inspect(method=method, host=host, port=port, path=upath.split("?", 1)[0], body=obj)
+                if (verdict.llm or verdict.candidate) and isinstance(obj, dict):
+                    parsed = self._parse(verdict, obj)
             except Exception:
                 parsed = None
 
@@ -330,7 +337,10 @@ class Gateway:
         try:
             up_reader, up_writer = await self._open_upstream(scheme, host, port)
         except Exception as exc:
-            return await self._respond(writer, 502, "Bad Gateway", f"tokprof: upstream connect failed: {exc}".encode())
+            hint = ""
+            if "CERTIFICATE_VERIFY_FAILED" in str(exc):
+                hint = " (the endpoint's certificate is not trusted: for a private CA pass --upstream-ca FILE or set SSL_CERT_FILE)"
+            return await self._respond(writer, 502, "Bad Gateway", f"tokprof: upstream connect failed: {exc}{hint}".encode())
 
         fwd = [f"{method} {upath} HTTP/1.1", f"Host: {host}" + (f":{port}" if port not in (80, 443) else "")]
         skip = HOP_BY_HOP | {"host", "content-length", "accept-encoding", "expect"}
@@ -345,6 +355,7 @@ class Gateway:
 
         status = None
         ttfb = None
+        is_sse = False
         head_sent = False
         collected = bytearray()
         sse: Optional[SSEParser] = None
@@ -385,7 +396,7 @@ class Gateway:
                         decoded = framer.feed(data)
                         if sse is not None:
                             sse.feed(decoded)
-                        elif len(collected) < MAX_BODY:
+                        if (sse is None or verdict.candidate) and len(collected) < MAX_BODY:
                             collected += decoded
                     except Exception:
                         parsed = None
@@ -413,11 +424,29 @@ class Gateway:
             pass
         if parsed is not None:
             try:
-                response = sse.finish() if sse is not None else parse_response_json(parsed.provider, json.loads(bytes(collected)) if collected else None)
-                await asyncio.get_running_loop().run_in_executor(None, self._record, parsed, response, target, status, t0, ttfb, err)
+                text = bytes(collected).decode("utf-8", "replace")
+                response = sse.finish() if sse is not None else parse_response_body(parsed.provider, text, False)
+                if not self._decide(verdict, host, port, upath, text, is_sse):
+                    return
+                await asyncio.get_running_loop().run_in_executor(None, self._record, parsed, response, target, status, t0, ttfb, err, None, verdict, host, port)
             except Exception as exc:
                 self.stats["record_errors"] += 1
                 self._warn_once("rec:" + type(exc).__name__, f"could not record a call ({exc!r}); traffic is unaffected")
+
+    def _parse(self, verdict: Verdict, obj: dict):
+        parsed = parse_request(verdict.api, obj)
+        if not parsed.model and verdict.model_hint:
+            parsed.model = verdict.model_hint  # Azure deployments and Gemini put the model in the URL
+        parsed.stream = parsed.stream or verdict.stream_hint
+        return parsed
+
+    def _decide(self, verdict: Verdict, host: str, port: int, path: str, text: str, sse: bool) -> bool:
+        """Settle an ambiguous request from its response; remember accepted endpoints."""
+        if verdict.candidate and not verdict.llm:
+            if self.detector.confirm(verdict, host, port, path.split("?", 1)[0], text, sse) is None:
+                return False
+        self.detector.accept(verdict, host, port, path)
+        return True
 
     async def _ingest(self, writer, hd: dict, body: bytes) -> None:
         """Accept a raw exchange captured by an in-process hook and record it like proxied traffic."""
@@ -432,30 +461,37 @@ class Gateway:
         await self._respond(writer, 204, "No Content", b"")
 
     def ingest_message(self, msg: dict) -> None:
-        """Record one raw exchange ({path, request, response, sse, status, ts, ttfb_ms}) captured outside the gateway."""
+        """Record one raw exchange captured outside the gateway.
+
+        Fields: path, request (JSON text), response (text), sse, status, ts, ttfb_ms, latency_ms and, when the
+        capture knows them, host, port and method. The detector decides whether it is an LLM call.
+        """
         try:
             path = str(msg.get("path") or "")
+            host = str(msg.get("host") or "")
+            port = msg.get("port")
+            if not port and host:
+                m = re.match(r"^(\[[^\]]+\]|[^:]+):(\d+)$", host)  # host:port or [v6]:port from a Host header
+                if m:
+                    host, port = m.group(1), int(m.group(2))
+            port = int(port or 0)
             req_obj = json.loads(msg.get("request") or "null")
-            provider = detect_provider(path, req_obj)
-            if provider and isinstance(req_obj, dict):
-                parsed = parse_request(provider, req_obj)
-                text = msg.get("response") or ""
-                if msg.get("sse"):
-                    sse = SSEParser(provider)
-                    sse.feed(text.encode("utf-8", "replace"))
-                    response = sse.finish()
-                else:
-                    try:
-                        response = parse_response_json(provider, json.loads(text) if text else None)
-                    except ValueError:
-                        response = parse_response_json(provider, None)
-                t0 = float(msg.get("ts") or time.time())
-                self._record(parsed, response, path, msg.get("status"), t0, msg.get("ttfb_ms"), msg.get("error"), msg.get("latency_ms"))
+            verdict = self.detector.inspect(method=str(msg.get("method") or "POST"), host=host, port=port, path=path, body=req_obj)
+            if not (verdict.llm or verdict.candidate) or not isinstance(req_obj, dict):
+                return
+            parsed = self._parse(verdict, req_obj)
+            text = msg.get("response") or ""
+            sse = bool(msg.get("sse"))
+            response = parse_response_body(parsed.provider, text, sse)
+            if not self._decide(verdict, host, port, path, text, sse):
+                return
+            t0 = float(msg.get("ts") or time.time())
+            self._record(parsed, response, path, msg.get("status"), t0, msg.get("ttfb_ms"), msg.get("error"), msg.get("latency_ms"), verdict, host, port)
         except Exception as exc:
             self.stats["record_errors"] += 1
             self._warn_once("ingest:" + type(exc).__name__, f"could not record an ingested call ({exc!r})")
 
-    def _record(self, parsed, response, target, status, t0, ttfb, err, latency_ms=None) -> None:
+    def _record(self, parsed, response, target, status, t0, ttfb, err, latency_ms=None, verdict=None, host="", port=0) -> None:
         counter = get_counter(parsed.model, prefer_tiktoken=self.use_tiktoken)
         rec = build_record(
             parsed=parsed,
@@ -471,6 +507,11 @@ class Gateway:
             error=err,
             ts=t0,
         )
+        if verdict is not None:
+            rec.host_class = verdict.host_class or None
+            rec.host_id = hash_text(f"{host}:{port}", self.salt) if host else None
+            rec.host = (f"{host}:{port}" if port else host) if self.record_hosts and host else None
+            rec.detect = {"score": verdict.score, "evidence": verdict.evidence[:6], "forced": verdict.forced or None}
         self.sink(rec.to_dict())
         self.stats["recorded"] += 1
 

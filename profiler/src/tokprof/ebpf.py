@@ -28,8 +28,10 @@ def find_helper(explicit: Optional[str] = None) -> Optional[str]:
     return None
 
 
-def helper_command(helper: str, pids: str, comms: str, everything: bool, duration: Optional[str], use_sudo: bool) -> list:
+def helper_command(helper: str, pids: str, comms: str, everything: bool, duration: Optional[str], use_sudo: bool, plain: bool = True) -> list:
     cmd = [helper, "trace", "--exit-on-stdin-eof"]
+    if not plain:
+        cmd.append("--no-plain")
     if pids:
         cmd += ["--pid", pids]
     if comms:
@@ -70,6 +72,7 @@ def run_ebpf(
     components: Optional[dict] = None,
     use_tiktoken: bool = True,
     use_sudo: bool = True,
+    plain: bool = True,
     quiet: bool = False,
 ) -> int:
     if not sys.platform.startswith("linux"):
@@ -86,7 +89,7 @@ def run_ebpf(
 
     writer = JsonlWriter(out_path)
     gw = Gateway([], writer.write, salt=secrets.token_bytes(16), components=components, run_id=secrets.token_hex(4), use_tiktoken=use_tiktoken)
-    cmd = helper_command(exe, pids, comms, everything, duration, use_sudo)
+    cmd = helper_command(exe, pids, comms, everything, duration, use_sudo, plain)
     if not quiet:
         print(f"tokprof: profiling to {out_path} via eBPF; press Ctrl+C to stop", file=sys.stderr)
     try:
@@ -115,4 +118,7 @@ def run_ebpf(
     if not quiet:
         s = gw.stats
         print(f"tokprof: {s['recorded']} LLM call(s) recorded, {s['record_errors']} recording error(s)", file=sys.stderr)
+        summary = gw.detector.render_summary()
+        if summary:
+            print(summary, file=sys.stderr)
     return code

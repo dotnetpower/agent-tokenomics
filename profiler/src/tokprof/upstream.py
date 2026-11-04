@@ -5,10 +5,39 @@ from __future__ import annotations
 import base64
 import os
 import socket
+import ssl
+import sys
 from typing import Optional
 from urllib.parse import unquote, urlsplit
 
 ALWAYS_DIRECT = {"localhost", "127.0.0.1", "::1"}
+
+# Private endpoints are often served with an internal CA. The gateway makes the upstream TLS connection on the
+# client's behalf, so it must trust what the client would trust.
+CA_VARIABLES = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "TOKPROF_UPSTREAM_CA")
+
+
+def make_upstream_context(env: Optional[dict] = None) -> ssl.SSLContext:
+    """TLS context for the gateway's outbound connections: system roots + the CA files the client environment names."""
+    env = os.environ if env is None else env
+    ctx = ssl.create_default_context()
+    for var in CA_VARIABLES:
+        for path in (env.get(var) or "").split(os.pathsep if var == "TOKPROF_UPSTREAM_CA" else "\0"):
+            path = path.strip()
+            if not path:
+                continue
+            if not os.path.isfile(path):
+                print(f"tokprof: {var} points to {path!r}, which is not a file; ignoring it", file=sys.stderr)
+                continue
+            try:
+                ctx.load_verify_locations(cafile=path)
+            except (ssl.SSLError, OSError) as exc:
+                print(f"tokprof: could not load CA bundle from {var} ({exc}); ignoring it", file=sys.stderr)
+    if env.get("TOKPROF_INSECURE_UPSTREAM") == "1":
+        print("tokprof: WARNING: upstream TLS certificate verification is disabled (--insecure-upstream)", file=sys.stderr)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
 
 
 def proxy_for(host: str, env: Optional[dict] = None) -> Optional[tuple]:

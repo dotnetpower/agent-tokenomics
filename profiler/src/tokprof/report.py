@@ -17,6 +17,7 @@ LABELS = {
     "tool_result": "Tools: results",
     "attachment": "Attachments (uncounted)",
     "response_schema": "Response schema",
+    "raw_prompt": "Raw prompt (not split)",
     "other": "Other",
     "residual": "Unattributed (template/hidden)",
 }
@@ -78,6 +79,13 @@ def render_text(records: list, gap_s: float = 5.0) -> str:
         for st in s["steps"][:12]:
             label = (st["label"] or st["model"] or "-")[:26]
             lines.append(f"{st['step']:<8}{label:<28}{st['calls']:>6}{st['input']:>12,}{st['fixed_per_call']:>12,}")
+    eps = s["endpoints"]
+    if len(eps) > 1 or (eps and eps[0]["class"] not in ("unknown",)):
+        lines += ["", "Endpoints (by detected API and host class)", "------------------------------------------",
+                  f"{'host':<30}{'class':<18}{'api':<18}{'calls':>6}{'input':>12}"]
+        for e in eps[:12]:
+            who = e["host"] or (f"#{e['id']}" if e["id"] else "-")
+            lines.append(f"{who:<30}{e['class']:<18}{e['api']:<18}{e['calls']:>6}{e['input']:>12,}")
     if s["findings"]:
         lines += ["", "Findings", "--------"]
         for f in s["findings"]:
@@ -103,6 +111,11 @@ def render_markdown(records: list, gap_s: float = 5.0) -> str:
         v = s["by_kind"].get(kind, 0)
         if v:
             md.append(f"| {LABELS.get(kind, kind)} | {v:,} | {100 * v / total:.1f}% |")
+    eps = s["endpoints"]
+    if len(eps) > 1 or (eps and eps[0]["class"] != "unknown"):
+        md += ["", "## Endpoints", "", "| Host | Class | API | Calls | Input tokens |", "|------|-------|-----|------:|-------------:|"]
+        for e in eps[:12]:
+            md.append(f"| {e['host'] or ('#' + e['id'] if e['id'] else '-')} | {e['class']} | {e['api']} | {e['calls']} | {e['input']:,} |")
     if s["findings"]:
         md += ["", "## Findings", ""]
         for f in s["findings"]:

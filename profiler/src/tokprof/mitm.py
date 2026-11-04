@@ -117,4 +117,7 @@ def run_mitm(
     if not quiet:
         s = gw.stats
         print(f"tokprof: {s['recorded']} LLM call(s) recorded, {s['record_errors']} recording error(s)", file=sys.stderr)
+        summary = gw.detector.render_summary()
+        if summary:
+            print(summary, file=sys.stderr)
     return 0 if duration or code in (0, -2, -15, 130) else code

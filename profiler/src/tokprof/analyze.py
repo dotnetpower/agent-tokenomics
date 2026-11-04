@@ -153,6 +153,24 @@ def findings(records: list, min_cacheable: int = 1024, gap_s: float = 5.0) -> li
     return out
 
 
+def endpoint_map(records: list) -> list:
+    """Group calls by endpoint identity (class + salted host hash), so several hosts can be told apart without host names."""
+    groups: dict = {}
+    for r in records:
+        cls = r.get("host_class") or "unknown"
+        key = (cls, r.get("host_id") or "", r.get("provider") or "")
+        g = groups.setdefault(key, {"class": cls, "id": (r.get("host_id") or "")[:6], "host": r.get("host"), "api": key[2], "calls": 0, "input": 0, "models": set()})
+        g["calls"] += 1
+        g["input"] += _in(r)
+        if r.get("model"):
+            g["models"].add(r["model"])
+    out = []
+    for g in groups.values():
+        g["models"] = sorted(g["models"])
+        out.append(g)
+    return sorted(out, key=lambda g: -g["input"])
+
+
 def summarize(records: list, gap_s: float = 5.0) -> dict:
     bd = kind_breakdown(records)
     inputs = [_in(r) for r in records]
@@ -164,6 +182,7 @@ def summarize(records: list, gap_s: float = 5.0) -> dict:
         "cached_total": sum((r.get("usage") or {}).get("cached", 0) or 0 for r in records),
         "by_kind": bd["totals"],
         "steps": step_map(records),
+        "endpoints": endpoint_map(records),
         "fan_out": [len(g) for g in group_requests(records, gap_s)],
         "first_call_input": _in(first) if first else 0,
         "median_input": int(statistics.median(inputs)) if inputs else 0,

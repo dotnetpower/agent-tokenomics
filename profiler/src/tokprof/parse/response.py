@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from ..model import Usage
-from .request import ANTHROPIC, OPENAI_CHAT, OPENAI_RESPONSES
+from .request import ANTHROPIC, COMPLETIONS, GEMINI, OPENAI_CHAT, OPENAI_RESPONSES
 
 
 @dataclass
@@ -62,6 +62,71 @@ def usage_anthropic(u: dict, into: Optional[Usage] = None) -> Usage:
     return out
 
 
+def usage_gemini(u: dict) -> Usage:
+    return Usage(
+        input_total=_int(u.get("promptTokenCount")),
+        cached=_int(u.get("cachedContentTokenCount")),
+        output=_int(u.get("candidatesTokenCount")),
+        reasoning=_int(u.get("thoughtsTokenCount")),
+    )
+
+
+def native_usage(o: dict) -> Optional[Usage]:
+    """Usage in the formats of self-hosted servers that do not return an OpenAI-style `usage` object."""
+    if _int(o.get("prompt_eval_count")) is not None or _int(o.get("eval_count")) is not None:  # Ollama
+        return Usage(input_total=_int(o.get("prompt_eval_count")), output=_int(o.get("eval_count")))
+    if _int(o.get("tokens_evaluated")) is not None:  # llama.cpp server
+        return Usage(input_total=o["tokens_evaluated"], cached=_int(o.get("tokens_cached")), output=_int(o.get("tokens_predicted")))
+    details = o.get("details")
+    if isinstance(details, dict) and isinstance(details.get("prefill"), list):  # TGI /generate with details=true
+        return Usage(input_total=len(details["prefill"]), output=_int(details.get("generated_tokens")))
+    return None
+
+
+def _apply_extra(provider: str, o: dict, r: ParsedResponse) -> None:
+    """Fields of the non-OpenAI-chat shapes; the same code serves whole responses and stream chunks."""
+    if provider == GEMINI:
+        u = o.get("usageMetadata") or o.get("usage_metadata")
+        if isinstance(u, dict):
+            r.usage, r.has_usage = usage_gemini(u), True
+        for cand in o.get("candidates") or []:
+            for part in ((cand or {}).get("content") or {}).get("parts") or []:
+                if not isinstance(part, dict):
+                    continue
+                if isinstance(part.get("text"), str) and not part.get("thought"):
+                    r.text += part["text"]
+                fc = part.get("functionCall") or part.get("function_call")
+                if isinstance(fc, dict) and fc.get("name"):
+                    r.tool_calls.append(fc["name"])
+        return
+    if provider in (COMPLETIONS, OPENAI_CHAT):
+        nu = native_usage(o)  # Ollama and llama.cpp put the counts on the last chunk only
+        if nu is not None:
+            r.usage, r.has_usage = nu, True
+        if provider == COMPLETIONS:
+            if isinstance(o.get("usage"), dict):
+                r.usage, r.has_usage = usage_openai_chat(o["usage"]), True
+            for ch in o.get("choices") or []:
+                if isinstance((ch or {}).get("text"), str):
+                    r.text += ch["text"]
+            for key in ("response", "content", "generated_text"):  # Ollama, llama.cpp, TGI
+                if isinstance(o.get(key), str):
+                    r.text += o[key]
+                    break
+            tok = o.get("token")  # TGI /generate_stream
+            if isinstance(tok, dict) and isinstance(tok.get("text"), str):
+                r.text += tok["text"]
+        else:  # Ollama /api/chat
+            msg = o.get("message")
+            if isinstance(msg, dict) and "choices" not in o:
+                if isinstance(msg.get("content"), str):
+                    r.text += msg["content"]
+                for tc in msg.get("tool_calls") or []:
+                    name = ((tc or {}).get("function") or {}).get("name")
+                    if name:
+                        r.tool_calls.append(name)
+
+
 def parse_response_json(provider: str, obj: Any) -> ParsedResponse:
     r = ParsedResponse()
     if not isinstance(obj, dict):
@@ -97,6 +162,8 @@ def parse_response_json(provider: str, obj: Any) -> ParsedResponse:
                 r.tool_calls.append(b["name"])
             elif (b or {}).get("type") == "text" and isinstance(b.get("text"), str):
                 r.text += b["text"]
+    if provider in (COMPLETIONS, GEMINI) or (provider == OPENAI_CHAT and "choices" not in obj):
+        _apply_extra(provider, obj, r)
     return r
 
 
@@ -186,3 +253,37 @@ class SSEParser:
             elif t == "message_delta" and isinstance(o.get("usage"), dict):
                 usage_anthropic(o["usage"], r.usage)
                 r.has_usage = True
+        if p in (COMPLETIONS, GEMINI) or (p == OPENAI_CHAT and "choices" not in o):
+            _apply_extra(p, o, r)
+
+
+def parse_response_body(provider: str, text: str, sse: bool = False) -> ParsedResponse:
+    """Parse a complete response body of any supported shape: JSON, a JSON array, SSE, or NDJSON."""
+    raw = (text or "").strip()
+    if not raw:
+        return ParsedResponse()
+    if sse or raw.startswith(("data:", "event:", ":")):
+        parser = SSEParser(provider)
+        parser.feed(raw.encode("utf-8", "replace") + b"\n\n")
+        return parser.finish()
+    try:
+        obj = json.loads(raw)
+    except ValueError:
+        obj = None
+    if isinstance(obj, dict):
+        return parse_response_json(provider, obj)
+    chunks = obj if isinstance(obj, list) else None
+    if chunks is None:  # NDJSON: one JSON object per line (Ollama, llama.cpp)
+        chunks = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    chunks.append(json.loads(line))
+                except ValueError:
+                    return ParsedResponse()
+    parser = SSEParser(provider)
+    for c in chunks:
+        if isinstance(c, dict):
+            parser._obj(c)
+    return parser.result

@@ -70,14 +70,20 @@ tokprof compare before.jsonl after.jsonl        # bootstrap interval, for stages
   and `AZURE_OPENAI_ENDPOINT` at it **for that command only**. For clients that hard-code their endpoint it also loads
   in-process hooks (Python `httpx` through `sitecustomize`, Node `fetch` through `--require`). `tokprof start` / `env` /
   `stop` keeps a background session for new processes in a shell.
+- **Which requests count as LLM calls.** Not a fixed list of URLs. `tokprof` scores the request body shape (a `messages` list, Gemini
+  `contents`, a Responses-style `input`, a `prompt`), the path, the host (private DNS, RFC 1918, `.svc.cluster.local`, `privatelink`,
+  `vllm`/`ollama` names, conventional ports) and, for ambiguous bodies, the response (usage counters, `choices`, Ollama/llama.cpp/TGI
+  counters). That covers private DNS endpoints, on-prem vLLM, Ollama, TGI, llama.cpp, LiteLLM-style gateways, Azure private endpoints, and
+  Gemini. `tokprof explain <url> --body request.json` shows why a request was or was not recorded; `--llm-host`, `--llm-path` and
+  `--exclude-host` override the decision. A private CA is trusted through `SSL_CERT_FILE` or `--upstream-ca`.
 - **What it shows.** Input tokens by system prompt (split by section), history, current prompt, tool definitions, tool
   calls, and tool results; fixed overhead; per-step token map; calls per request; unused tools; repeated static blocks.
 - **What it stores.** Counts, salted hashes, lengths, and section and tool names. Not prompt text, headers, or keys.
 - **Accuracy.** Providers report only totals, so segment counts are local estimates and the rest is shown as
   *unattributed*. Install `tiktoken` for OpenAI-family models. Check the residual before trusting a breakdown.
 - **Already-running processes (Linux).** `tokprof ebpf --pid <PID>` attaches eBPF probes to the process's TLS library and
-  records its LLM calls without restarting or changing it. It needs root or `CAP_BPF`; it follows HTTP/1.1 and HTTP/2 (for connections
-  opened after it attached) but not Go `crypto/tls`. See the [profiler README](https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler#linux-ebpf-tap-running-processes-no-restart-no-code-change).
+  records its LLM calls without restarting or changing it, including plain `http://` calls to an on-prem server. It needs root or `CAP_BPF`; it follows
+  HTTP/1.1 and HTTP/2 (for TLS connections opened after it attached) but not Go `crypto/tls`. See the [profiler README](https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler#linux-ebpf-tap-running-processes-no-restart-no-code-change).
 - **Limits today.** Outside the eBPF tap, only processes started under `tokprof` are captured. Clients that neither honor the
   base-URL variables nor use `httpx`, `requests`, `aiohttp` or Node `fetch` are not captured under `tokprof run`. On Windows and macOS, `tokprof mitm --local <process>` uses mitmproxy's local capture instead (needs administrator rights and trusting the mitmproxy CA).
 

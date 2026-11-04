@@ -7,6 +7,7 @@ Used by `tokprof selftest` and the tests. Usage numbers are computed from the re
 from __future__ import annotations
 
 import json
+from typing import Optional
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -30,6 +31,13 @@ def _prompt_tokens(body: dict) -> int:
         n += _C.count(body["input"])
     if isinstance(body.get("instructions"), str):
         n += _C.count(body["instructions"])
+    for key in ("prompt", "inputs"):
+        if isinstance(body.get(key), str):
+            n += _C.count(body[key])
+    for c in body.get("contents") or []:  # Gemini
+        for part in (c or {}).get("parts") or []:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                n += _C.count(part["text"]) + PER_MESSAGE_OVERHEAD
     for t in body.get("tools") or []:
         n += _C.count(json.dumps(t, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
     return n
@@ -73,7 +81,37 @@ class _Handler(BaseHTTPRequestHandler):
         stream = bool(body.get("stream"))
         want_tool = any((m.get("role") == "user" and "use-tool" in json.dumps(m.get("content"))) for m in (body.get("messages") or []) if isinstance(m, dict))
 
-        if path.endswith("/chat/completions"):
+        # Self-hosted style servers (Ollama, llama.cpp, Gemini-shaped) used by the endpoint-detection tests.
+        if path.endswith("/api/chat") or path.endswith("/api/generate"):
+            chat = path.endswith("/api/chat")
+            chunk = {"model": body.get("model"), "done": False}
+            chunk.update({"message": {"role": "assistant", "content": reply}} if chat else {"response": reply})
+            last = {"model": body.get("model"), "done": True, "prompt_eval_count": pt, "eval_count": ot}
+            lines = (json.dumps(chunk) + "\n" + json.dumps(last) + "\n").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Content-Length", str(len(lines)))
+            self.end_headers()
+            self.wfile.write(lines)
+            return
+        if ":generateContent" in path or ":streamGenerateContent" in path:
+            usage = {"promptTokenCount": pt, "candidatesTokenCount": ot, "totalTokenCount": pt + ot}
+            cand = [{"content": {"role": "model", "parts": [{"text": reply}]}}]
+            if ":stream" in path:
+                return self._sse([f"data: {json.dumps({'candidates': cand})}\n\n", f"data: {json.dumps({'candidates': cand, 'usageMetadata': usage})}\n\n"])
+            return self._json({"candidates": cand, "usageMetadata": usage})
+        if path.endswith("/completions") and "messages" not in body or path.endswith("/generate"):
+            if path.endswith("/generate"):
+                return self._json({"generated_text": reply, "details": {"prefill": [0] * pt, "generated_tokens": ot}})
+            return self._json({"choices": [{"text": reply}], "usage": {"prompt_tokens": pt, "completion_tokens": ot}})
+        if path.endswith("/embeddings"):
+            return self._json({"data": [{"embedding": [0.1, 0.2]}], "usage": {"prompt_tokens": pt, "total_tokens": pt}})
+        if path.endswith("/thing/run"):  # ambiguous body, but the answer is a model answer
+            return self._json({"choices": [{"text": reply}], "usage": {"prompt_tokens": pt, "completion_tokens": ot}})
+        if path.endswith("/thing/imagine"):  # same body shape, not an LLM
+            return self._json({"data": [{"url": "https://example.invalid/cat.png"}]})
+        known_suffix = path.endswith(("/chat/completions", "/responses", "/messages"))
+        if path.endswith("/chat/completions") or (not known_suffix and "messages" in body):
             if stream:
                 evs = [
                     f"data: {json.dumps({'choices': [{'delta': {'content': reply}}]})}\n\n",
@@ -114,8 +152,15 @@ class _Server(ThreadingHTTPServer):
 
 
 class MockLLM:
-    def __init__(self) -> None:
+    def __init__(self, tls: Optional[tuple] = None) -> None:
         self.server = _Server(("127.0.0.1", 0), _Handler)
+        self.tls = tls
+        if tls:
+            import ssl
+
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(*tls)
+            self.server.socket = ctx.wrap_socket(self.server.socket, server_side=True)
         self.server.daemon_threads = True
         self.port = self.server.server_address[1]
         self._thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -130,17 +175,19 @@ class MockLLM:
 
     @property
     def url(self) -> str:
-        return f"http://127.0.0.1:{self.port}"
+        return f"{'https' if self.tls else 'http'}://localhost:{self.port}" if self.tls else f"http://127.0.0.1:{self.port}"
 
 
 class MockProcess:
     """The mock in its own process: keeps tests and selftest independent of this process's threads."""
 
-    def __init__(self) -> None:
+    def __init__(self, tls: Optional[tuple] = None) -> None:
         import subprocess
         import sys
 
-        self._proc = subprocess.Popen([sys.executable, "-m", "tokprof._mock_llm"], stdout=subprocess.PIPE, text=True)
+        self.tls = tls
+        args = [sys.executable, "-m", "tokprof._mock_llm"] + (["--tls", tls[0], tls[1]] if tls else [])
+        self._proc = subprocess.Popen(args, stdout=subprocess.PIPE, text=True)
         line = self._proc.stdout.readline().strip()
         if not line.isdigit():
             self._proc.kill()
@@ -149,7 +196,7 @@ class MockProcess:
 
     @property
     def url(self) -> str:
-        return f"http://127.0.0.1:{self.port}"
+        return f"https://localhost:{self.port}" if self.tls else f"http://127.0.0.1:{self.port}"
 
     def start(self) -> "MockProcess":
         return self
@@ -163,7 +210,9 @@ class MockProcess:
 if __name__ == "__main__":
     import time
 
-    _m = MockLLM().start()
+    import sys
+
+    _m = MockLLM(tuple(sys.argv[2:4]) if len(sys.argv) >= 4 and sys.argv[1] == "--tls" else None).start()
     print(_m.port, flush=True)
     while True:
         time.sleep(3600)

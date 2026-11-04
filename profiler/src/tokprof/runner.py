@@ -18,7 +18,41 @@ DEFAULT_OPENAI = "https://api.openai.com/v1"
 DEFAULT_ANTHROPIC = "https://api.anthropic.com"
 
 
-def build_routes(env: dict, extra_maps: Optional[list] = None):
+# Environment variables that name a model endpoint are found by pattern, because on-prem and private deployments
+# use their own names (VLLM_BASE_URL, LITELLM_PROXY_URL, LLM_API_BASE, OLLAMA_HOST, ...).
+_HANDLED = {"OPENAI_BASE_URL", "ANTHROPIC_BASE_URL", "AZURE_OPENAI_ENDPOINT"}
+_LLM_NAME_TOKENS = ("OPENAI", "ANTHROPIC", "CLAUDE", "LLM", "VLLM", "OLLAMA", "LITELLM", "GEMINI", "MISTRAL", "COHERE", "GROQ",
+                    "DEEPSEEK", "TOGETHER", "OPENROUTER", "INFERENCE", "FOUNDRY", "AOAI", "LMSTUDIO", "SGLANG", "TGI")
+_URL_SUFFIXES = ("_BASE_URL", "_API_BASE", "_API_BASE_URL", "_API_URL", "_ENDPOINT", "_API_ENDPOINT", "_URL", "_PROXY_URL")
+_NOT_ENDPOINTS = ("DOWNLOAD", "WEIGHT", "CHECKPOINT", "WEBHOOK", "DATABASE", "STORAGE", "BLOB", "REDIS", "PROXY_URL_", "TELEMETRY",
+                  "DOCS", "DOCUMENTATION", "HOMEPAGE", "REPO", "GITHUB", "SENTRY", "OTEL", "TRACING")
+
+
+def discover_env_endpoints(env: dict) -> list:
+    """Return [(variable, upstream_url)] for variables that look like a model endpoint, other than the well-known ones."""
+    found = []
+    for name in sorted(env):
+        up = name.upper()
+        if name in _HANDLED or not up.endswith(_URL_SUFFIXES):
+            continue
+        if not any(tok in up for tok in _LLM_NAME_TOKENS) or any(bad in up for bad in _NOT_ENDPOINTS):
+            continue
+        value = (env.get(name) or "").strip()
+        u = urlsplit(value) if value.startswith(("http://", "https://")) else None
+        if u is None or not u.hostname or u.hostname in ("127.0.0.1", "localhost") and not u.port:
+            continue
+        if u.username or u.password:
+            continue  # credentials in a URL are not rewritten
+        found.append((name, value))
+    host = (env.get("OLLAMA_HOST") or "").strip()
+    if host and "OLLAMA_HOST" not in _HANDLED:  # Ollama accepts host:port without a scheme
+        value = host if host.startswith(("http://", "https://")) else "http://" + host
+        if "OLLAMA_HOST" not in dict(found) and urlsplit(value).hostname not in (None, "0.0.0.0"):
+            found.append(("OLLAMA_HOST", value))
+    return found
+
+
+def build_routes(env: dict, extra_maps: Optional[list] = None, auto: Optional[bool] = None):
     """Return (routes, env_overrides_template, azure_hosts). Templates contain {port}."""
     routes: list = []
     overrides: dict = {}
@@ -40,6 +74,18 @@ def build_routes(env: dict, extra_maps: Optional[list] = None):
         if host:
             azure_hosts.add(host)
             overrides["AZURE_OPENAI_ENDPOINT"] = "http://127.0.0.1:{port}/azure/" + host
+
+    if auto is None:
+        auto = env.get("TOKPROF_NO_AUTO_ENV") != "1"
+    mapped = {spec.partition("=")[0] for spec in (extra_maps or [])}
+    if auto:
+        for j, (var, upstream) in enumerate(discover_env_endpoints(env)):
+            if var in mapped:
+                continue
+            path = urlsplit(upstream).path.rstrip("/")
+            prefix = f"/auto{j}" + path
+            routes.append(Route.from_urls(prefix, upstream))
+            overrides[var] = "http://127.0.0.1:{port}" + prefix
 
     for i, spec in enumerate(extra_maps or []):
         var, _, upstream = spec.partition("=")
@@ -106,7 +152,8 @@ def run_profiled(
     if not quiet:
         how = []
         if gateway_env:
-            how.append("LLM base URLs redirected")
+            extra = sorted(k for k in overrides if k not in _HANDLED | {"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"})
+            how.append("LLM base URLs redirected" + (f" (including {', '.join(extra)})" if extra else ""))
         if hooks:
             how.append("in-process hooks for Python/Node")
         print(f"tokprof: profiling to {out_path} (gateway 127.0.0.1:{port}; {', '.join(how) or 'no capture enabled'})", file=sys.stderr)
@@ -135,6 +182,9 @@ def run_profiled(
     if not quiet:
         s = gw.stats
         print(f"tokprof: {s['recorded']} LLM call(s) recorded, {s['record_errors']} recording error(s)", file=sys.stderr)
+        summary = gw.detector.render_summary()
+        if summary:
+            print(summary, file=sys.stderr)
     return code
 
 

@@ -19,6 +19,7 @@ KINDS = (
     "tool_result",
     "attachment",
     "response_schema",
+    "raw_prompt",
     "other",
 )
 
@@ -70,6 +71,10 @@ class CallRecord:
     provider: str = ""
     model: Optional[str] = None
     endpoint: str = ""
+    host_class: Optional[str] = None  # provider:<name> | loopback | private-ip | private-dns | local-name | public
+    host_id: Optional[str] = None  # salted hash of host:port, so endpoints can be told apart without storing the name
+    host: Optional[str] = None  # only with --record-hosts
+    detect: Optional[dict] = None  # why this call was classified as an LLM call
     stream: bool = False
     status: Optional[int] = None
     latency_ms: Optional[int] = None

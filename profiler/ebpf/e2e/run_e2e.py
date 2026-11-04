@@ -134,6 +134,55 @@ def free_port():
     return port
 
 
+GO_CLIENT = r"""
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"time"
+)
+
+func main() {
+	flag, url, body := os.Args[1], os.Args[2], os.Args[3]
+	for {
+		if _, err := os.Stat(flag); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	req, _ := http.NewRequest("POST", url, bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer SECRET-TOKEN")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Println("error", err)
+		os.Exit(1)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	fmt.Println(len(b))
+	time.Sleep(500 * time.Millisecond)
+}
+"""
+
+
+def build_go_client(tmp):
+    """A Go client (raw write/read syscalls, no libc) when a Go toolchain is available; '' otherwise."""
+    go = shutil.which("go") or os.path.expanduser("~/sdk/go/bin/go")
+    if not os.path.exists(go):
+        return ""
+    src = os.path.join(tmp, "goclient")
+    os.makedirs(src, exist_ok=True)
+    open(os.path.join(src, "main.go"), "w").write(GO_CLIENT)
+    open(os.path.join(src, "go.mod"), "w").write("module goclient\n\ngo 1.20\n")
+    out = os.path.join(tmp, "goclient.bin")
+    r = subprocess.run([go, "build", "-o", out, "."], cwd=src, capture_output=True, text=True)
+    return out if r.returncode == 0 else ""
+
+
 def find_uv_python():
     base = os.path.expanduser("~/.local/share/uv/python")
     if not os.path.isdir(base):
@@ -155,6 +204,7 @@ def main():
     helper = os.path.abspath(args.helper)
 
     tmp = tempfile.mkdtemp(prefix="tokprof-e2e-")
+    go_client = build_go_client(tmp)
     os.chmod(tmp, 0o700)
     try:
         key, crt = os.path.join(tmp, "k.pem"), os.path.join(tmp, "c.pem")
@@ -166,6 +216,10 @@ def main():
         srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         url = f"https://127.0.0.1:{srv.server_address[1]}/v1/chat/completions"
+
+        plain_srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)  # cleartext HTTP, like an on-prem vLLM
+        threading.Thread(target=plain_srv.serve_forever, daemon=True).start()
+        purl = f"http://127.0.0.1:{plain_srv.server_address[1]}/v1/chat/completions"
 
         flag = os.path.join(tmp, "go")
         pyc, nodec = os.path.join(tmp, "c.py"), os.path.join(tmp, "c.js")
@@ -190,6 +244,23 @@ def main():
                                  "-H", "Authorization: Bearer SECRET-TOKEN", "-d", "@-"],
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         clients["curl"] = curl
+        # Cleartext HTTP: no TLS library is involved, so these are seen through the syscall probes.
+        large_p = os.path.join(tmp, "large.json")
+        quiet = dict(stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        clients["plain-python"] = subprocess.Popen(["/usr/bin/python3", pyc, flag, purl, body], **quiet)
+        clients["plain-python-sse"] = subprocess.Popen(["/usr/bin/python3", pyc, flag, purl, stream], **quiet)
+        clients["plain-python-large"] = subprocess.Popen(["/usr/bin/python3", pyc, flag, purl, "@" + large_p], **quiet)
+        clients["plain-node"] = subprocess.Popen(["node", nodec, flag, purl, body], env=env, **quiet)
+        clients["plain-node-sse"] = subprocess.Popen(["node", nodec, flag, purl, stream], env=env, **quiet)
+        clients["plain-node-large"] = subprocess.Popen(["node", nodec, flag, purl, "@" + large_p], env=env, **quiet)
+        if uv:
+            clients["plain-uv-python"] = subprocess.Popen([uv, pyc, flag, purl, body], **quiet)
+        plain_curl = subprocess.Popen(["curl", "-s", "-X", "POST", purl, "-H", "Content-Type: application/json",
+                                       "-H", "Authorization: Bearer SECRET-TOKEN", "-d", "@-"], stdin=subprocess.PIPE, **quiet)
+        clients["plain-curl"] = plain_curl
+        if os.path.exists(go_client):
+            clients["plain-go"] = subprocess.Popen([go_client, flag, purl, body], **quiet)
+
         # HTTP/2 can only be followed from the first byte of a connection, so these clients connect after the
         # helper is attached: the Node client waits for the flag file, and curl retries until the server appears.
         h2port = free_port()
@@ -237,9 +308,12 @@ def main():
         time.sleep(2.5)  # let it attach to every client (rescan runs every second)
         h2srv = subprocess.Popen(["node", h2srv_js, str(h2port), key, crt], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(0.5)
+        open(large_p, "w").write(json.dumps(REQ_LARGE))
         open(flag, "w").close()
         curl.stdin.write(body)
         curl.stdin.close()
+        plain_curl.stdin.write(body)
+        plain_curl.stdin.close()
         for p in clients.values():
             p.wait(timeout=30)
         time.sleep(2.0)
@@ -247,11 +321,16 @@ def main():
             h.send_signal(2)  # SIGINT: tokprof closes the helper's stdin and flushes
         else:
             h.stdin.close()
-        h.wait(timeout=30)
+        try:
+            h.wait(timeout=150)
+        except subprocess.TimeoutExpired:
+            print("helper did not stop after its stdin closed; last log lines:\n" + "\n".join(err_lines[-15:]))
+            return 3
         t_out.join(5)
         time.sleep(0.2)
         out = "".join(out_lines)
         srv.shutdown()
+        plain_srv.shutdown()
         h2srv.kill()
 
         if os.environ.get('E2E_DEBUG'):

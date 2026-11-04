@@ -28,6 +28,9 @@ const (
 	DirRead  = 1
 	hdrSize  = 56
 
+	// PlainFlag marks the connection id of a cleartext socket (the top bit; the rest is the file descriptor).
+	PlainFlag = uint64(1) << 63
+
 	// MaxCapture is the most bytes of one TLS call the kernel side copies (16 chunks of 16 KiB).
 	MaxCapture = 16 * 16384
 )
@@ -50,11 +53,18 @@ type Tap struct {
 	mu     sync.Mutex
 	links  map[int]map[string][]link.Link
 	once   sync.Once
-	base   time.Time // wall-clock time of CLOCK_MONOTONIC == 0
+	tps    []link.Link // syscall tracepoints for plain HTTP
+	base   time.Time   // wall-clock time of CLOCK_MONOTONIC == 0
+}
+
+// Options tune what the kernel side watches.
+type Options struct {
+	WatchAll bool // observe plain HTTP in every process (otherwise only those added with Watch)
+	NoPlain  bool // do not attach the syscall tracepoints at all
 }
 
 // New loads the program into the kernel. It needs CAP_BPF/CAP_PERFMON (or root).
-func New() (*Tap, error) {
+func New(opts Options) (*Tap, error) {
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, fmt.Errorf("raise memlock limit: %w", err)
 	}
@@ -64,6 +74,10 @@ func New() (*Tap, error) {
 	spec, err := loadTls()
 	if err != nil {
 		return nil, fmt.Errorf("load eBPF spec: %w", err)
+	}
+	_ = spec.Variables["self_tgid"].Set(uint32(os.Getpid()))
+	if opts.WatchAll {
+		_ = spec.Variables["watch_all"].Set(uint32(1))
 	}
 	var st syscall.Stat_t
 	if err := syscall.Stat("/proc/self/ns/pid", &st); err == nil {
@@ -79,7 +93,47 @@ func New() (*Tap, error) {
 		return nil, fmt.Errorf("open ring buffer: %w", err)
 	}
 	t.reader = r
+	if !opts.NoPlain {
+		if err := t.attachSyscalls(); err != nil {
+			t.Close()
+			return nil, err
+		}
+	}
 	return t, nil
+}
+
+func (t *Tap) attachSyscalls() error {
+	pairs := []struct {
+		name string
+		prog *ebpf.Program
+	}{
+		{"sys_enter_write", t.objs.ScEnterWrite}, {"sys_exit_write", t.objs.ScExitWrite},
+		{"sys_enter_writev", t.objs.ScEnterWritev}, {"sys_exit_writev", t.objs.ScExitWritev},
+		{"sys_enter_sendto", t.objs.ScEnterSendto}, {"sys_exit_sendto", t.objs.ScExitSendto},
+		{"sys_enter_read", t.objs.ScEnterRead}, {"sys_exit_read", t.objs.ScExitRead},
+		{"sys_enter_recvfrom", t.objs.ScEnterRecvfrom}, {"sys_exit_recvfrom", t.objs.ScExitRecvfrom},
+		{"sys_enter_close", t.objs.ScEnterClose},
+	}
+	for _, p := range pairs {
+		l, err := link.Tracepoint("syscalls", p.name, p.prog, nil)
+		if err != nil {
+			return fmt.Errorf("attach tracepoint %s: %w", p.name, err)
+		}
+		t.tps = append(t.tps, l)
+	}
+	return nil
+}
+
+// Watch makes the plain-HTTP syscall probes look at one process.
+func (t *Tap) Watch(pid int) { _ = t.objs.Watched.Put(uint32(pid), uint8(1)) }
+
+// Unwatch stops looking at a process (used after it exits).
+func (t *Tap) Unwatch(pid int) { _ = t.objs.Watched.Delete(uint32(pid)) }
+
+// ClearPlain forgets that a socket carries an HTTP exchange, so its next write is judged afresh.
+func (t *Tap) ClearPlain(pid uint32, fd uint32) {
+	type plainKey struct{ Pid, Fd uint32 }
+	_ = t.objs.PlainConns.Delete(plainKey{pid, fd})
 }
 
 // Attach installs probes in every TLS provider of the process that is not
@@ -236,12 +290,29 @@ func (t *Tap) Close() {
 }
 
 func (t *Tap) close() {
+	// Detaching waits for kernel grace periods, which add up when done one by one; overlap them.
+	var wg sync.WaitGroup
+	closeAsync := func(l link.Link) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			l.Close()
+		}()
+	}
+	for _, l := range t.tps {
+		closeAsync(l)
+	}
 	t.mu.Lock()
 	for pid, files := range t.links {
-		closeAll(files)
+		for _, ls := range files {
+			for _, l := range ls {
+				closeAsync(l)
+			}
+		}
 		delete(t.links, pid)
 	}
 	t.mu.Unlock()
+	wg.Wait()
 	t.reader.Close()
 	t.objs.Close()
 }
@@ -274,8 +345,18 @@ func LoadedPrograms() (int, error) {
 		}
 		info, err := p.Info()
 		p.Close()
-		if err == nil && strings.HasPrefix(info.Name, "ssl_") {
+		if err == nil && (strings.HasPrefix(info.Name, "ssl_") || strings.HasPrefix(info.Name, "sc_")) {
 			n++
 		}
 	}
+}
+
+// Counters returns the kernel-side debug counters: syscalls seen on watched processes, completed ones,
+// sockets marked as HTTP POST, and chunks emitted.
+func (t *Tap) Counters() [4]uint64 {
+	var out [4]uint64
+	for i := range out {
+		_ = t.objs.Counters.Lookup(uint32(i), &out[i])
+	}
+	return out
 }

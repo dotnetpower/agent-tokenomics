@@ -263,7 +263,7 @@ func (a *Assembler) h2exchange(k key, c *conn, s *h2stream) {
 		return
 	}
 	req = bytes.TrimSpace(req)
-	if !looksLikeLLMBody(req) {
+	if !Plausible(s.method, path, req) {
 		a.Stats.Ignored++
 		return
 	}

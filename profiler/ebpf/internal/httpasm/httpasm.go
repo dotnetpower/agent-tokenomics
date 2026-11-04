@@ -10,6 +10,7 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -75,6 +76,8 @@ type Assembler struct {
 	idle  time.Duration
 	Stats Stats
 	Debug func(format string, args ...any) // optional diagnostics
+	// OnDone is called when an exchange on a connection has been flushed (the connection can be reused).
+	OnDone func(pid uint32, ssl uint64)
 }
 
 func New(emit func(Exchange), idle time.Duration) *Assembler {
@@ -213,6 +216,9 @@ func (a *Assembler) flush(k key, c *conn) {
 	wDamaged, rDamaged := c.wDamaged, c.rDamaged
 	c.wbuf, c.rbuf, c.reading = nil, nil, false
 	c.wDamaged, c.rDamaged = false, false
+	if a.OnDone != nil {
+		defer a.OnDone(k.pid, k.ssl)
+	}
 	if wDamaged {
 		a.Stats.Incomplete++
 		return
@@ -234,7 +240,7 @@ func (a *Assembler) flush(k key, c *conn) {
 		return
 	}
 	body = bytes.TrimSpace(body)
-	if !looksLikeLLMBody(body) {
+	if !Plausible(method, path, body) {
 		a.Stats.Ignored++
 		return
 	}
@@ -327,16 +333,36 @@ func looksLikeHTTPRequest(b []byte) bool {
 	return false
 }
 
-func looksLikeLLMBody(b []byte) bool {
-	if len(b) < 2 || b[0] != '{' {
+// The pre-filter only decides what is worth handing to tokprof, which makes the real decision.
+// Keep it identical to tokprof.detect.plausible (tests/vectors/prefilter.json).
+var (
+	excludedPath = regexp.MustCompile(`(?i)/(embeddings?|moderations?|rerank|tokenize|detokenize|count_tokens|` +
+		`audio/(speech|transcriptions|translations)|images?/(generations|edits|variations)|` +
+		`files|batches|fine_tuning|uploads|vector_stores|assistants|threads|realtime)(/|$)` +
+		`|:(embedContent|batchEmbedContents|countTokens)$`)
+	plausibleKeys = regexp.MustCompile(`"(?:messages|contents)"\s*:\s*\[|"(?:prompt|input|inputs)"\s*:`)
+)
+
+// Plausible reports whether a request body is worth sending to the detector.
+func Plausible(method, path string, body []byte) bool {
+	if !strings.EqualFold(method, "POST") {
 		return false
 	}
-	for _, k := range []string{`"messages"`, `"input"`, `"prompt"`, `"contents"`, `"inputs"`} {
-		if bytes.Contains(b, []byte(k)) {
-			return true
-		}
+	head := bytes.TrimLeft(body, " \t\r\n")
+	if len(head) < 8 || head[0] != '{' {
+		return false
 	}
-	return false
+	p := path
+	if i := strings.IndexAny(p, "?#"); i >= 0 {
+		p = p[:i]
+	}
+	if p = strings.TrimRight(p, "/"); p == "" {
+		p = "/"
+	}
+	if excludedPath.MatchString(p) {
+		return false
+	}
+	return plausibleKeys.Match(body)
 }
 
 // responseComplete reports whether the buffered bytes hold one full message.

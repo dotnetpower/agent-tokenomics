@@ -23,13 +23,44 @@ type tlsCallArgs struct {
 	Ex  uint32
 }
 
+type tlsPlainKey struct {
+	_   structs.HostLayout
+	Pid uint32
+	Fd  uint32
+}
+
+type tlsSysArgs struct {
+	_   structs.HostLayout
+	Buf uint64
+	Len uint64
+	Fd  uint32
+	Dir uint32
+	Vec uint32
+	_   [4]byte
+}
+
 // Names of all BPF objects in the ELF.
 //
 // Used for safe lookups in a Collection or CollectionSpec.
 const (
 	tlsMapActive           = "active"
+	tlsMapCounters         = "counters"
 	tlsMapDropped          = "dropped"
 	tlsMapEvents           = "events"
+	tlsMapPlainConns       = "plain_conns"
+	tlsMapSysActive        = "sys_active"
+	tlsMapWatched          = "watched"
+	tlsProgScEnterClose    = "sc_enter_close"
+	tlsProgScEnterRead     = "sc_enter_read"
+	tlsProgScEnterRecvfrom = "sc_enter_recvfrom"
+	tlsProgScEnterSendto   = "sc_enter_sendto"
+	tlsProgScEnterWrite    = "sc_enter_write"
+	tlsProgScEnterWritev   = "sc_enter_writev"
+	tlsProgScExitRead      = "sc_exit_read"
+	tlsProgScExitRecvfrom  = "sc_exit_recvfrom"
+	tlsProgScExitSendto    = "sc_exit_sendto"
+	tlsProgScExitWrite     = "sc_exit_write"
+	tlsProgScExitWritev    = "sc_exit_writev"
 	tlsProgSslLeave        = "ssl_leave"
 	tlsProgSslReadEnter    = "ssl_read_enter"
 	tlsProgSslReadExEnter  = "ssl_read_ex_enter"
@@ -37,6 +68,8 @@ const (
 	tlsProgSslWriteExEnter = "ssl_write_ex_enter"
 	tlsVarNsDev            = "ns_dev"
 	tlsVarNsIno            = "ns_ino"
+	tlsVarSelfTgid         = "self_tgid"
+	tlsVarWatchAll         = "watch_all"
 )
 
 // loadTls returns the embedded CollectionSpec for tls.
@@ -81,6 +114,17 @@ type tlsSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tlsProgramSpecs struct {
+	ScEnterClose    *ebpf.ProgramSpec `ebpf:"sc_enter_close"`
+	ScEnterRead     *ebpf.ProgramSpec `ebpf:"sc_enter_read"`
+	ScEnterRecvfrom *ebpf.ProgramSpec `ebpf:"sc_enter_recvfrom"`
+	ScEnterSendto   *ebpf.ProgramSpec `ebpf:"sc_enter_sendto"`
+	ScEnterWrite    *ebpf.ProgramSpec `ebpf:"sc_enter_write"`
+	ScEnterWritev   *ebpf.ProgramSpec `ebpf:"sc_enter_writev"`
+	ScExitRead      *ebpf.ProgramSpec `ebpf:"sc_exit_read"`
+	ScExitRecvfrom  *ebpf.ProgramSpec `ebpf:"sc_exit_recvfrom"`
+	ScExitSendto    *ebpf.ProgramSpec `ebpf:"sc_exit_sendto"`
+	ScExitWrite     *ebpf.ProgramSpec `ebpf:"sc_exit_write"`
+	ScExitWritev    *ebpf.ProgramSpec `ebpf:"sc_exit_writev"`
 	SslLeave        *ebpf.ProgramSpec `ebpf:"ssl_leave"`
 	SslReadEnter    *ebpf.ProgramSpec `ebpf:"ssl_read_enter"`
 	SslReadExEnter  *ebpf.ProgramSpec `ebpf:"ssl_read_ex_enter"`
@@ -92,17 +136,23 @@ type tlsProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tlsMapSpecs struct {
-	Active  *ebpf.MapSpec `ebpf:"active"`
-	Dropped *ebpf.MapSpec `ebpf:"dropped"`
-	Events  *ebpf.MapSpec `ebpf:"events"`
+	Active     *ebpf.MapSpec `ebpf:"active"`
+	Counters   *ebpf.MapSpec `ebpf:"counters"`
+	Dropped    *ebpf.MapSpec `ebpf:"dropped"`
+	Events     *ebpf.MapSpec `ebpf:"events"`
+	PlainConns *ebpf.MapSpec `ebpf:"plain_conns"`
+	SysActive  *ebpf.MapSpec `ebpf:"sys_active"`
+	Watched    *ebpf.MapSpec `ebpf:"watched"`
 }
 
 // tlsVariableSpecs contains global variables before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tlsVariableSpecs struct {
-	NsDev *ebpf.VariableSpec `ebpf:"ns_dev"`
-	NsIno *ebpf.VariableSpec `ebpf:"ns_ino"`
+	NsDev    *ebpf.VariableSpec `ebpf:"ns_dev"`
+	NsIno    *ebpf.VariableSpec `ebpf:"ns_ino"`
+	SelfTgid *ebpf.VariableSpec `ebpf:"self_tgid"`
+	WatchAll *ebpf.VariableSpec `ebpf:"watch_all"`
 }
 
 // tlsObjects contains all objects after they have been loaded into the kernel.
@@ -125,16 +175,24 @@ func (o *tlsObjects) Close() error {
 //
 // It can be passed to loadTlsObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tlsMaps struct {
-	Active  *ebpf.Map `ebpf:"active"`
-	Dropped *ebpf.Map `ebpf:"dropped"`
-	Events  *ebpf.Map `ebpf:"events"`
+	Active     *ebpf.Map `ebpf:"active"`
+	Counters   *ebpf.Map `ebpf:"counters"`
+	Dropped    *ebpf.Map `ebpf:"dropped"`
+	Events     *ebpf.Map `ebpf:"events"`
+	PlainConns *ebpf.Map `ebpf:"plain_conns"`
+	SysActive  *ebpf.Map `ebpf:"sys_active"`
+	Watched    *ebpf.Map `ebpf:"watched"`
 }
 
 func (m *tlsMaps) Close() error {
 	return _TlsClose(
 		m.Active,
+		m.Counters,
 		m.Dropped,
 		m.Events,
+		m.PlainConns,
+		m.SysActive,
+		m.Watched,
 	)
 }
 
@@ -142,14 +200,27 @@ func (m *tlsMaps) Close() error {
 //
 // It can be passed to loadTlsObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tlsVariables struct {
-	NsDev *ebpf.Variable `ebpf:"ns_dev"`
-	NsIno *ebpf.Variable `ebpf:"ns_ino"`
+	NsDev    *ebpf.Variable `ebpf:"ns_dev"`
+	NsIno    *ebpf.Variable `ebpf:"ns_ino"`
+	SelfTgid *ebpf.Variable `ebpf:"self_tgid"`
+	WatchAll *ebpf.Variable `ebpf:"watch_all"`
 }
 
 // tlsPrograms contains all programs after they have been loaded into the kernel.
 //
 // It can be passed to loadTlsObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tlsPrograms struct {
+	ScEnterClose    *ebpf.Program `ebpf:"sc_enter_close"`
+	ScEnterRead     *ebpf.Program `ebpf:"sc_enter_read"`
+	ScEnterRecvfrom *ebpf.Program `ebpf:"sc_enter_recvfrom"`
+	ScEnterSendto   *ebpf.Program `ebpf:"sc_enter_sendto"`
+	ScEnterWrite    *ebpf.Program `ebpf:"sc_enter_write"`
+	ScEnterWritev   *ebpf.Program `ebpf:"sc_enter_writev"`
+	ScExitRead      *ebpf.Program `ebpf:"sc_exit_read"`
+	ScExitRecvfrom  *ebpf.Program `ebpf:"sc_exit_recvfrom"`
+	ScExitSendto    *ebpf.Program `ebpf:"sc_exit_sendto"`
+	ScExitWrite     *ebpf.Program `ebpf:"sc_exit_write"`
+	ScExitWritev    *ebpf.Program `ebpf:"sc_exit_writev"`
 	SslLeave        *ebpf.Program `ebpf:"ssl_leave"`
 	SslReadEnter    *ebpf.Program `ebpf:"ssl_read_enter"`
 	SslReadExEnter  *ebpf.Program `ebpf:"ssl_read_ex_enter"`
@@ -159,6 +230,17 @@ type tlsPrograms struct {
 
 func (p *tlsPrograms) Close() error {
 	return _TlsClose(
+		p.ScEnterClose,
+		p.ScEnterRead,
+		p.ScEnterRecvfrom,
+		p.ScEnterSendto,
+		p.ScEnterWrite,
+		p.ScEnterWritev,
+		p.ScExitRead,
+		p.ScExitRecvfrom,
+		p.ScExitSendto,
+		p.ScExitWrite,
+		p.ScExitWritev,
 		p.SslLeave,
 		p.SslReadEnter,
 		p.SslReadExEnter,

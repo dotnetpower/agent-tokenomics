@@ -69,6 +69,7 @@ func runTrace(args []string) {
 	idle := fs.Duration("idle", 2*time.Second, "treat a response as finished after this much silence")
 	exitOnEOF := fs.Bool("exit-on-stdin-eof", false, "exit (and remove all probes) when stdin closes; used by the Python launcher")
 	crashAfter := fs.Duration("crash-after", 0, "testing only: SIGKILL this process after the delay, to check that the kernel removes the probes")
+	noPlain := fs.Bool("no-plain", false, "only observe TLS libraries; skip the syscall probes for cleartext HTTP")
 	debug := fs.Bool("debug", false, "print the full eBPF verifier log when the program fails to load")
 	verbose := fs.Bool("verbose", false, "log connections that were ignored and why")
 	dump := fs.Bool("dump-events", false, "log every captured chunk (debugging; prints the first bytes of plaintext)")
@@ -93,7 +94,7 @@ func runTrace(args []string) {
 		fatal("choose what to watch: --pid, --comm or --all")
 	}
 
-	t, err := tap.New()
+	t, err := tap.New(tap.Options{WatchAll: sel.all, NoPlain: *noPlain})
 	if err != nil {
 		if *debug {
 			var ve *ebpf.VerifierError
@@ -116,6 +117,11 @@ func runTrace(args []string) {
 		_ = out.Flush()
 	}, *idle)
 
+	asm.OnDone = func(pid uint32, ssl uint64) {
+		if ssl&tap.PlainFlag != 0 {
+			t.ClearPlain(pid, uint32(ssl&0xffffffff))
+		}
+	}
 	if *verbose {
 		asm.Debug = logf
 	}
@@ -160,9 +166,10 @@ func runTrace(args []string) {
 	scanner := inspect.NewScanner("/proc")
 	self := os.Getpid()
 	type pidState struct {
-		sig   string
-		tries int
-		done  bool
+		sig     string
+		tries   int
+		done    bool
+		watched bool // plain-HTTP syscall probes look at this process
 	}
 	states := map[int]*pidState{}
 	maxTries := maxAttachTries
@@ -184,7 +191,7 @@ func runTrace(args []string) {
 				st = &pidState{sig: sig}
 				states[pid] = st
 			}
-			attached := t.IsAttached(pid)
+			attached := t.IsAttached(pid) || st.watched
 			if st.done && !(attached && scans%5 == 0) {
 				continue
 			}
@@ -193,7 +200,18 @@ func runTrace(args []string) {
 				st.done = true
 				continue
 			}
+			if !*noPlain && !sel.all && !st.watched {
+				t.Watch(pid)
+				st.watched = true
+			}
 			if p.Attach != "yes" {
+				if st.watched || sel.all {
+					if !st.done {
+						logf("watching pid %d (%s) for plain HTTP (no TLS library visible)", pid, p.Comm)
+					}
+					st.done = true
+					continue
+				}
 				if st.tries++; st.tries >= maxTries {
 					st.done = true
 					logf("pid %d (%s): not attachable: %s", pid, p.Comm, firstNonEmpty(p.Note, "no TLS library found"))
@@ -217,6 +235,7 @@ func runTrace(args []string) {
 		for pid := range states {
 			if !live[pid] {
 				t.Detach(pid)
+				t.Unwatch(pid)
 				asm.ForgetPID(uint32(pid))
 				delete(states, pid)
 			}
@@ -249,8 +268,24 @@ func runTrace(args []string) {
 		}
 	}
 	dropped := t.Dropped()
+	if *verbose {
+		logf("plain-HTTP probe counters: seen=%d completed=%d marked=%d emitted=%d", t.Counters()[0], t.Counters()[1], t.Counters()[2], t.Counters()[3])
+	}
+	closeStart := time.Now()
 	t.Close()
-	<-readerDone
+	if *verbose {
+		logf("probes detached in %s", time.Since(closeStart).Round(time.Millisecond))
+	}
+	// The reader goroutine may be blocked sending to a full channel, so keep consuming until it has stopped.
+drain:
+	for {
+		select {
+		case ev := <-events:
+			asm.Feed(ev.PID, ev.Comm, ev.SSL, int(ev.Dir), ev.Data, ev.Time)
+		case <-readerDone:
+			break drain
+		}
+	}
 	for len(events) > 0 {
 		ev := <-events
 		asm.Feed(ev.PID, ev.Comm, ev.SSL, int(ev.Dir), ev.Data, ev.Time)

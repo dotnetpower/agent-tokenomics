@@ -35,6 +35,35 @@ def _split_cmd(argv: list) -> tuple:
     return argv, []
 
 
+def _add_detect_args(sp) -> None:
+    g = sp.add_argument_group("endpoint detection")
+    g.add_argument("--llm-host", action="append", metavar="HOST[:PORT]", help="force these hosts to be treated as LLM endpoints (glob such as *.corp, or a CIDR such as 10.0.0.0/8); repeatable")
+    g.add_argument("--llm-path", action="append", metavar="REGEX", help="force requests whose path matches this regular expression to be treated as LLM calls; repeatable")
+    g.add_argument("--exclude-host", action="append", metavar="HOST[:PORT]", help="never treat these hosts as LLM endpoints; repeatable")
+    g.add_argument("--upstream-ca", metavar="FILE", help="extra CA bundle the gateway trusts for upstream TLS (private CA); also read from SSL_CERT_FILE, REQUESTS_CA_BUNDLE, NODE_EXTRA_CA_CERTS")
+    g.add_argument("--insecure-upstream", action="store_true", help="do NOT verify upstream TLS certificates (last resort for private endpoints; prints a warning)")
+    g.add_argument("--no-auto-env", action="store_true", help="do not redirect LLM base-URL variables other than OPENAI/ANTHROPIC/AZURE (for example VLLM_BASE_URL, OLLAMA_HOST)")
+    g.add_argument("--record-hosts", action="store_true", help="store host names in the JSONL file (by default only a salted hash and a class such as private-dns)")
+
+
+def _apply_detect_args(args) -> None:
+    """Detection settings travel through environment variables so every capture path and the background session share them."""
+    for attr, var in (("llm_host", "TOKPROF_LLM_HOSTS"), ("llm_path", "TOKPROF_LLM_PATHS"), ("exclude_host", "TOKPROF_EXCLUDE_HOSTS")):
+        values = getattr(args, attr, None)
+        if values:
+            existing = os.environ.get(var, "")
+            os.environ[var] = ",".join(x for x in [existing] + list(values) if x)
+    if getattr(args, "upstream_ca", None):
+        existing = os.environ.get("TOKPROF_UPSTREAM_CA", "")
+        os.environ["TOKPROF_UPSTREAM_CA"] = os.pathsep.join(x for x in [existing, args.upstream_ca] if x)
+    if getattr(args, "insecure_upstream", False):
+        os.environ["TOKPROF_INSECURE_UPSTREAM"] = "1"
+    if getattr(args, "no_auto_env", False):
+        os.environ["TOKPROF_NO_AUTO_ENV"] = "1"
+    if getattr(args, "record_hosts", False):
+        os.environ["TOKPROF_RECORD_HOSTS"] = "1"
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tokprof", description="Token profiler for LLM agents")
     p.add_argument("--version", action="version", version=f"tokprof {__version__}")
@@ -48,6 +77,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--report", action="store_true", help="print a report when the command exits")
     run.add_argument("--no-hooks", action="store_true", help="do not load the in-process Python/Node hooks")
     run.add_argument("--no-gateway-env", action="store_true", help="do not redirect *_BASE_URL environment variables")
+
+    _add_detect_args(run)
 
     sh = sub.add_parser("shell", help="open a shell whose child processes are profiled")
     sh.add_argument("--out")
@@ -67,6 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     eb.add_argument("--helper", help="path to the tokprof-ebpf binary")
     eb.add_argument("--duration", help="stop after this long, for example 5m")
     eb.add_argument("--no-sudo", action="store_true", help="do not elevate; use when already root or the helper has capabilities")
+    eb.add_argument("--no-plain", action="store_true", help="only observe TLS libraries; skip the syscall probes that see cleartext http:// traffic")
     eb.add_argument("--no-tiktoken", action="store_true")
     eb.add_argument("--report", action="store_true")
 
@@ -80,6 +112,17 @@ def build_parser() -> argparse.ArgumentParser:
     mm.add_argument("--no-tiktoken", action="store_true")
     mm.add_argument("--report", action="store_true")
     mm.add_argument("--trust-help", action="store_true", help="explain how processes can trust the mitmproxy CA, then exit")
+
+    _add_detect_args(sh)
+    _add_detect_args(eb)
+    _add_detect_args(mm)
+
+    ex = sub.add_parser("explain", help="show how tokprof would classify one request, and why")
+    ex.add_argument("url", help="full request URL, for example http://vllm.internal:8000/v1/chat/completions")
+    ex.add_argument("--body", help="JSON file with the request body (default: read stdin when piped)")
+    ex.add_argument("--response", help="file with the response body, to settle an ambiguous request")
+    ex.add_argument("--sse", action="store_true", help="the response file is a server-sent-event stream")
+    _add_detect_args(ex)
 
     rep = sub.add_parser("report", help="summarize a recorded JSONL file")
     rep.add_argument("file")
@@ -104,6 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--state", help="session state file (default ~/.tokprof/session.json)")
         sp.add_argument("--map", action="append")
         sp.add_argument("--no-tiktoken", action="store_true")
+        _add_detect_args(sp)
     st = sub.add_parser("status", help="show the active session")
     st.add_argument("--state")
     en = sub.add_parser("env", help="print the environment that routes new processes through the session")
@@ -144,6 +188,7 @@ def main(argv: Optional[list] = None) -> int:
     pre, cmd_tail = _split_cmd(argv)
     parser = build_parser()
     args = parser.parse_args(pre)
+    _apply_detect_args(args)
 
     if args.cmd in ("run", "shell"):
         from .runner import default_shell, run_profiled
@@ -172,7 +217,7 @@ def main(argv: Optional[list] = None) -> int:
         out = args.out or _default_out()
         code = run_ebpf(
             out, pids=args.pid, comms=args.comm, everything=args.all, helper=args.helper, duration=args.duration,
-            components=_components(args.component), use_tiktoken=not args.no_tiktoken, use_sudo=not args.no_sudo,
+            components=_components(args.component), use_tiktoken=not args.no_tiktoken, use_sudo=not args.no_sudo, plain=not args.no_plain,
         )
         if args.report and os.path.exists(out):
             print()
@@ -236,6 +281,28 @@ def main(argv: Optional[list] = None) -> int:
         if args.cmd == "env":
             return session.env(state, args.shell, args.unset)
         return session.stop(state, args.force)
+    if args.cmd == "explain":
+        import json as _json
+
+        from .detect import explain
+
+        raw = None
+        if args.body:
+            with open(args.body, encoding="utf-8") as fh:
+                raw = fh.read()
+        elif not sys.stdin.isatty():
+            raw = sys.stdin.read()
+        try:
+            body = _json.loads(raw) if raw else None
+        except ValueError:
+            print("tokprof: the request body is not valid JSON", file=sys.stderr)
+            return 2
+        response = None
+        if args.response:
+            with open(args.response, encoding="utf-8") as fh:
+                response = fh.read()
+        print(explain(args.url, body, response=response, sse=args.sse))
+        return 0
     if args.cmd == "doctor":
         from .doctor import run_doctor
 

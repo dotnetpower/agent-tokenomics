@@ -8,7 +8,21 @@ const http = require("http");
 
 const PORT = process.env.TOKPROF_PORT;
 const TOKEN = process.env.TOKPROF_TOKEN;
-const LLM_PATH = /\/(chat\/completions|responses|messages)$/;
+// Pre-filter only; tokprof's detector decides. Keep identical to tokprof.detect.plausible (tests/vectors/prefilter.json).
+const EXCLUDED_PATH = /\/(embeddings?|moderations?|rerank|tokenize|detokenize|count_tokens|audio\/(speech|transcriptions|translations)|images?\/(generations|edits|variations)|files|batches|fine_tuning|uploads|vector_stores|assistants|threads|realtime)(\/|$)|:(embedContent|batchEmbedContents|countTokens)$/i;
+const PLAUSIBLE_KEYS = /"(?:messages|contents)"\s*:\s*\[|"(?:prompt|input|inputs)"\s*:/;
+
+function plausible(method, path, text) {
+  try {
+    if (String(method).toUpperCase() !== "POST" || !text) return false;
+    const head = text.replace(/^\s+/, "");
+    if (head.length < 8 || head[0] !== "{") return false;
+    const p = (path.split("?")[0].split("#")[0].replace(/\/+$/, "")) || "/";
+    if (EXCLUDED_PATH.test(p)) return false;
+    return PLAUSIBLE_KEYS.test(text);
+  } catch (_) { return false; }
+}
+if (typeof module !== "undefined" && module.exports) module.exports.plausible = plausible;
 let warned = false;
 
 function warn(msg) {
@@ -49,9 +63,11 @@ if (PORT && TOKEN && typeof globalThis.fetch === "function") {
       const url = new URL(typeof input === "string" || input instanceof URL ? String(input) : input.url);
       const method = ((init && init.method) || (input && input.method) || "GET").toUpperCase();
       const viaGateway = (url.hostname === "127.0.0.1" || url.hostname === "localhost") && url.port === PORT;
-      if (method === "POST" && !viaGateway && LLM_PATH.test(url.pathname)) {
+      if (method === "POST" && !viaGateway) {
         const text = bodyText(init && init.body);
-        if (text !== null) capture = { path: url.pathname, request: text, ts: Date.now() / 1000 };
+        if (text !== null && plausible(method, url.pathname, text)) {
+          capture = { path: url.pathname, host: url.hostname, port: Number(url.port) || (url.protocol === "https:" ? 443 : 80), request: text, ts: Date.now() / 1000 };
+        }
       }
     } catch (_) { capture = null; }
 
@@ -62,7 +78,7 @@ if (PORT && TOKEN && typeof globalThis.fetch === "function") {
         const t0 = Date.now();
         copy.text().then((text) => {
           send({
-            path: capture.path, request: capture.request, status: res.status, response: text,
+            path: capture.path, host: capture.host, port: capture.port, request: capture.request, status: res.status, response: text,
             sse: (res.headers.get("content-type") || "").includes("text/event-stream"),
             ts: capture.ts, ttfb_ms: Date.now() - t0, error: null,
           });

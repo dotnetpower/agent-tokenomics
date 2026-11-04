@@ -73,6 +73,7 @@ def test_helper_command_building(monkeypatch):
     assert ["--pid", "12,13"] == cmd[cmd.index("--pid"):cmd.index("--pid") + 2]
     assert "--comm" in cmd and "--duration" in cmd and "--all" not in cmd
     assert ebpf.helper_command("/x/h", "", "", True, None, False) == ["/x/h", "trace", "--exit-on-stdin-eof", "--all"]
+    assert "--no-plain" in ebpf.helper_command("/x/h", "1", "", False, None, False, plain=False)
     monkeypatch.setattr(ebpf.os, "geteuid", lambda: 0, raising=False)
     assert ebpf.helper_command("/x/h", "1", "", False, None, True)[0] == "/x/h"
 

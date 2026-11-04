@@ -20,7 +20,15 @@ from urllib.parse import urlsplit
 
 _PORT = os.environ.get("TOKPROF_PORT", "")
 _TOKEN = os.environ.get("TOKPROF_TOKEN", "")
-_LLM_PATH = re.compile(r"/(chat/completions|responses|messages)$")
+# Pre-filter only; tokprof's detector decides. Keep identical to tokprof.detect.plausible (tests/vectors/prefilter.json).
+_EXCLUDED_PATH = re.compile(
+    r"/(embeddings?|moderations?|rerank|tokenize|detokenize|count_tokens|"
+    r"audio/(speech|transcriptions|translations)|images?/(generations|edits|variations)|"
+    r"files|batches|fine_tuning|uploads|vector_stores|assistants|threads|realtime)(/|$)"
+    r"|:(embedContent|batchEmbedContents|countTokens)$",
+    re.I,
+)
+_PLAUSIBLE_KEYS = re.compile(r'"(?:messages|contents)"\s*:\s*\[|"(?:prompt|input|inputs)"\s*:')
 _CAP = 32 * 1024 * 1024
 _q = queue.Queue(maxsize=2000)
 _started = False
@@ -101,7 +109,7 @@ class _Capture:
     ``meta`` is called once at the end and returns (status, content-encoding, content-type, already_decoded).
     """
 
-    def __init__(self, path, request_text, meta):
+    def __init__(self, path, request_text, meta, host="", port=0):
         self.chunks = []
         self.size = 0
         self.t0 = time.time()
@@ -110,6 +118,8 @@ class _Capture:
         self.path = path
         self.request_text = request_text
         self.meta = meta
+        self.host = host
+        self.port = port
 
     def add(self, chunk):
         if self.ttfb is None:
@@ -128,6 +138,8 @@ class _Capture:
             text = body.decode("utf-8", "replace") if decoded else _decode(body, encoding)
             _send({
                 "path": self.path,
+                "host": self.host,
+                "port": self.port,
                 "request": self.request_text,
                 "status": status,
                 "response": text,
@@ -156,24 +168,37 @@ def _httpx_capture(request, resp):
         request.url.path,
         bytes(content).decode("utf-8", "replace"),
         lambda: (resp.status_code, headers.get("content-encoding"), headers.get("content-type", ""), False),
+        request.url.host,
+        request.url.port or (443 if request.url.scheme == "https" else 80),
     )
 
 
-def _is_llm_post(method, host, port, path):
+def _plausible(method, path, text):
     try:
-        if (method or "").upper() != "POST":
+        if (method or "").upper() != "POST" or not text:
             return False
-        if host in ("127.0.0.1", "localhost") and str(port) == _PORT:
-            return False  # already going through the gateway
-        return bool(_LLM_PATH.search(path or ""))
+        head = text.lstrip()
+        if len(head) < 8 or head[0] != "{":
+            return False
+        p = (path or "").split("?", 1)[0].split("#", 1)[0].rstrip("/") or "/"
+        if _EXCLUDED_PATH.search(p):
+            return False
+        return _PLAUSIBLE_KEYS.search(text) is not None
     except Exception:
         return False
+
+
+def _is_candidate(method, host, port, path, text):
+    if host in ("127.0.0.1", "localhost") and str(port) == _PORT:
+        return False  # already going through the gateway
+    return _plausible(method, path, text)
 
 
 def _wanted(request):
     try:
         url = request.url
-        return _is_llm_post(request.method, url.host, url.port, url.path)
+        content = request.content if isinstance(request.content, (bytes, bytearray)) else b""
+        return _is_candidate(request.method, url.host, url.port, url.path, bytes(content).decode("utf-8", "replace"))
     except Exception:
         return False
 
@@ -252,25 +277,25 @@ def _patch_requests(requests):
         resp = orig_send(self, request, *args, **kwargs)
         try:
             parts = urlsplit(request.url)
-            if _is_llm_post(request.method, parts.hostname, parts.port, parts.path):
-                text = _to_text(request.body)
-                if text is not None:
-                    cap = _Capture(
-                        parts.path, text,
-                        # iter_content yields bytes already decoded by urllib3
-                        lambda: (resp.status_code, None, resp.headers.get("content-type", ""), True),
-                    )
-                    orig_iter = resp.iter_content
+            text = _to_text(request.body)
+            if text is not None and _is_candidate(request.method, parts.hostname, parts.port, parts.path, text):
+                cap = _Capture(
+                    parts.path, text,
+                    # iter_content yields bytes already decoded by urllib3
+                    lambda: (resp.status_code, None, resp.headers.get("content-type", ""), True),
+                    parts.hostname or "", parts.port or (443 if parts.scheme == "https" else 80),
+                )
+                orig_iter = resp.iter_content
 
-                    def iter_content(chunk_size=1, decode_unicode=False):
-                        try:
-                            for chunk in orig_iter(chunk_size, decode_unicode):
-                                cap.add(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
-                                yield chunk
-                        finally:
-                            cap.finish()
+                def iter_content(chunk_size=1, decode_unicode=False):
+                    try:
+                        for chunk in orig_iter(chunk_size, decode_unicode):
+                            cap.add(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
+                            yield chunk
+                    finally:
+                        cap.finish()
 
-                    resp.iter_content = iter_content
+                resp.iter_content = iter_content
         except Exception as exc:
             _warn("hook error: %r" % (exc,))
         return resp
@@ -289,13 +314,12 @@ def _patch_aiohttp(aiohttp):
         resp = await orig_request(self, method, str_or_url, *args, **kwargs)
         try:
             url = resp.url
-            if _is_llm_post(method, url.host, url.port, url.path):
-                if kwargs.get("json") is not None:
-                    text = json.dumps(kwargs["json"])
-                else:
-                    text = _to_text(kwargs.get("data"))
-                if text is not None:
-                    _tee_aiohttp(resp, url.path, text)
+            if kwargs.get("json") is not None:
+                text = json.dumps(kwargs["json"])
+            else:
+                text = _to_text(kwargs.get("data"))
+            if text is not None and _is_candidate(method, url.host, url.port, url.path, text):
+                _tee_aiohttp(resp, url.path, text, url.host or "", url.port or (443 if url.scheme == "https" else 80))
         except Exception as exc:
             _warn("hook error: %r" % (exc,))
         return resp
@@ -304,11 +328,12 @@ def _patch_aiohttp(aiohttp):
     ClientSession._tokprof_patched = True
 
 
-def _tee_aiohttp(resp, path, text):
+def _tee_aiohttp(resp, path, text, host="", port=0):
     cap = _Capture(
         path, text,
         # the parser already removed any content-encoding before feeding the stream
         lambda: (resp.status, None, resp.headers.get("Content-Type", ""), True),
+        host, port,
     )
     stream = resp.content
     for chunk in list(getattr(stream, "_buffer", ())):

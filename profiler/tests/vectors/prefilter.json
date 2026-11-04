@@ -1,0 +1,24 @@
+{
+  "_comment": "Shared by the Python detector, the Python/Node hooks, the mitmproxy addon and the Go helper: the cheap pre-filter must agree everywhere.",
+  "cases": [
+    {"name": "openai chat", "method": "POST", "path": "/v1/chat/completions", "body": "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", "expect": true},
+    {"name": "custom gateway path", "method": "POST", "path": "/api/ai/ask", "body": "{\"messages\": [{\"role\":\"user\",\"content\":\"hi\"}]}", "expect": true},
+    {"name": "trailing slash and query", "method": "POST", "path": "/v1/chat/completions/?api-version=1", "body": "{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", "expect": true},
+    {"name": "leading whitespace", "method": "POST", "path": "/x", "body": "  \n{\"prompt\":\"hello world\"}", "expect": true},
+    {"name": "gemini contents", "method": "POST", "path": "/v1beta/models/gemini-pro:generateContent", "body": "{\"contents\":[{\"parts\":[{\"text\":\"hi\"}]}]}", "expect": true},
+    {"name": "tgi inputs", "method": "POST", "path": "/generate", "body": "{\"inputs\":\"hi there\",\"parameters\":{}}", "expect": true},
+    {"name": "responses input", "method": "POST", "path": "/v1/responses", "body": "{\"model\":\"m\",\"input\":\"hello\"}", "expect": true},
+    {"name": "lowercase method", "method": "post", "path": "/x", "body": "{\"prompt\":\"hello world\"}", "expect": true},
+    {"name": "GET", "method": "GET", "path": "/v1/chat/completions", "body": "{\"messages\":[{\"role\":\"user\"}]}", "expect": false},
+    {"name": "embeddings excluded", "method": "POST", "path": "/v1/embeddings", "body": "{\"model\":\"m\",\"input\":\"hello world\"}", "expect": false},
+    {"name": "images excluded", "method": "POST", "path": "/v1/images/generations", "body": "{\"prompt\":\"a cat on a mat\"}", "expect": false},
+    {"name": "gemini embed excluded", "method": "POST", "path": "/v1/models/e:embedContent", "body": "{\"content\":{\"parts\":[]},\"prompt\":\"x\"}", "expect": false},
+    {"name": "count_tokens excluded", "method": "POST", "path": "/v1/messages/count_tokens", "body": "{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", "expect": false},
+    {"name": "batches excluded", "method": "POST", "path": "/v1/messages/batches", "body": "{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}", "expect": false},
+    {"name": "not json", "method": "POST", "path": "/v1/chat/completions", "body": "messages=[1]&prompt=x", "expect": false},
+    {"name": "json array", "method": "POST", "path": "/x", "body": "[{\"messages\":[1]}]", "expect": false},
+    {"name": "no llm keys", "method": "POST", "path": "/login", "body": "{\"user\":\"alice\",\"password\":\"secret\"}", "expect": false},
+    {"name": "too short", "method": "POST", "path": "/x", "body": "{\"a\":1}", "expect": false},
+    {"name": "empty", "method": "POST", "path": "/x", "body": "", "expect": false}
+  ]
+}

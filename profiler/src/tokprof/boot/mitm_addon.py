@@ -14,7 +14,15 @@ import threading
 import time
 import zlib
 
-_LLM_PATH = re.compile(r"/(chat/completions|responses|messages)$")
+# Pre-filter only; tokprof's detector decides. Keep identical to tokprof.detect.plausible (tests/vectors/prefilter.json).
+_EXCLUDED_PATH = re.compile(
+    r"/(embeddings?|moderations?|rerank|tokenize|detokenize|count_tokens|"
+    r"audio/(speech|transcriptions|translations)|images?/(generations|edits|variations)|"
+    r"files|batches|fine_tuning|uploads|vector_stores|assistants|threads|realtime)(/|$)"
+    r"|:(embedContent|batchEmbedContents|countTokens)$",
+    re.I,
+)
+_PLAUSIBLE_KEYS = re.compile(r'"(?:messages|contents)"\s*:\s*\[|"(?:prompt|input|inputs)"\s*:')
 _CAP = 32 * 1024 * 1024
 
 
@@ -30,6 +38,18 @@ def _decode(data, encoding):
     if enc and enc != "identity":
         raise ValueError("unsupported content-encoding " + enc)
     return data
+
+
+def _plausible(method, path, text):
+    if (method or "").upper() != "POST":
+        return False
+    head = (text or "").lstrip()
+    if len(head) < 8 or head[0] != "{":
+        return False
+    p = path.split("?", 1)[0].split("#", 1)[0].rstrip("/") or "/"
+    if _EXCLUDED_PATH.search(p):
+        return False
+    return _PLAUSIBLE_KEYS.search(text) is not None
 
 
 class TokprofAddon:
@@ -58,7 +78,7 @@ class TokprofAddon:
             return False
         if req.host in ("127.0.0.1", "localhost") and req.port == self.port:
             return False
-        return bool(_LLM_PATH.search(req.path.split("?", 1)[0]))
+        return _plausible(req.method, req.path, (req.content or b"").decode("utf-8", "replace"))
 
     def responseheaders(self, flow):
         if not self._wanted(flow):
@@ -91,6 +111,8 @@ class TokprofAddon:
             ctype = resp.headers.get("content-type", "")
             payload = {
                 "path": req.path.split("?", 1)[0],
+                "host": req.host,
+                "port": req.port,
                 "request": (req.content or b"").decode("utf-8", "replace"),
                 "status": resp.status_code,
                 "response": _decode(body, resp.headers.get("content-encoding")).decode("utf-8", "replace"),
