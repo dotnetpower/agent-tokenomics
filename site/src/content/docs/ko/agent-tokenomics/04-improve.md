@@ -72,6 +72,56 @@ Failures to avoid: <error signatures already seen and what fixed them>
   비밀 정보와 개인 데이터는 요약에 들어가기 전에 가립니다.
 - [손실이 있는 수정의 기준](../03-prove/#when-the-fix-is-lossy-summaries-compaction)으로 검증합니다.
 
+<a id="worked-example-multi-turn-counselor-dialogue-compaction"></a>
+### 실전 예시: 다중 턴 상담 대화 이력 압축
+
+고객지원·상담 에이전트에서는 이전 턴의 인사말, 사과 문구, `<tool_call>` JSON 래퍼, 반복되는 세션 UUID, 마무리 멘트가 매 턴 누적됩니다. 완료된 상담 에피소드를 BPE 친화적 상태·조치 수식 체인(`문의 -> tool(인자) => 결과 | ...`)으로 압축하면 고객 ID, 주문번호, 날짜, 금액, 송장번호, 담당자 이관 결과를 **100%** 보존하면서 대화 이력 토큰을 크게 줄일 수 있습니다. 영문 전용 예제는 [`examples/formula_prompt_en.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt_en.py), 한국어 전용 예제는 [`examples/formula_prompt_ko.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt_ko.py)로 분리되어 있습니다(통합 실행: [`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py) `--lang {en,ko,all}`, 2026-11-04 확인).
+
+**영문 다중 턴 채팅·상담 이력 (`examples/formula_prompt_en.py`):**
+
+| 영문 다중 턴 채팅·상담 및 Hugging Face 데이터셋 (`row`) | 원본 대화 (`o200k` / `cl100k`) | BPE 수식 압축 (`o200k` / `cl100k`) | `o200k_base` 변화 | `cl100k_base` 변화 | 핵심 슬롯 보존 |
+|---------------------------------------------------------|-------------------------------:|-----------------------------------:|------------------:|-------------------:|---------------:|
+| 로그인 인증번호 이메일 전환 상담 (13턴, [`NebulaByte/E-Commerce_Customer_Support_Conversations`](https://huggingface.co/datasets/NebulaByte/E-Commerce_Customer_Support_Conversations) `train[0]`) | 336 / 350 | 57 / 58 | **-83.0%** | **-83.4%** | 7/7 |
+| 리콜 모니터 반품·환불 안내 (13턴, [`NebulaByte/E-Commerce_Customer_Support_Conversations`](https://huggingface.co/datasets/NebulaByte/E-Commerce_Customer_Support_Conversations) `train[1]`) | 339 / 347 | 53 / 53 | **-84.4%** | **-84.7%** | 8/8 |
+| 보증기간 교환 신청 및 취소 버튼 오류 상담 (19턴, [`NebulaByte/E-Commerce_Customer_Support_Conversations`](https://huggingface.co/datasets/NebulaByte/E-Commerce_Customer_Support_Conversations) `train[2]`) | 526 / 535 | 81 / 81 | **-84.6%** | **-84.9%** | 9/9 |
+| 인증번호 횟수 초과 및 비밀번호 재설정 (17턴, [`NebulaByte/E-Commerce_Customer_Support_Conversations`](https://huggingface.co/datasets/NebulaByte/E-Commerce_Customer_Support_Conversations) `train[3]`) | 460 / 471 | 49 / 49 | **-89.3%** | **-89.6%** | 6/6 |
+| 심계항진 의료 문진 인테이크 채팅 (10턴, [`nwirandx/Korean-OSCE-history-taking-dialogues`](https://huggingface.co/datasets/nwirandx/Korean-OSCE-history-taking-dialogues) `sessions[0..9]`) | 321 / 322 | 74 / 73 | **-76.9%** | **-77.3%** | 9/9 |
+| 생산라인 로봇 과열·소음 기술지원 채팅 (4턴, [`FunDialogues/customer-service-robot-support`](https://huggingface.co/datasets/FunDialogues/customer-service-robot-support) `train[1,2]`) | 112 / 114 | 35 / 36 | **-68.8%** | **-68.4%** | 6/6 |
+| **합계 (6개 영문 다중 턴 채팅·상담 대화)** | **2,094 / 2,139** | **349 / 350** | **-83.3%** | **-83.6%** | **45/45 (100%)** |
+
+**한국어 다중 턴 채팅·상담 이력 (`examples/formula_prompt_ko.py`):**
+
+| 한국어 다중 턴 채팅·상담 및 Hugging Face 데이터셋 (`row`) | 원본 대화 (`o200k` / `cl100k`) | BPE 수식 압축 (`o200k` / `cl100k`) | `o200k_base` 변화 | `cl100k_base` 변화 | 핵심 슬롯 보존 |
+|-----------------------------------------------------------|-------------------------------:|-----------------------------------:|------------------:|-------------------:|---------------:|
+| 주소 조회 + 배송 상태 + 스팸 신고 (14턴, [`iamjoon/ecommerce-function-calling-datasets-korean`](https://huggingface.co/datasets/iamjoon/ecommerce-function-calling-datasets-korean) `train[0]`) | 304 / 460 | 84 / 129 | **-72.4%** | **-72.0%** | 9/9 |
+| 장바구니 + 노트북 불량 + 영수증 이관 (15턴, [`iamjoon/ecommerce-function-calling-datasets-korean`](https://huggingface.co/datasets/iamjoon/ecommerce-function-calling-datasets-korean) `train[2]`) | 386 / 565 | 127 / 190 | **-67.1%** | **-66.4%** | 9/9 |
+| 배송 조회 + 멤버십 + 환불/결제취소 (16턴, [`iamjoon/ecommerce-function-calling-datasets-korean`](https://huggingface.co/datasets/iamjoon/ecommerce-function-calling-datasets-korean) `train[5]`) | 436 / 638 | 158 / 225 | **-63.8%** | **-64.7%** | 11/11 |
+| 반품·교환 약관 + 범위 외 거절 + 주문내역 (13턴, [`iamjoon/ecommerce-function-calling-datasets-korean`](https://huggingface.co/datasets/iamjoon/ecommerce-function-calling-datasets-korean) `train[6]`) | 368 / 545 | 124 / 194 | **-66.3%** | **-64.4%** | 11/11 |
+| 택배 조회 및 무인보관함 배송지 변경 채팅 (6턴, [`schneiderkamplab/dfm14-ko-synthetic-tool-dialogue-r1`](https://huggingface.co/datasets/schneiderkamplab/dfm14-ko-synthetic-tool-dialogue-r1) `train[2]`) | 195 / 226 | 55 / 61 | **-71.8%** | **-73.0%** | 5/5 |
+| 심계항진 의료 문진 인테이크 채팅 (10턴, [`nwirandx/Korean-OSCE-history-taking-dialogues`](https://huggingface.co/datasets/nwirandx/Korean-OSCE-history-taking-dialogues) `sessions[0..9]`) | 402 / 613 | 102 / 144 | **-74.6%** | **-76.5%** | 10/10 |
+| 멀티세션 페르소나·가족 일상 메신저 채팅 (18턴, [`nayohan/141_korean_multi_session_dialogue`](https://huggingface.co/datasets/nayohan/141_korean_multi_session_dialogue) `train[0]`) | 359 / 567 | 77 / 103 | **-78.6%** | **-81.8%** | 11/11 |
+| **합계 (7개 한국어 다중 턴 채팅·상담 대화)** | **2,450 / 3,614** | **727 / 1,046** | **-70.3%** | **-71.1%** | **66/66 (100%)** |
+
+나아가 Hugging Face 공개 데이터셋에서 실시간 조회한 **580개 채팅 대화·고객지원·법률·노무 상담 세션**(영문 5개 데이터셋 250건 + 한국어 7개 데이터셋 330건, `python3 examples/formula_prompt.py --hf-live --hf-rows 50`)에 범용 BPE 문법·담화 압축과 무손실 슬롯 복원 가드를 적용한 결과, 법조문·사건번호·이메일·UUID·케밥케이스 ID·주문번호·날짜·금액·플레이스홀더 슬롯 **1,731 / 1,731개(100.0%)** 를 무손실로 보존하면서 전체 토큰을 **`o200k_base` 기준 56.3%**(**`cl100k_base` 기준 54.9%**) 절감했습니다.
+
+| 언어 및 Hugging Face 데이터셋 (`--hf-live --hf-rows 50`) | 행 수 | `o200k_base` (원문 → BPE) | `cl100k_base` (원문 → BPE) | 엄밀 슬롯 보존 |
+|----------------------------------------------------------|------:|--------------------------:|---------------------------:|---------------:|
+| EN: [`NebulaByte/E-Commerce_Customer_Support_Conversations`](https://huggingface.co/datasets/NebulaByte/E-Commerce_Customer_Support_Conversations) | 50 | 23,979 → 11,538 (**-51.9%**) | 24,629 → 11,912 (**-51.6%**) | 124/124 |
+| EN: [`bitext/Bitext-customer-support-llm-chatbot-training-dataset`](https://huggingface.co/datasets/bitext/Bitext-customer-support-llm-chatbot-training-dataset) | 50 | 11,431 → 3,390 (**-70.3%**) | 11,639 → 3,406 (**-70.7%**) | 281/281 |
+| EN: [`FunDialogues/customer-service-robot-support`](https://huggingface.co/datasets/FunDialogues/customer-service-robot-support) | 50 | 3,146 → 1,548 (**-50.8%**) | 3,226 → 1,590 (**-50.7%**) | 0/0 (100%) |
+| EN: [`Kaludi/Customer-Support-Responses`](https://huggingface.co/datasets/Kaludi/Customer-Support-Responses) | 50 | 1,837 → 893 (**-51.4%**) | 1,883 → 919 (**-51.2%**) | 1/1 |
+| EN: [`nwirandx/Korean-OSCE-history-taking-dialogues`](https://huggingface.co/datasets/nwirandx/Korean-OSCE-history-taking-dialogues) (`sessions`, 영문) | 50 | 1,462 → 608 (**-58.4%**) | 1,467 → 610 (**-58.4%**) | 11/11 |
+| **영문 소계 (5개 데이터셋)** | **250** | **41,855 → 17,977 (-57.0%)** | **42,844 → 18,437 (-57.0%)** | **417/417 (100%)** |
+| KO: [`iamjoon/ecommerce-function-calling-datasets-korean`](https://huggingface.co/datasets/iamjoon/ecommerce-function-calling-datasets-korean) | 50 | 19,243 → 7,774 (**-59.6%**) | 29,172 → 12,468 (**-57.3%**) | 220/220 |
+| KO: [`jjun123/delivery-app-function-calling-datasets-korean`](https://huggingface.co/datasets/jjun123/delivery-app-function-calling-datasets-korean) | 30 | 42,129 → 18,182 (**-56.8%**) | 52,592 → 24,433 (**-53.5%**) | 325/325 |
+| KO: [`jihye-moon/klac_legal_aid_counseling`](https://huggingface.co/datasets/jihye-moon/klac_legal_aid_counseling) | 50 | 27,325 → 12,357 (**-54.8%**) | 42,753 → 18,872 (**-55.9%**) | 465/465 |
+| KO: [`seventy4/labor-counsel-qa`](https://huggingface.co/datasets/seventy4/labor-counsel-qa) | 50 | 5,788 → 2,498 (**-56.8%**) | 9,588 → 4,041 (**-57.9%**) | 38/38 |
+| KO: [`schneiderkamplab/dfm14-ko-synthetic-tool-dialogue-r1`](https://huggingface.co/datasets/schneiderkamplab/dfm14-ko-synthetic-tool-dialogue-r1) | 50 | 7,437 → 3,119 (**-58.1%**) | 9,405 → 4,478 (**-52.4%**) | 176/176 |
+| KO: [`nwirandx/Korean-OSCE-history-taking-dialogues`](https://huggingface.co/datasets/nwirandx/Korean-OSCE-history-taking-dialogues) (`sessions`, 한국어) | 50 | 1,854 → 882 (**-52.4%**) | 2,791 → 1,304 (**-53.3%**) | 13/13 |
+| KO: [`nayohan/141_korean_multi_session_dialogue`](https://huggingface.co/datasets/nayohan/141_korean_multi_session_dialogue) | 50 | 18,307 → 8,914 (**-51.3%**) | 28,868 → 14,252 (**-50.6%**) | 77/77 |
+| **한국어 소계 (7개 데이터셋)** | **330** | **122,083 → 53,726 (-56.0%)** | **175,169 → 79,848 (-54.4%)** | **1,314/1,314 (100%)** |
+| **전체 합계 (12개 데이터셋 벤치마크, 580개 채팅·상담 사례)** | **580** | **163,938 → 71,703 (-56.3%)** | **218,013 → 98,285 (-54.9%)** | **1,731/1,731 (100%)** |
+
 ## 규칙
 
 - **한 번에 하나씩 수정합니다.** 변경을 함께 적용하면 결과를 원인별로 귀속할 수 없습니다.

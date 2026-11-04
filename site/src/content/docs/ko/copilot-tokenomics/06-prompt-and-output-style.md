@@ -45,7 +45,7 @@ sidebar:
 
 도구 분기 조건이나 다단계 워크플로를 적을 때 **BPE 친화적 ASCII 수식**을 쓰면 줄글보다 짧고 모호성도 줄어듭니다. 다만 **유니코드 수학 기호(`∀`, `∈`, `∪`, `≻`, `∘`)는 오히려 함정**입니다. `o200k_base`와 `cl100k_base`에서 이러한 다중 바이트 기호는 2~3토큰으로 쪼개질 뿐 아니라, 뒤에 오는 영단어의 선행 공백 병합까지 깨뜨려 바이트가 절반으로 줄어도 토큰 수는 거의 줄지 않습니다. 반면 공백을 둔 ASCII 연산자(` ->`, ` =>`, ` >`, ` <=`, ` >=`, ` &`, ` |`)는 선행 공백을 포함해 각각 **단일 1토큰**으로 병합됩니다.
 
-[`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py)로 측정한 결과입니다(`tiktoken` 0.14.0, 2026-11-04 확인).
+[`examples/formula_prompt_en.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt_en.py)(또는 `python3 examples/formula_prompt.py --lang en`)로 측정한 결과입니다(`tiktoken` 0.14.0, 2026-11-04 확인).
 
 | 표현 방식 | 텍스트 | 바이트 | `o200k_base` | 줄글 대비 | `cl100k_base` |
 |-------|------|------:|-------------:|----------:|--------------:|
@@ -58,6 +58,19 @@ BPE 정렬 수식 작성 원칙은 다음과 같습니다.
 - 유니코드 수학 기호(`∀`, `∈`, `≻`, `∘`) 대신 **앞에 공백을 둔 ASCII 연산자**(` ->`, ` =>`, ` >=`, ` <=`, ` !=`, ` &`, ` |`)를 사용합니다.
 - 모든 식별자를 인라인 백틱(`` `name` ``)으로 감싸지 않습니다(식별자마다 양쪽 백틱에 2토큰씩 추가 소모됩니다).
 - 연산자 앞뒤에 공백을 두어 `" 단어"`가 하나의 BPE 토큰으로 묶이게 합니다.
+
+Hugging Face 공개 데이터셋의 영문 고객지원 SOP 및 실시간 라이브챗 안내문 7종(`examples/formula_prompt_en.py`)에 이 규칙을 적용하면 필수 슬롯과 플레이스홀더를 **43/43 (100%)** 보존하면서 토큰 수를 **`o200k_base` 기준 75.9%** 줄일 수 있습니다(한국어 전용 채팅·상담 예제는 `examples/formula_prompt_ko.py` 및 [언어와 토큰화](../07-language-and-tokenization/#hugging-face-customer-support-and-counseling-benchmark)를 참고하세요).
+
+| 영문 고객지원 SOP·채팅 사례 및 Hugging Face 데이터셋 (`row`) | 원문 (`o200k` / `cl100k`) | BPE 수식 (`o200k` / `cl100k`) | `o200k_base` 변화 | `cl100k_base` 변화 | 핵심 슬롯 보존 |
+|--------------------------------------------------------------|--------------------------:|------------------------------:|------------------:|-------------------:|---------------:|
+| 주문 취소 절차 안내 ([`bitext/Bitext-customer-support-llm-chatbot-training-dataset`](https://huggingface.co/datasets/bitext/Bitext-customer-support-llm-chatbot-training-dataset) `train[2]`) | 223 / 226 | 55 / 55 | **-75.3%** | **-75.7%** | 9/9 |
+| 주문 변경 절차 안내 ([`bitext/Bitext-customer-support-llm-chatbot-training-dataset`](https://huggingface.co/datasets/bitext/Bitext-customer-support-llm-chatbot-training-dataset) `train[1001]`) | 225 / 230 | 54 / 54 | **-76.0%** | **-76.5%** | 9/9 |
+| 위약금·취소 수수료 조회 ([`bitext/Bitext-customer-support-llm-chatbot-training-dataset`](https://huggingface.co/datasets/bitext/Bitext-customer-support-llm-chatbot-training-dataset) `train[3001]`) | 98 / 100 | 26 / 27 | **-73.5%** | **-73.0%** | 5/5 |
+| 환불 소요 기간 및 주문번호 조회 ([`bitext/Bitext-customer-support-llm-chatbot-training-dataset`](https://huggingface.co/datasets/bitext/Bitext-customer-support-llm-chatbot-training-dataset) `train[6000]`) | 221 / 225 | 34 / 34 | **-84.6%** | **-84.9%** | 5/5 |
+| 리콜 모니터 반품·환불 안내 ([`NebulaByte/E-Commerce_Customer_Support_Conversations`](https://huggingface.co/datasets/NebulaByte/E-Commerce_Customer_Support_Conversations) `train[1]`) | 131 / 131 | 42 / 42 | **-67.9%** | **-67.9%** | 6/6 |
+| 로봇 암 보정 기술지원 채팅 ([`FunDialogues/customer-service-robot-support`](https://huggingface.co/datasets/FunDialogues/customer-service-robot-support) `train[0]`) | 60 / 61 | 18 / 18 | **-70.0%** | **-70.5%** | 5/5 |
+| 배송 지연 실시간 라이브챗 응답 ([`Kaludi/Customer-Support-Responses`](https://huggingface.co/datasets/Kaludi/Customer-Support-Responses) `train[0]`) | 28 / 29 | 9 / 9 | **-67.9%** | **-69.0%** | 4/4 |
+| **합계 (7개 영문 고객지원 SOP·채팅 사례)** | **986 / 1,002** | **238 / 239** | **-75.9%** | **-76.1%** | **43/43 (100%)** |
 
 ## 확인 방법
 
@@ -92,5 +105,5 @@ Refactor function. Fix auth handling. Make efficient.                           
 
 - Token Efficiency and Context Engineering — 개발자 발표 자료(2026년 6월), 프롬프트 압축 및 출력 제어 부분(수치는 보고된 그대로이며 독립적으로 검증하지 않음)
 - [Optimize AI credit usage in VS Code](https://code.visualstudio.com/docs/agents/guides/optimize-usage)
-- [`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py) — 재현 가능한 BPE 수식 토큰 측정 및 프롬프트 변환 스크립트
+- [`examples/formula_prompt_en.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt_en.py), [`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py) — 재현 가능한 영문 BPE 수식 토큰 측정 및 프롬프트 변환 스크립트
 - [caveman](https://github.com/JuliusBrussee/caveman), [cavewoman](https://github.com/danielle34/cavewoman)

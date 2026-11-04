@@ -56,7 +56,7 @@ onboarding text.
 
 When expressing routing rules, preconditions, or multi-step workflows, a **BPE-aligned ASCII formula** is shorter and less ambiguous than prose — but **Unicode math symbols (`∀`, `∈`, `∪`, `≻`, `∘`) are a trap**. In `o200k_base` and `cl100k_base`, multi-byte math symbols split into 2–3 tokens and prevent adjacent English words from merging with a leading space. Spaced ASCII operators (` ->`, ` =>`, ` >`, ` <=`, ` >=`, ` &`, ` |`) each encode as **1 token** including their leading space.
 
-Reproduced with [`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py) (`tiktoken` 0.14.0, verified 2026-11-04):
+Reproduced with [`examples/formula_prompt_en.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt_en.py) (or `python3 examples/formula_prompt.py --lang en`, `tiktoken` 0.14.0, verified 2026-11-04):
 
 | Style | Text | Bytes | `o200k_base` | vs. Prose | `cl100k_base` |
 |-------|------|------:|-------------:|----------:|--------------:|
@@ -69,6 +69,19 @@ Rules for BPE-aligned formulas:
 - Use **spaced ASCII operators** (` ->`, ` =>`, ` >=`, ` <=`, ` !=`, ` &`, ` |`), not Unicode math (`∀`, `∈`, `≻`, `∘`).
 - Avoid wrapping every identifier in inline backticks (`` `name` `` adds 2 extra tokens per identifier).
 - Keep spaces around `+`, `|`, and `=>` so BPE tokenizers merge `" word"` into a single token instead of splitting after punctuation.
+
+Applied to 7 English customer-support SOP and live-chat responses from public Hugging Face datasets (`examples/formula_prompt_en.py`), BPE-aligned formulas reduce tokens by **75.9% on `o200k_base`** while preserving **43/43 (100%)** required slots and template placeholders (for Korean counseling and chat examples in `examples/formula_prompt_ko.py`, see [Language and tokenization](../07-language-and-tokenization/#hugging-face-customer-support-and-counseling-benchmark)):
+
+| English SOP / chat case & Hugging Face dataset (`row`) | Prose (`o200k` / `cl100k`) | BPE formula (`o200k` / `cl100k`) | `o200k_base` delta | `cl100k_base` delta | Slots kept |
+|--------------------------------------------------------|---------------------------:|---------------------------------:|-------------------:|--------------------:|-----------:|
+| Order cancel SOP ([`bitext/Bitext-customer-support-llm-chatbot-training-dataset`](https://huggingface.co/datasets/bitext/Bitext-customer-support-llm-chatbot-training-dataset) `train[2]`) | 223 / 226 | 55 / 55 | **-75.3%** | **-75.7%** | 9/9 |
+| Order change SOP ([`bitext/Bitext-customer-support-llm-chatbot-training-dataset`](https://huggingface.co/datasets/bitext/Bitext-customer-support-llm-chatbot-training-dataset) `train[1001]`) | 225 / 230 | 54 / 54 | **-76.0%** | **-76.5%** | 9/9 |
+| Cancellation fee check SOP ([`bitext/Bitext-customer-support-llm-chatbot-training-dataset`](https://huggingface.co/datasets/bitext/Bitext-customer-support-llm-chatbot-training-dataset) `train[3001]`) | 98 / 100 | 26 / 27 | **-73.5%** | **-73.0%** | 5/5 |
+| Refund timeframe & lookup ([`bitext/Bitext-customer-support-llm-chatbot-training-dataset`](https://huggingface.co/datasets/bitext/Bitext-customer-support-llm-chatbot-training-dataset) `train[6000]`) | 221 / 225 | 34 / 34 | **-84.6%** | **-84.9%** | 5/5 |
+| Recall return & refund SOP ([`NebulaByte/E-Commerce_Customer_Support_Conversations`](https://huggingface.co/datasets/NebulaByte/E-Commerce_Customer_Support_Conversations) `train[1]`) | 131 / 131 | 42 / 42 | **-67.9%** | **-67.9%** | 6/6 |
+| Robotic arm recalibration chat ([`FunDialogues/customer-service-robot-support`](https://huggingface.co/datasets/FunDialogues/customer-service-robot-support) `train[0]`) | 60 / 61 | 18 / 18 | **-70.0%** | **-70.5%** | 5/5 |
+| Delayed order live-chat reply ([`Kaludi/Customer-Support-Responses`](https://huggingface.co/datasets/Kaludi/Customer-Support-Responses) `train[0]`) | 28 / 29 | 9 / 9 | **-67.9%** | **-69.0%** | 4/4 |
+| **Total (7 English SOP & live-chat cases)** | **986 / 1,002** | **238 / 239** | **-75.9%** | **-76.1%** | **43/43 (100%)** |
 
 ## How to verify
 
@@ -108,5 +121,5 @@ Ordered by venue tier, then citations. Findings are hypotheses to verify on your
 - Token Efficiency and Context Engineering — developer talk deck (June 2026), prompt-compression and
   output-control sections (figures as reported, not independently verified)
 - [Optimize AI credit usage in VS Code](https://code.visualstudio.com/docs/agents/guides/optimize-usage)
-- [`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py) — reproducible BPE formula measurement and prompt converter
+- [`examples/formula_prompt_en.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt_en.py), [`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py) — reproducible English BPE formula measurement and prompt converter
 - [caveman](https://github.com/JuliusBrussee/caveman), [cavewoman](https://github.com/danielle34/cavewoman)

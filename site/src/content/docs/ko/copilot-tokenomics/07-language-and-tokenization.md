@@ -43,7 +43,7 @@ sidebar:
 <a id="hybrid-korean--bpe-formula-benchmark"></a>
 ### 한국어 핵심어 보존 + BPE 수식 실측 비교
 
-[`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py)로 측정한 결과입니다(`tiktoken` 0.14.0, 2026-11-04 확인).
+[`examples/formula_prompt_ko.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt_ko.py)(또는 `python3 examples/formula_prompt.py --lang ko`)로 측정한 결과입니다(`tiktoken` 0.14.0, 2026-11-04 확인).
 
 | 작업 유형 | 한국어 원문 (`o200k` / `cl100k`) | 한국어 핵심어 + BPE 수식 (`[ko] :: ...`) | `o200k_base` 변화 | `cl100k_base` 변화 |
 |------------------|----------------------------------:|---------------------------------------------|-------------------:|--------------------:|
@@ -54,6 +54,29 @@ sidebar:
 | **합계 (4개 프롬프트)** | **175 / 288** | — | **122 (-30.3%)** | **167 (-42.0%)** |
 
 왜 한글 명사까지 억지로 영문 약어로 바꾸면 안 될까요? 실제 한국어 Copilot 요청 8종(세부 제약 47개 항목)으로 검증한 결과, `"보강점 100개 이상 찾아서"`를 단순히 영문 `gaps >=100`으로 치환하면 모델이 이를 **"100개 이상 발굴하라(명령)"**가 아니라 **"갭이 100개 이상인지 확인하라(조건문)"**로 오독하여 제약 준수율이 **81.5% (44/54)**로 떨어졌습니다. 반면 한국어 핵심 동작 명사(`보강점 >=100 발굴`, `남은작업 계획수립`)를 보존하고 연산자만 수식화했을 때는 **제약 준수율 100.0% (47/47)**와 **한국어 응답 100%**를 달성했습니다.
+
+**한국어 핵심 명사 앞에는 공백을 두고 불필요한 따옴표·괄호를 제거합니다.** `o200k_base` 어휘 사전에는 `" 고객"`, `" 담당"`, `" 주문"`, `" 완료"`, `" 직접"`, `" 처리"`, `" 확인"`, `" 전달"`, `" 안내"`, `" 기준"` 등을 포함해 **앞에 공백이 있을 때만 단일 1토큰으로 병합되는 2음절 이상 한국어 단어가 643개** 있습니다. 공백 없이 붙여 쓰거나(`직접처리` 3토큰 vs `직접 처리` 2토큰, `주문완료` 3토큰 vs `주문 완료` 2토큰) 따옴표·낫표(`'무선 이어폰'`, `‘무선 이어폰’`, `「근로기준법」`)로 감싸면 선행 공백 병합이 깨져 오히려 토큰 수가 늘어납니다.
+
+<a id="hugging-face-customer-support-and-counseling-benchmark"></a>
+### Hugging Face 공개 상담·고객지원 데이터셋 실측 비교
+
+이 원칙은 인사말, 사과 표현, 반복적인 약관·법령 안내문이 토큰의 상당 부분을 차지하는 한국어 고객센터·법률·노무 상담 데이터에서도 동일하게 작동합니다. [`examples/formula_prompt_ko.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt_ko.py)와 [`examples/test_formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/test_formula_prompt.py)로 측정·검증한 결과입니다(`tiktoken` 0.14.0, 2026-11-04 확인. 영문 SOP 전용 예제는 `examples/formula_prompt_en.py` 및 [프롬프트와 출력 스타일](../06-prompt-and-output-style/#4-bpe-aligned-formula-notation)을 참고하세요).
+
+| 한국어 채팅·상담 사례 및 Hugging Face 데이터셋 (`row`) | 원문 (`o200k` / `cl100k`) | BPE 수식 (`o200k` / `cl100k`) | `o200k_base` 변화 | `cl100k_base` 변화 | 핵심 슬롯 보존 |
+|--------------------------------------------------------|--------------------------:|------------------------------:|------------------:|-------------------:|---------------:|
+| 이커머스 배송 조회·환불/취소 약관 ([`iamjoon/ecommerce-function-calling-datasets-korean`](https://huggingface.co/datasets/iamjoon/ecommerce-function-calling-datasets-korean) `train[5]`) | 103 / 158 | 64 / 94 | **-37.9%** | **-40.5%** | 11/11 |
+| 노트북 불량 기술지원·영수증 이관 ([`iamjoon/ecommerce-function-calling-datasets-korean`](https://huggingface.co/datasets/iamjoon/ecommerce-function-calling-datasets-korean) `train[2]`) | 90 / 147 | 45 / 73 | **-50.0%** | **-50.3%** | 8/8 |
+| 이커머스 반품·교환 약관 안내 ([`iamjoon/ecommerce-function-calling-datasets-korean`](https://huggingface.co/datasets/iamjoon/ecommerce-function-calling-datasets-korean) `train[6]`) | 101 / 173 | 59 / 99 | **-41.6%** | **-42.8%** | 9/9 |
+| 배달 앱 주문 요약·결제·도착시간 이관 ([`jjun123/delivery-app-function-calling-datasets-korean`](https://huggingface.co/datasets/jjun123/delivery-app-function-calling-datasets-korean) `train[0]`) | 173 / 229 | 127 / 162 | **-26.6%** | **-29.3%** | 11/11 |
+| 퇴직급여제도 설정 의무·예외 요건 ([`jihye-moon/klac_legal_aid_counseling`](https://huggingface.co/datasets/jihye-moon/klac_legal_aid_counseling) `train[1]`) | 173 / 256 | 73 / 109 | **-57.8%** | **-57.4%** | 7/7 |
+| 최저임금법 제6조 및 수습 90% 특례 ([`jihye-moon/klac_legal_aid_counseling`](https://huggingface.co/datasets/jihye-moon/klac_legal_aid_counseling) `train[0]`) | 124 / 189 | 65 / 101 | **-47.6%** | **-46.6%** | 7/7 |
+| 평균임금 산정 및 최저기준 원칙 ([`seventy4/labor-counsel-qa`](https://huggingface.co/datasets/seventy4/labor-counsel-qa) `train[2,3]`) | 104 / 177 | 65 / 113 | **-37.5%** | **-36.2%** | 6/6 |
+| 해고 30일 전 예고 의무 및 예외 요건 ([`seventy4/labor-counsel-qa`](https://huggingface.co/datasets/seventy4/labor-counsel-qa) `train[34]`) | 90 / 142 | 51 / 74 | **-43.3%** | **-47.9%** | 7/7 |
+| 무인보관함 배송지 변경 채팅 상담 ([`schneiderkamplab/dfm14-ko-synthetic-tool-dialogue-r1`](https://huggingface.co/datasets/schneiderkamplab/dfm14-ko-synthetic-tool-dialogue-r1) `train[2]`) | 51 / 68 | 30 / 36 | **-41.2%** | **-47.1%** | 4/4 |
+| 병원 검진 슬롯 조회 채팅 안내 ([`schneiderkamplab/dfm14-ko-synthetic-tool-dialogue-r1`](https://huggingface.co/datasets/schneiderkamplab/dfm14-ko-synthetic-tool-dialogue-r1) `train[11]`) | 91 / 164 | 42 / 68 | **-53.8%** | **-58.5%** | 7/7 |
+| **합계 (10개 한국어 채팅·상담·법률 사례)** | **1,100 / 1,703** | **621 / 929** | **-43.5%** | **-45.4%** | **77/77 (100%)** |
+
+임의의 채팅·상담 데이터에서 **100% 슬롯 정확도와 토큰 비팽창**을 보장하기 위해, `examples/formula_prompt_ko.py`와 `examples/formula_prompt_en.py`는 압축 전 법조문(`제N조`, `제N항`, `제N호`), 대법원 사건번호(`98다46198`), 이메일, 전화번호, 케밥케이스 엔티티 ID(`parcel-610`, `locker-16`), 고객·주문·상품 ID, 수량, 금액, 날짜, 템플릿 플레이스홀더(`{{...}}`)를 전수 추출해 누락된 슬롯을 자동 복원(`ensure_slot_preservation`)하며, 압축 후보가 `o200k_base` 토큰 수를 줄이지 못하면 원문으로 폴백합니다. 다중 턴 채팅·상담 대화 이력 압축과 580건 실시간 벤치마크(`--compress-dialogue`, `--hf-live --hf-rows 50`)는 [트랙 B — 4. 개선](../../agent-tokenomics/04-improve/#compaction-without-losing-the-cache)을 참고하세요.
 
 ## 트레이드오프
 
@@ -70,6 +93,6 @@ sidebar:
 ## 출처
 
 - [`examples/count_tokens.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/count_tokens.py) — 재현 가능한 측정
-- [`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py) — 재현 가능한 한국어 + BPE 수식 측정 및 프롬프트 변환 스크립트
+- [`examples/formula_prompt_ko.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt_ko.py), [`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py) — 재현 가능한 한국어 + BPE 수식 측정 및 프롬프트 변환 스크립트
 - [tiktoken](https://github.com/openai/tiktoken)
 - Token Efficiency and Context Engineering — 개발자 발표 자료(2026년 6월). 다른 토크나이저를 사용했지만 같은 방향(영어 외 텍스트에 더 많은 토큰이 듦)을 보고합니다. 이 문서의 표는 직접 측정한 결과입니다.

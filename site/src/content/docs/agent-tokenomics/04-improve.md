@@ -71,6 +71,55 @@ Failures to avoid: <error signatures already seen and what fixed them>
   secrets and personal data before they enter a summary.
 - Validate with the [lossy-fix criteria](../03-prove/#when-the-fix-is-lossy-summaries-compaction).
 
+### Worked example: multi-turn counselor dialogue compaction
+
+In customer-support and counseling agents, older dialogue turns repeat greetings, apologies, raw `<tool_call>` JSON wrappers, duplicate session UUIDs, and closing boilerplate. Compacting completed episodes into a BPE-aligned chain (`intent -> tool(args) => outcome | ...`) cuts multi-turn history tokens while retaining **100%** of customer IDs, order IDs, dates, prices, tracking numbers, and escalation outcomes. English examples live in [`examples/formula_prompt_en.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt_en.py) and Korean examples live in [`examples/formula_prompt_ko.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt_ko.py) (unified runner: [`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py) `--lang {en,ko,all}`, verified 2026-11-04):
+
+**English multi-turn chat & support dialogues (`examples/formula_prompt_en.py`):**
+
+| English dialogue & Hugging Face dataset (`row`) | Raw chat (`o200k` / `cl100k`) | Compacted BPE chain (`o200k` / `cl100k`) | `o200k_base` delta | `cl100k_base` delta | Slots kept |
+|-------------------------------------------------|------------------------------:|-----------------------------------------:|-------------------:|--------------------:|-----------:|
+| Login OTP fallback call (13 turns, [`NebulaByte/E-Commerce_Customer_Support_Conversations`](https://huggingface.co/datasets/NebulaByte/E-Commerce_Customer_Support_Conversations) `train[0]`) | 336 / 350 | 57 / 58 | **-83.0%** | **-83.4%** | 7/7 |
+| Recalled monitor return & refund (13 turns, [`NebulaByte/E-Commerce_Customer_Support_Conversations`](https://huggingface.co/datasets/NebulaByte/E-Commerce_Customer_Support_Conversations) `train[1]`) | 339 / 347 | 53 / 53 | **-84.4%** | **-84.7%** | 8/8 |
+| Warranty replacement & Cancel glitch (19 turns, [`NebulaByte/E-Commerce_Customer_Support_Conversations`](https://huggingface.co/datasets/NebulaByte/E-Commerce_Customer_Support_Conversations) `train[2]`) | 526 / 535 | 81 / 81 | **-84.6%** | **-84.9%** | 9/9 |
+| OTP lockout & password reset (17 turns, [`NebulaByte/E-Commerce_Customer_Support_Conversations`](https://huggingface.co/datasets/NebulaByte/E-Commerce_Customer_Support_Conversations) `train[3]`) | 460 / 471 | 49 / 49 | **-89.3%** | **-89.6%** | 6/6 |
+| Medical intake palpitations chat (10 turns, [`nwirandx/Korean-OSCE-history-taking-dialogues`](https://huggingface.co/datasets/nwirandx/Korean-OSCE-history-taking-dialogues) `sessions[0..9]`) | 321 / 322 | 74 / 73 | **-76.9%** | **-77.3%** | 9/9 |
+| Production line robot support chat (4 turns, [`FunDialogues/customer-service-robot-support`](https://huggingface.co/datasets/FunDialogues/customer-service-robot-support) `train[1,2]`) | 112 / 114 | 35 / 36 | **-68.8%** | **-68.4%** | 6/6 |
+| **Total (6 English multi-turn chat dialogues)** | **2,094 / 2,139** | **349 / 350** | **-83.3%** | **-83.6%** | **45/45 (100%)** |
+
+**Korean multi-turn chat & counseling dialogues (`examples/formula_prompt_ko.py`):**
+
+| Korean dialogue & Hugging Face dataset (`row`) | Raw chat (`o200k` / `cl100k`) | Compacted BPE chain (`o200k` / `cl100k`) | `o200k_base` delta | `cl100k_base` delta | Slots kept |
+|------------------------------------------------|------------------------------:|-----------------------------------------:|-------------------:|--------------------:|-----------:|
+| Address + shipping + spam report (14 turns, [`iamjoon/ecommerce-function-calling-datasets-korean`](https://huggingface.co/datasets/iamjoon/ecommerce-function-calling-datasets-korean) `train[0]`) | 304 / 460 | 84 / 129 | **-72.4%** | **-72.0%** | 9/9 |
+| Cart + laptop defect + receipt (15 turns, [`iamjoon/ecommerce-function-calling-datasets-korean`](https://huggingface.co/datasets/iamjoon/ecommerce-function-calling-datasets-korean) `train[2]`) | 386 / 565 | 127 / 190 | **-67.1%** | **-66.4%** | 9/9 |
+| Shipping + Gold tier + refund/cancel (16 turns, [`iamjoon/ecommerce-function-calling-datasets-korean`](https://huggingface.co/datasets/iamjoon/ecommerce-function-calling-datasets-korean) `train[5]`) | 436 / 638 | 158 / 225 | **-63.8%** | **-64.7%** | 11/11 |
+| Return/exchange + refusal + orders (13 turns, [`iamjoon/ecommerce-function-calling-datasets-korean`](https://huggingface.co/datasets/iamjoon/ecommerce-function-calling-datasets-korean) `train[6]`) | 368 / 545 | 124 / 194 | **-66.3%** | **-64.4%** | 11/11 |
+| Parcel lookup & locker redirect chat (6 turns, [`schneiderkamplab/dfm14-ko-synthetic-tool-dialogue-r1`](https://huggingface.co/datasets/schneiderkamplab/dfm14-ko-synthetic-tool-dialogue-r1) `train[2]`) | 195 / 226 | 55 / 61 | **-71.8%** | **-73.0%** | 5/5 |
+| Medical intake palpitations chat (10 turns, [`nwirandx/Korean-OSCE-history-taking-dialogues`](https://huggingface.co/datasets/nwirandx/Korean-OSCE-history-taking-dialogues) `sessions[0..9]`) | 402 / 613 | 102 / 144 | **-74.6%** | **-76.5%** | 10/10 |
+| Multi-session persona & family chat (18 turns, [`nayohan/141_korean_multi_session_dialogue`](https://huggingface.co/datasets/nayohan/141_korean_multi_session_dialogue) `train[0]`) | 359 / 567 | 77 / 103 | **-78.6%** | **-81.8%** | 11/11 |
+| **Total (7 Korean multi-turn chat dialogues)** | **2,450 / 3,614** | **727 / 1,046** | **-70.3%** | **-71.1%** | **66/66 (100%)** |
+
+Across **580 live chat, customer-support, and counseling sessions** (250 English rows across 5 datasets + 330 Korean rows across 7 datasets) fetched from public Hugging Face datasets (`python3 examples/formula_prompt.py --hf-live --hf-rows 50`), generalized BPE grammar and discourse compression reduces total tokens by **56.3% on `o200k_base`** (**54.9% on `cl100k_base`**) while preserving **1,731 / 1,731 (100.0%)** strict slots (statute numbers, court case IDs, emails, UUIDs, kebab-case IDs, order/user IDs, dates, amounts, and placeholders):
+
+| Language & Hugging Face dataset (`--hf-live --hf-rows 50`) | Rows | `o200k_base` (Raw → BPE) | `cl100k_base` (Raw → BPE) | Strict slots kept |
+|------------------------------------------------------------|-----:|-------------------------:|--------------------------:|------------------:|
+| EN: [`NebulaByte/E-Commerce_Customer_Support_Conversations`](https://huggingface.co/datasets/NebulaByte/E-Commerce_Customer_Support_Conversations) | 50 | 23,979 → 11,538 (**-51.9%**) | 24,629 → 11,912 (**-51.6%**) | 124/124 |
+| EN: [`bitext/Bitext-customer-support-llm-chatbot-training-dataset`](https://huggingface.co/datasets/bitext/Bitext-customer-support-llm-chatbot-training-dataset) | 50 | 11,431 → 3,390 (**-70.3%**) | 11,639 → 3,406 (**-70.7%**) | 281/281 |
+| EN: [`FunDialogues/customer-service-robot-support`](https://huggingface.co/datasets/FunDialogues/customer-service-robot-support) | 50 | 3,146 → 1,548 (**-50.8%**) | 3,226 → 1,590 (**-50.7%**) | 0/0 (100%) |
+| EN: [`Kaludi/Customer-Support-Responses`](https://huggingface.co/datasets/Kaludi/Customer-Support-Responses) | 50 | 1,837 → 893 (**-51.4%**) | 1,883 → 919 (**-51.2%**) | 1/1 |
+| EN: [`nwirandx/Korean-OSCE-history-taking-dialogues`](https://huggingface.co/datasets/nwirandx/Korean-OSCE-history-taking-dialogues) (`sessions`, EN) | 50 | 1,462 → 608 (**-58.4%**) | 1,467 → 610 (**-58.4%**) | 11/11 |
+| **English subtotal (5 datasets)** | **250** | **41,855 → 17,977 (-57.0%)** | **42,844 → 18,437 (-57.0%)** | **417/417 (100%)** |
+| KO: [`iamjoon/ecommerce-function-calling-datasets-korean`](https://huggingface.co/datasets/iamjoon/ecommerce-function-calling-datasets-korean) | 50 | 19,243 → 7,774 (**-59.6%**) | 29,172 → 12,468 (**-57.3%**) | 220/220 |
+| KO: [`jjun123/delivery-app-function-calling-datasets-korean`](https://huggingface.co/datasets/jjun123/delivery-app-function-calling-datasets-korean) | 30 | 42,129 → 18,182 (**-56.8%**) | 52,592 → 24,433 (**-53.5%**) | 325/325 |
+| KO: [`jihye-moon/klac_legal_aid_counseling`](https://huggingface.co/datasets/jihye-moon/klac_legal_aid_counseling) | 50 | 27,325 → 12,357 (**-54.8%**) | 42,753 → 18,872 (**-55.9%**) | 465/465 |
+| KO: [`seventy4/labor-counsel-qa`](https://huggingface.co/datasets/seventy4/labor-counsel-qa) | 50 | 5,788 → 2,498 (**-56.8%**) | 9,588 → 4,041 (**-57.9%**) | 38/38 |
+| KO: [`schneiderkamplab/dfm14-ko-synthetic-tool-dialogue-r1`](https://huggingface.co/datasets/schneiderkamplab/dfm14-ko-synthetic-tool-dialogue-r1) | 50 | 7,437 → 3,119 (**-58.1%**) | 9,405 → 4,478 (**-52.4%**) | 176/176 |
+| KO: [`nwirandx/Korean-OSCE-history-taking-dialogues`](https://huggingface.co/datasets/nwirandx/Korean-OSCE-history-taking-dialogues) (`sessions`, KO) | 50 | 1,854 → 882 (**-52.4%**) | 2,791 → 1,304 (**-53.3%**) | 13/13 |
+| KO: [`nayohan/141_korean_multi_session_dialogue`](https://huggingface.co/datasets/nayohan/141_korean_multi_session_dialogue) | 50 | 18,307 → 8,914 (**-51.3%**) | 28,868 → 14,252 (**-50.6%**) | 77/77 |
+| **Korean subtotal (7 datasets)** | **330** | **122,083 → 53,726 (-56.0%)** | **175,169 → 79,848 (-54.4%)** | **1,314/1,314 (100%)** |
+| **Combined total (12 dataset benchmarks, 580 chat & counseling cases)** | **580** | **163,938 → 71,703 (-56.3%)** | **218,013 → 98,285 (-54.9%)** | **1,731/1,731 (100%)** |
+
 ## Rules
 
 - **One fix at a time.** Combined changes make results unattributable.

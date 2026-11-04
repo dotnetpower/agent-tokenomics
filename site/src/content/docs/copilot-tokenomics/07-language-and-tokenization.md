@@ -53,7 +53,7 @@ Two lessons:
 
 ### Hybrid Korean + BPE formula benchmark
 
-Measured with [`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py) (`tiktoken` 0.14.0, verified 2026-11-04):
+Measured with [`examples/formula_prompt_ko.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt_ko.py) (or `python3 examples/formula_prompt.py --lang ko`, `tiktoken` 0.14.0, verified 2026-11-04):
 
 | Workflow pattern | Korean prose (`o200k` / `cl100k`) | Hybrid Korean + BPE formula (`[ko] :: ...`) | `o200k_base` delta | `cl100k_base` delta |
 |------------------|----------------------------------:|---------------------------------------------|-------------------:|--------------------:|
@@ -64,6 +64,28 @@ Measured with [`examples/formula_prompt.py`](https://github.com/dotnetpower/agen
 | **Total (4 prompts)** | **175 / 288** | — | **122 (-30.3%)** | **167 (-42.0%)** |
 
 Why keep core Korean nouns instead of replacing everything with English shorthand? In an evaluation across 8 real Korean Copilot requests (47 constraint checkpoints), naive English keyword replacement (for example turning `"보강점 100개 이상 찾아서"` into `gaps >=100`) caused the model to misread imperative commands ("find at least 100 gaps") as conditional guards ("if gaps are at least 100"), dropping constraint accuracy to **81.5% (44/54)**. Keeping the Korean action noun (`보강점 >=100 발굴`) with BPE operators achieved **100.0% (47/47)** constraint accuracy and **100% Korean replies**.
+
+**Keep spaces before Korean nouns and strip decorative quotes/brackets.** In `o200k_base`, **643 multi-syllable Korean words** (including `" 고객"`, `" 담당"`, `" 주문"`, `" 완료"`, `" 직접"`, `" 처리"`, `" 확인"`, `" 전달"`, `" 안내"`, `" 기준"`) encode as **1 token only when preceded by a space**, and split into 2 tokens when glued into unspaced compounds (`직접처리` = 3 tokens vs `직접 처리` = 2 tokens; `주문완료` = 3 tokens vs `주문 완료` = 2 tokens) or wrapped in quotes/corner brackets (`'무선 이어폰'`, `‘무선 이어폰’`, `「근로기준법」`).
+
+### Hugging Face customer-support and counseling benchmark
+
+The same Korean core-noun + BPE formula rule applies to Korean customer-support, delivery, legal, and labor counseling utterances where polite openings, apologies, and repetitive policy clauses dominate token count. Reproduced with [`examples/formula_prompt_ko.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt_ko.py) and verified by [`examples/test_formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/test_formula_prompt.py) (`tiktoken` 0.14.0, verified 2026-11-04; for English SOP examples in `examples/formula_prompt_en.py`, see [Prompt and output style](../06-prompt-and-output-style/#4-bpe-aligned-formula-notation)):
+
+| Korean case & Hugging Face dataset (`row`) | Prose (`o200k` / `cl100k`) | BPE formula (`o200k` / `cl100k`) | `o200k_base` delta | `cl100k_base` delta | Slots kept |
+|--------------------------------------------|---------------------------:|---------------------------------:|-------------------:|--------------------:|-----------:|
+| E-commerce shipping & refund ([`iamjoon/ecommerce-function-calling-datasets-korean`](https://huggingface.co/datasets/iamjoon/ecommerce-function-calling-datasets-korean) `train[5]`) | 103 / 158 | 64 / 94 | **-37.9%** | **-40.5%** | 11/11 |
+| Defect & receipt escalation ([`iamjoon/ecommerce-function-calling-datasets-korean`](https://huggingface.co/datasets/iamjoon/ecommerce-function-calling-datasets-korean) `train[2]`) | 90 / 147 | 45 / 73 | **-50.0%** | **-50.3%** | 8/8 |
+| Return & exchange policy ([`iamjoon/ecommerce-function-calling-datasets-korean`](https://huggingface.co/datasets/iamjoon/ecommerce-function-calling-datasets-korean) `train[6]`) | 101 / 173 | 59 / 99 | **-41.6%** | **-42.8%** | 9/9 |
+| Delivery checkout & ETA ([`jjun123/delivery-app-function-calling-datasets-korean`](https://huggingface.co/datasets/jjun123/delivery-app-function-calling-datasets-korean) `train[0]`) | 173 / 229 | 127 / 162 | **-26.6%** | **-29.3%** | 11/11 |
+| Severance pay statute ([`jihye-moon/klac_legal_aid_counseling`](https://huggingface.co/datasets/jihye-moon/klac_legal_aid_counseling) `train[1]`) | 173 / 256 | 73 / 109 | **-57.8%** | **-57.4%** | 7/7 |
+| Minimum wage & 90% probation ([`jihye-moon/klac_legal_aid_counseling`](https://huggingface.co/datasets/jihye-moon/klac_legal_aid_counseling) `train[0]`) | 124 / 189 | 65 / 101 | **-47.6%** | **-46.6%** | 7/7 |
+| Average wage & floor rule ([`seventy4/labor-counsel-qa`](https://huggingface.co/datasets/seventy4/labor-counsel-qa) `train[2,3]`) | 104 / 177 | 65 / 113 | **-37.5%** | **-36.2%** | 6/6 |
+| Dismissal 30-day notice rule ([`seventy4/labor-counsel-qa`](https://huggingface.co/datasets/seventy4/labor-counsel-qa) `train[34]`) | 90 / 142 | 51 / 74 | **-43.3%** | **-47.9%** | 7/7 |
+| Parcel locker redirect chat ([`schneiderkamplab/dfm14-ko-synthetic-tool-dialogue-r1`](https://huggingface.co/datasets/schneiderkamplab/dfm14-ko-synthetic-tool-dialogue-r1) `train[2]`) | 51 / 68 | 30 / 36 | **-41.2%** | **-47.1%** | 4/4 |
+| Mock clinic slot chat policy ([`schneiderkamplab/dfm14-ko-synthetic-tool-dialogue-r1`](https://huggingface.co/datasets/schneiderkamplab/dfm14-ko-synthetic-tool-dialogue-r1) `train[11]`) | 91 / 164 | 42 / 68 | **-53.8%** | **-58.5%** | 7/7 |
+| **Total (10 Korean chat & counseling cases)** | **1,100 / 1,703** | **621 / 929** | **-43.5%** | **-45.4%** | **77/77 (100%)** |
+
+To guarantee **100% slot accuracy and zero token expansion** across arbitrary inputs, `examples/formula_prompt_ko.py` and `examples/formula_prompt_en.py` extract every statute reference (`제N조`, `제N항`, `제N호`), supreme-court case ID (`98다46198`), email, phone number, kebab-case entity ID (`parcel-610`, `locker-16`), order/user/product ID, quantity, price, date, and template placeholder (`{{...}}`) before compression, restore any omitted token automatically (`ensure_slot_preservation`), and fall back to the original string whenever a compressed candidate does not strictly reduce `o200k_base` tokens. For multi-turn chat and counselor conversation history compaction and the 580-row live benchmark (`--compress-dialogue` and `--hf-live --hf-rows 50`), see [Track B — 4. Improve](../../agent-tokenomics/04-improve/#compaction-without-losing-the-cache).
 
 ## Trade-offs
 
@@ -82,7 +104,7 @@ Ordered by venue tier, then citations. Findings are hypotheses to verify on your
 ## Sources
 
 - [`examples/count_tokens.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/count_tokens.py) — reproducible measurement
-- [`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py) — reproducible Korean + BPE formula measurement and converter
+- [`examples/formula_prompt_ko.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt_ko.py), [`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py) — reproducible Korean + BPE formula measurement and converter
 - [tiktoken](https://github.com/openai/tiktoken)
 - Token Efficiency and Context Engineering — developer talk deck (June 2026): reports the same direction (non-English
   text costs more tokens) with a different tokenizer; our table is our own measurement.
