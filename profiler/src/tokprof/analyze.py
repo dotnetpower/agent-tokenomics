@@ -149,7 +149,14 @@ def findings(records: list, min_cacheable: int = 1024, gap_s: float = 5.0) -> li
     q = Counter(r.get("quality") for r in records if r.get("quality"))
     poor = q.get("poor", 0)
     if poor and poor / max(1, sum(q.values())) > 0.3:
-        out.append({"severity": "info", "text": f"{poor} of {sum(q.values())} calls have a large unexplained residual (opaque content, hidden tokens, or an approximate tokenizer); treat the breakdown as approximate", "see": LINKS["diagnose"]})
+        neg = sum(1 for r in records if (r.get("residual") or 0) < 0 and r.get("quality") == "poor")
+        note = (
+            " (reported input is smaller than counted segments on some calls; servers such as Ollama report only newly evaluated "
+            "tokens in prompt_eval_count and omit KV-cached prefix tokens)"
+            if neg
+            else " (opaque content, hidden tokens, or an approximate tokenizer)"
+        )
+        out.append({"severity": "info", "text": f"{poor} of {sum(q.values())} calls have a large unexplained residual{note}; treat the breakdown as approximate", "see": LINKS["diagnose"]})
     return out
 
 

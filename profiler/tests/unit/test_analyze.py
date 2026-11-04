@@ -113,3 +113,10 @@ def test_to_legacy_is_compatible_with_token_report_schema():
     row = to_legacy([r])[0]
     assert row["input_tokens"] == 50 and row["cached_input_tokens"] == 10 and row["tool_defs"] == [{"name": "search", "tokens": 7}]
     assert row["tool_calls"][0]["name"] == "search" and row["session"] == "c1"
+
+
+def test_negative_residual_finding_mentions_ollama_kv_cache():
+    segs = [seg("system", 800), seg("user_prompt", 50)]
+    r = call(1000, 50, segs, quality="poor")  # reported=50, est=850 -> residual=-800
+    fs = findings([r])
+    assert any("prompt_eval_count" in f["text"] and "KV-cached" in f["text"] for f in fs)

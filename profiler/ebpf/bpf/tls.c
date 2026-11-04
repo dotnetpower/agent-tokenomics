@@ -90,6 +90,31 @@ int ssl_read_enter(struct pt_regs *ctx) { return enter(ctx, DIR_READ, 0); }
 SEC("uprobe/ssl_read_ex")
 int ssl_read_ex_enter(struct pt_regs *ctx) { return enter(ctx, DIR_READ, 1); }
 
+#if defined(__TARGET_ARCH_x86)
+#define GO_PARAM1(x) ((x)->rax)
+#define GO_PARAM2(x) ((x)->rbx)
+#define GO_PARAM3(x) ((x)->rcx)
+#define GO_G(x)      ((x)->r14)
+#elif defined(__TARGET_ARCH_arm64)
+#define GO_PARAM1(x) (((PT_REGS_ARM64 *)(x))->regs[0])
+#define GO_PARAM2(x) (((PT_REGS_ARM64 *)(x))->regs[1])
+#define GO_PARAM3(x) (((PT_REGS_ARM64 *)(x))->regs[2])
+#define GO_G(x)      (((PT_REGS_ARM64 *)(x))->regs[28])
+#endif
+
+struct go_key {
+	__u64 g;
+	__u32 tgid;
+	__u32 dir;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 16384);
+	__type(key, struct go_key);
+	__type(value, struct call_args);
+} go_active SEC(".maps");
+
 static __always_inline void count_drop(void)
 {
 	__u32 zero = 0;
@@ -204,6 +229,58 @@ int ssl_leave(struct pt_regs *ctx)
 	return 0;
 }
 
+// Go crypto/tls: attach uprobes to function entry and to each RET instruction (never uretprobe, which
+// rewrites the stack return address and crashes the Go runtime when a goroutine stack grows or is scanned).
+static __always_inline int go_enter(struct pt_regs *ctx, __u32 dir)
+{
+	struct call_args a = {};
+	struct go_key k = {};
+
+	k.g = GO_G(ctx);
+	k.tgid = bpf_get_current_pid_tgid() >> 32;
+	k.dir = dir;
+	a.ssl = GO_PARAM1(ctx);
+	a.buf = GO_PARAM2(ctx);
+	a.num = GO_PARAM3(ctx);
+	a.dir = dir;
+	bpf_map_update_elem(&go_active, &k, &a, BPF_ANY);
+	return 0;
+}
+
+static __always_inline int go_ret(struct pt_regs *ctx, __u32 dir)
+{
+	__u64 id = bpf_get_current_pid_tgid();
+	struct go_key k = {};
+	struct call_args *ap;
+	struct call_args a;
+	long rc = (long)GO_PARAM1(ctx);
+
+	k.g = GO_G(ctx);
+	k.tgid = id >> 32;
+	k.dir = dir;
+	ap = bpf_map_lookup_elem(&go_active, &k);
+	if (!ap)
+		return 0;
+	a = *ap;
+	bpf_map_delete_elem(&go_active, &k);
+	if (rc <= 0 || rc > 0x7fffffff || (__u64)rc > a.num)
+		return 0;
+	emit_all(&a, id, (__u32)rc);
+	return 0;
+}
+
+SEC("uprobe/go_tls_write_enter")
+int go_tls_write_enter(struct pt_regs *ctx) { return go_enter(ctx, DIR_WRITE); }
+
+SEC("uprobe/go_tls_write_ret")
+int go_tls_write_ret(struct pt_regs *ctx) { return go_ret(ctx, DIR_WRITE); }
+
+SEC("uprobe/go_tls_read_enter")
+int go_tls_read_enter(struct pt_regs *ctx) { return go_enter(ctx, DIR_READ); }
+
+SEC("uprobe/go_tls_read_ret")
+int go_tls_read_ret(struct pt_regs *ctx) { return go_ret(ctx, DIR_READ); }
+
 
 // ---- plain HTTP (no TLS): a few syscalls on sockets that carry an HTTP POST ----------------------------------------
 //
@@ -220,16 +297,22 @@ int ssl_leave(struct pt_regs *ctx)
 #define NR_READ 0
 #define NR_WRITE 1
 #define NR_CLOSE 3
+#define NR_READV 19
 #define NR_WRITEV 20
 #define NR_SENDTO 44
 #define NR_RECVFROM 45
+#define NR_SENDMSG 46
+#define NR_RECVMSG 47
 #elif defined(__TARGET_ARCH_arm64)
 #define NR_READ 63
 #define NR_WRITE 64
 #define NR_CLOSE 57
+#define NR_READV 65
 #define NR_WRITEV 66
 #define NR_SENDTO 206
 #define NR_RECVFROM 207
+#define NR_SENDMSG 211
+#define NR_RECVMSG 212
 #else
 #error "unsupported architecture: add its syscall numbers"
 #endif
@@ -244,8 +327,8 @@ struct plain_key {
 };
 
 struct sys_args {
-	__u64 buf; // buffer, or the iovec array for writev
-	__u64 len; // byte count, or the number of iovecs for writev
+	__u64 buf; // buffer, or the iovec array for writev/readv/sendmsg/recvmsg
+	__u64 len; // byte count, or the number of iovecs for vector calls
 	__u32 fd;
 	__u32 dir;
 	__u32 vec;
@@ -256,7 +339,15 @@ struct iov {
 	__u64 len;
 };
 
-#define MAX_IOV 4
+struct msghdr_head {
+	__u64 msg_name;
+	__u32 msg_namelen;
+	__u32 pad;
+	__u64 msg_iov;
+	__u64 msg_iovlen;
+};
+
+#define MAX_IOV 8
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
@@ -336,12 +427,18 @@ int raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		a.dir = DIR_WRITE;
 		break;
 	case NR_WRITEV:
+	case NR_SENDMSG:
 		a.dir = DIR_WRITE;
 		a.vec = 1;
 		break;
 	case NR_READ:
 	case NR_RECVFROM:
 		a.dir = DIR_READ;
+		break;
+	case NR_READV:
+	case NR_RECVMSG:
+		a.dir = DIR_READ;
+		a.vec = 1;
 		break;
 	case NR_CLOSE: {
 		struct plain_key k = {};
@@ -361,6 +458,14 @@ int raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 	bump(0);
 	if (syscall_args(regs, &a0, &a1, &a2))
 		return 0;
+	if (nr == NR_SENDMSG || nr == NR_RECVMSG) {
+		struct msghdr_head mh = {};
+
+		if (bpf_probe_read_user(&mh, sizeof(mh), (void *)a1))
+			return 0;
+		a1 = mh.msg_iov;
+		a2 = mh.msg_iovlen;
+	}
 	id = bpf_get_current_pid_tgid();
 	a.fd = (__u32)a0;
 	a.buf = a1;
@@ -411,8 +516,10 @@ int raw_sys_exit(struct bpf_raw_tracepoint_args *ctx)
 			bump(7); // the buffer could not be read after the syscall returned
 			return 0;
 		}
-		if (head[0] != 'P' || head[1] != 'O' || head[2] != 'S' || head[3] != 'T' || head[4] != ' ') {
-			bump(4); // a write on a watched process that does not start an HTTP POST (usual: logs, files, other protocols)
+		int is_post = (head[0] == 'P' && head[1] == 'O' && head[2] == 'S' && head[3] == 'T' && head[4] == ' ');
+		int is_h2c = (head[0] == 'P' && head[1] == 'R' && head[2] == 'I' && head[3] == ' ' && head[4] == '*');
+		if (!is_post && !is_h2c) {
+			bump(4); // a write on a watched process that does not start an HTTP POST or h2c preface
 			if (debug_unmatched) {
 				ca.ssl = (1ULL << 62) | a.fd;
 				ca.buf = first;
@@ -422,6 +529,7 @@ int raw_sys_exit(struct bpf_raw_tracepoint_args *ctx)
 			}
 			return 0;
 		}
+		one = is_h2c ? 2 : 1;
 		bpf_map_update_elem(&plain_conns, &k, &one, BPF_ANY);
 		bump(2);
 	} else if (!marked) {

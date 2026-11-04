@@ -70,3 +70,60 @@ def test_poor_quality_when_residual_is_large():
     parsed = parse_request(OPENAI_CHAT, {"model": "m", "messages": [{"role": "user", "content": "x" * 40}]})
     resp = ParsedResponse(usage=Usage(input_total=1000), has_usage=True)
     assert build_record(parsed=parsed, response=resp, counter=C, salt=SALT).quality == "poor"
+
+
+def test_tiktoken_decomposition_matches_openai_chat_token_formula():
+    import pytest
+
+    tiktoken = pytest.importorskip("tiktoken")
+    from tokprof.counting import get_counter
+
+    enc = tiktoken.get_encoding("o200k_base")
+    sys_text = (
+        "# Role\nYou are an autonomous software engineering agent that diagnoses token usage.\n" * 8
+        + "# Rules\nAlways verify before claiming success. Keep diffs minimal and focused.\n" * 10
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a file range from disk and return its numbered lines.",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+            },
+        }
+    ]
+    messages = [
+        {"role": "system", "content": sys_text},
+        {"role": "user", "content": "Check why tests/unit/test_parse.py is failing."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"a.py"}'}}],
+        },
+        {"role": "tool", "tool_call_id": "c1", "name": "read_file", "content": "def test_parse():\n    assert 1 == 1\n" * 20},
+        {"role": "user", "content": "Now run the test suite and summarize the result."},
+    ]
+    body = {"model": "gpt-4o", "messages": messages, "tools": tools}
+    exact_tokens = 3
+    for m in messages:
+        exact_tokens += 3
+        if m.get("content"):
+            exact_tokens += len(enc.encode(m["content"]))
+        for tc in m.get("tool_calls") or []:
+            fn = tc["function"]
+            exact_tokens += len(enc.encode(fn["name"])) + len(enc.encode(fn["arguments"])) + 3
+    for t in tools:
+        exact_tokens += len(enc.encode(json.dumps(t, separators=(",", ":"), sort_keys=True)))
+
+    counter = get_counter("gpt-4o", prefer_tiktoken=True)
+    parsed = parse_request(OPENAI_CHAT, body)
+    rec = build_record(
+        parsed=parsed,
+        response=ParsedResponse(usage=Usage(input_total=exact_tokens, output=15), has_usage=True),
+        counter=counter,
+        salt=SALT,
+    )
+    assert counter.method == "tiktoken:o200k_base"
+    assert rec.quality == "good"
+    assert abs(rec.residual) / exact_tokens <= 0.05

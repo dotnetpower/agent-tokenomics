@@ -23,6 +23,13 @@ type tlsCallArgs struct {
 	Ex  uint32
 }
 
+type tlsGoKey struct {
+	_    structs.HostLayout
+	G    uint64
+	Tgid uint32
+	Dir  uint32
+}
+
 type tlsPlainKey struct {
 	_   structs.HostLayout
 	Pid uint32
@@ -47,9 +54,14 @@ const (
 	tlsMapCounters         = "counters"
 	tlsMapDropped          = "dropped"
 	tlsMapEvents           = "events"
+	tlsMapGoActive         = "go_active"
 	tlsMapPlainConns       = "plain_conns"
 	tlsMapSysActive        = "sys_active"
 	tlsMapWatched          = "watched"
+	tlsProgGoTlsReadEnter  = "go_tls_read_enter"
+	tlsProgGoTlsReadRet    = "go_tls_read_ret"
+	tlsProgGoTlsWriteEnter = "go_tls_write_enter"
+	tlsProgGoTlsWriteRet   = "go_tls_write_ret"
 	tlsProgRawSysEnter     = "raw_sys_enter"
 	tlsProgRawSysExit      = "raw_sys_exit"
 	tlsProgSslLeave        = "ssl_leave"
@@ -106,6 +118,10 @@ type tlsSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tlsProgramSpecs struct {
+	GoTlsReadEnter  *ebpf.ProgramSpec `ebpf:"go_tls_read_enter"`
+	GoTlsReadRet    *ebpf.ProgramSpec `ebpf:"go_tls_read_ret"`
+	GoTlsWriteEnter *ebpf.ProgramSpec `ebpf:"go_tls_write_enter"`
+	GoTlsWriteRet   *ebpf.ProgramSpec `ebpf:"go_tls_write_ret"`
 	RawSysEnter     *ebpf.ProgramSpec `ebpf:"raw_sys_enter"`
 	RawSysExit      *ebpf.ProgramSpec `ebpf:"raw_sys_exit"`
 	SslLeave        *ebpf.ProgramSpec `ebpf:"ssl_leave"`
@@ -123,6 +139,7 @@ type tlsMapSpecs struct {
 	Counters   *ebpf.MapSpec `ebpf:"counters"`
 	Dropped    *ebpf.MapSpec `ebpf:"dropped"`
 	Events     *ebpf.MapSpec `ebpf:"events"`
+	GoActive   *ebpf.MapSpec `ebpf:"go_active"`
 	PlainConns *ebpf.MapSpec `ebpf:"plain_conns"`
 	SysActive  *ebpf.MapSpec `ebpf:"sys_active"`
 	Watched    *ebpf.MapSpec `ebpf:"watched"`
@@ -163,6 +180,7 @@ type tlsMaps struct {
 	Counters   *ebpf.Map `ebpf:"counters"`
 	Dropped    *ebpf.Map `ebpf:"dropped"`
 	Events     *ebpf.Map `ebpf:"events"`
+	GoActive   *ebpf.Map `ebpf:"go_active"`
 	PlainConns *ebpf.Map `ebpf:"plain_conns"`
 	SysActive  *ebpf.Map `ebpf:"sys_active"`
 	Watched    *ebpf.Map `ebpf:"watched"`
@@ -174,6 +192,7 @@ func (m *tlsMaps) Close() error {
 		m.Counters,
 		m.Dropped,
 		m.Events,
+		m.GoActive,
 		m.PlainConns,
 		m.SysActive,
 		m.Watched,
@@ -195,6 +214,10 @@ type tlsVariables struct {
 //
 // It can be passed to loadTlsObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tlsPrograms struct {
+	GoTlsReadEnter  *ebpf.Program `ebpf:"go_tls_read_enter"`
+	GoTlsReadRet    *ebpf.Program `ebpf:"go_tls_read_ret"`
+	GoTlsWriteEnter *ebpf.Program `ebpf:"go_tls_write_enter"`
+	GoTlsWriteRet   *ebpf.Program `ebpf:"go_tls_write_ret"`
 	RawSysEnter     *ebpf.Program `ebpf:"raw_sys_enter"`
 	RawSysExit      *ebpf.Program `ebpf:"raw_sys_exit"`
 	SslLeave        *ebpf.Program `ebpf:"ssl_leave"`
@@ -206,6 +229,10 @@ type tlsPrograms struct {
 
 func (p *tlsPrograms) Close() error {
 	return _TlsClose(
+		p.GoTlsReadEnter,
+		p.GoTlsReadRet,
+		p.GoTlsWriteEnter,
+		p.GoTlsWriteRet,
 		p.RawSysEnter,
 		p.RawSysExit,
 		p.SslLeave,

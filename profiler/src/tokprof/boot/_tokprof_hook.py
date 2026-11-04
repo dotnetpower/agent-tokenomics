@@ -90,17 +90,39 @@ def _flush(timeout=3.0):
 
 
 def _decode(data, encoding):
-    enc = (encoding or "").lower()
-    if "gzip" in enc:
-        data = gzip.decompress(data)
-    elif "deflate" in enc:
-        try:
-            data = zlib.decompress(data)
-        except zlib.error:
-            data = zlib.decompress(data, -zlib.MAX_WBITS)
-    elif enc and enc != "identity":
-        raise ValueError("unsupported content-encoding " + enc)
-    return data.decode("utf-8", "replace")
+    enc = (encoding or "").lower().strip()
+    if not enc or enc == "identity":
+        return data.decode("utf-8", "replace")
+    try:
+        if "gzip" in enc:
+            return gzip.decompress(data).decode("utf-8", "replace")
+        if "deflate" in enc:
+            try:
+                return zlib.decompress(data).decode("utf-8", "replace")
+            except zlib.error:
+                return zlib.decompress(data, -zlib.MAX_WBITS).decode("utf-8", "replace")
+        if "br" in enc:
+            for mod_name in ("brotli", "brotlicffi"):
+                try:
+                    return __import__(mod_name).decompress(data).decode("utf-8", "replace")
+                except Exception:
+                    pass
+            return ""
+        if "zstd" in enc:
+            try:
+                from compression import zstd as _zstd
+
+                return _zstd.decompress(data).decode("utf-8", "replace")
+            except Exception:
+                try:
+                    import zstandard
+
+                    return zstandard.ZstdDecompressor().decompress(data, max_output_size=_CAP).decode("utf-8", "replace")
+                except Exception:
+                    return ""
+    except Exception:
+        return ""
+    return ""
 
 
 class _Capture:
@@ -154,11 +176,24 @@ class _Capture:
 
 
 def _to_text(body):
-    if isinstance(body, (bytes, bytearray)):
+    if isinstance(body, (bytes, bytearray, memoryview)):
         return bytes(body).decode("utf-8", "replace")
     if isinstance(body, str):
         return body
-    return None  # streamed or form bodies are not captured
+    if isinstance(body, dict):
+        try:
+            return json.dumps(body)
+        except Exception:
+            return None
+    if hasattr(body, "read") and hasattr(body, "seek") and hasattr(body, "tell"):
+        try:
+            pos = body.tell()
+            raw = body.read(_CAP)
+            body.seek(pos)
+            return _to_text(raw)
+        except Exception:
+            return None
+    return None  # non-seekable streams or multipart bodies are not captured
 
 
 def _httpx_capture(request, resp):
@@ -266,6 +301,9 @@ def _patch_httpx(httpx):
     sync_cls._tokprof_patched = True
 
 
+_in_requests = threading.local()
+
+
 def _patch_requests(requests):
     from requests.adapters import HTTPAdapter
 
@@ -274,7 +312,11 @@ def _patch_requests(requests):
     orig_send = HTTPAdapter.send
 
     def send(self, request, *args, **kwargs):
-        resp = orig_send(self, request, *args, **kwargs)
+        _in_requests.depth = getattr(_in_requests, "depth", 0) + 1
+        try:
+            resp = orig_send(self, request, *args, **kwargs)
+        finally:
+            _in_requests.depth -= 1
         try:
             parts = urlsplit(request.url)
             text = _to_text(request.body)
@@ -302,6 +344,135 @@ def _patch_requests(requests):
 
     HTTPAdapter.send = send
     HTTPAdapter._tokprof_patched = True
+
+
+def _patch_urllib3(urllib3):
+    from urllib3.connectionpool import HTTPConnectionPool
+
+    if getattr(HTTPConnectionPool, "_tokprof_patched", False):
+        return
+    orig_urlopen = HTTPConnectionPool.urlopen
+
+    def urlopen(self, method, url, body=None, *args, **kwargs):
+        resp = orig_urlopen(self, method, url, body=body, *args, **kwargs)
+        if getattr(_in_requests, "depth", 0) > 0:
+            return resp  # requests already taps this exchange at the HTTPAdapter layer
+        try:
+            parts = urlsplit(url)
+            path = parts.path or "/"
+            host = getattr(self, "host", "") or parts.hostname or ""
+            scheme = getattr(self, "scheme", "http") or parts.scheme or "http"
+            port = getattr(self, "port", None) or parts.port or (443 if scheme == "https" else 80)
+            text = _to_text(body if body is not None else kwargs.get("body"))
+            if text is not None and _is_candidate(method, host, port, path, text):
+                headers = getattr(resp, "headers", {}) or {}
+                cap = _Capture(
+                    path, text,
+                    lambda: (getattr(resp, "status", 200), None, headers.get("content-type", "") or headers.get("Content-Type", ""), True),
+                    host, int(port),
+                )
+                preloaded = getattr(resp, "_body", None)
+                if isinstance(preloaded, (bytes, bytearray)):
+                    cap.add(preloaded)
+                    cap.finish()
+                else:
+                    orig_stream = resp.stream
+                    orig_read = resp.read
+
+                    def stream(amt=65536, decode_content=None, **skw):
+                        try:
+                            for chunk in orig_stream(amt, decode_content=decode_content, **skw):
+                                if chunk:
+                                    cap.add(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
+                                yield chunk
+                        finally:
+                            cap.finish()
+
+                    def read(amt=None, decode_content=None, **rkw):
+                        data = orig_read(amt, decode_content=decode_content, **rkw)
+                        if data:
+                            cap.add(data.encode("utf-8") if isinstance(data, str) else data)
+                        if amt is None or not data:
+                            cap.finish()
+                        return data
+
+                    resp.stream = stream
+                    resp.read = read
+        except Exception as exc:
+            _warn("hook error: %r" % (exc,))
+        return resp
+
+    HTTPConnectionPool.urlopen = urlopen
+    HTTPConnectionPool._tokprof_patched = True
+
+
+def _patch_urllib_request(urllib_request):
+    OpenerDirector = urllib_request.OpenerDirector
+    if getattr(OpenerDirector, "_tokprof_patched", False):
+        return
+    orig_open = OpenerDirector.open
+
+    def open_(self, fullurl, data=None, *args, **kwargs):
+        resp = orig_open(self, fullurl, data, *args, **kwargs)
+        try:
+            if isinstance(fullurl, urllib_request.Request):
+                url = fullurl.full_url
+                body = data if data is not None else fullurl.data
+                method = fullurl.get_method()
+            else:
+                url = str(fullurl)
+                body = data
+                method = "POST" if body is not None else "GET"
+            parts = urlsplit(url)
+            port = parts.port or (443 if parts.scheme == "https" else 80)
+            text = _to_text(body)
+            if text is not None and _is_candidate(method, parts.hostname, port, parts.path, text):
+                headers = getattr(resp, "headers", {}) or {}
+                cap = _Capture(
+                    parts.path or "/", text,
+                    lambda: (getattr(resp, "status", None) or getattr(resp, "code", 200),
+                             headers.get("Content-Encoding") or headers.get("content-encoding"),
+                             headers.get("Content-Type", "") or headers.get("content-type", ""), False),
+                    parts.hostname or "", port,
+                )
+                orig_read = resp.read
+                orig_readline = getattr(resp, "readline", None)
+                orig_close = getattr(resp, "close", None)
+
+                def read(amt=None):
+                    chunk = orig_read() if amt is None else orig_read(amt)
+                    if chunk:
+                        cap.add(chunk)
+                    if amt is None or not chunk:
+                        cap.finish()
+                    return chunk
+
+                def readline(limit=-1):
+                    line = orig_readline() if limit < 0 else orig_readline(limit)
+                    if line:
+                        cap.add(line)
+                    else:
+                        cap.finish()
+                    return line
+
+                def close():
+                    try:
+                        if orig_close:
+                            orig_close()
+                    finally:
+                        cap.finish()
+
+                resp.read = read
+                if orig_readline:
+                    resp.readline = readline
+                if orig_close:
+                    resp.close = close
+        except Exception as exc:
+            _warn("hook error: %r" % (exc,))
+        return resp
+
+    OpenerDirector.open = open_
+    OpenerDirector._tokprof_patched = True
 
 
 def _patch_aiohttp(aiohttp):
@@ -364,7 +535,13 @@ def _tee_aiohttp(resp, path, text, host="", port=0):
         cap.finish()
 
 
-_PATCHERS = {"httpx": _patch_httpx, "requests": _patch_requests, "aiohttp": _patch_aiohttp}
+_PATCHERS = {
+    "httpx": _patch_httpx,
+    "requests": _patch_requests,
+    "urllib3": _patch_urllib3,
+    "aiohttp": _patch_aiohttp,
+    "urllib.request": _patch_urllib_request,
+}
 
 
 class _Finder:

@@ -14,6 +14,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 )
 
 const (
@@ -399,26 +402,17 @@ func decodeBody(h header, body []byte) ([]byte, bool) {
 			body = body[:n]
 		}
 	}
-	switch h.get("content-encoding") {
-	case "gzip":
-		if r, err := gzip.NewReader(bytes.NewReader(body)); err == nil {
-			out, _ := io.ReadAll(io.LimitReader(r, maxDecoded))
-			return out, complete
-		}
+	out, ok := decodeEncoded(body, h.get("content-encoding"))
+	if !ok {
 		return nil, complete
-	case "deflate":
-		out, _ := io.ReadAll(io.LimitReader(flate.NewReader(bytes.NewReader(body)), maxDecoded))
-		return out, complete
-	case "", "identity":
-		return body, complete
 	}
-	return nil, complete // br/zstd are not decoded; counts fall back to local estimates
+	return out, complete
 }
 
 // decodeEncoded applies a content-encoding; ok is false when the encoding cannot be decoded.
 func decodeEncoded(body []byte, enc string) ([]byte, bool) {
-	switch enc {
-	case "gzip":
+	switch strings.TrimSpace(enc) {
+	case "gzip", "x-gzip":
 		r, err := gzip.NewReader(bytes.NewReader(body))
 		if err != nil {
 			return nil, false
@@ -427,6 +421,23 @@ func decodeEncoded(body []byte, enc string) ([]byte, bool) {
 		return out, true
 	case "deflate":
 		out, _ := io.ReadAll(io.LimitReader(flate.NewReader(bytes.NewReader(body)), maxDecoded))
+		return out, true
+	case "br":
+		out, err := io.ReadAll(io.LimitReader(brotli.NewReader(bytes.NewReader(body)), maxDecoded))
+		if err != nil {
+			return nil, false
+		}
+		return out, true
+	case "zstd":
+		zr, err := zstd.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return nil, false
+		}
+		defer zr.Close()
+		out, err := io.ReadAll(io.LimitReader(zr, maxDecoded))
+		if err != nil {
+			return nil, false
+		}
 		return out, true
 	case "", "identity":
 		return body, true

@@ -93,17 +93,19 @@ def check_tokprof(path, expected, err_lines):
 
 H2_SERVER = r"""
 const http2 = require('http2'), fs = require('fs');
-const [port, key, crt] = process.argv.slice(2);
+const [port, key, crt, h2cPort] = process.argv.slice(2);
 const RESP = JSON.stringify({id: 'r1', usage: {prompt_tokens: 77, completion_tokens: 3, total_tokens: 80}, choices: []});
 const SSE1 = 'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n';
 const SSE2 = 'data: {"choices":[],"usage":{"prompt_tokens":77,"completion_tokens":3,"total_tokens":80}}\n\ndata: [DONE]\n\n';
-http2.createSecureServer({key: fs.readFileSync(key), cert: fs.readFileSync(crt)}).on('stream', (st) => {
+const onStream = (st) => {
   let b = ''; st.on('data', (d) => b += d);
   st.on('end', () => {
     if (JSON.parse(b).stream) { st.respond({':status': 200, 'content-type': 'text/event-stream'}); st.write(SSE1); setTimeout(() => st.end(SSE2), 20); }
     else { st.respond({':status': 200, 'content-type': 'application/json'}); st.end(RESP); }
   });
-}).listen(+port, '127.0.0.1');
+};
+http2.createSecureServer({key: fs.readFileSync(key), cert: fs.readFileSync(crt)}).on('stream', onStream).listen(+port, '127.0.0.1');
+if (h2cPort) http2.createServer().on('stream', onStream).listen(+h2cPort, '127.0.0.1');
 """
 
 H2_CLIENT = r"""
@@ -139,6 +141,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -158,7 +161,8 @@ func main() {
 	req, _ := http.NewRequest("POST", url, bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer SECRET-TOKEN")
-	resp, err := http.DefaultClient.Do(req)
+	cli := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+	resp, err := cli.Do(req)
 	if err != nil {
 		fmt.Println("error", err)
 		os.Exit(1)
@@ -261,16 +265,21 @@ def main():
         clients["plain-curl"] = plain_curl
         if os.path.exists(go_client):
             clients["plain-go"] = subprocess.Popen([go_client, flag, purl, body], **quiet)
+            clients["go-tls"] = subprocess.Popen([go_client, flag, url, body], **quiet)
+            clients["go-tls-sse"] = subprocess.Popen([go_client, flag, url, stream], **quiet)
 
         # HTTP/2 can only be followed from the first byte of a connection, so these clients connect after the
         # helper is attached: the Node client waits for the flag file, and curl retries until the server appears.
         h2port = free_port()
+        h2cport = free_port()
         h2url = f"https://127.0.0.1:{h2port}/v1/chat/completions"
+        h2curl = f"http://127.0.0.1:{h2cport}/v1/chat/completions"
         h2srv_js, h2cl_js = os.path.join(tmp, "h2srv.js"), os.path.join(tmp, "h2cl.js")
         open(h2srv_js, "w").write(H2_SERVER)
         open(h2cl_js, "w").write(H2_CLIENT)
         clients["node-h2"] = subprocess.Popen(["node", h2cl_js, flag, h2url, body], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         clients["node-h2-sse"] = subprocess.Popen(["node", h2cl_js, flag, h2url, stream], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        clients["node-h2c"] = subprocess.Popen(["node", h2cl_js, flag, h2curl, body], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         bodyfile = os.path.join(tmp, "body.json")
         open(bodyfile, "w").write(body)
         clients["curl-h2"] = subprocess.Popen(
@@ -307,7 +316,7 @@ def main():
             h.kill()
             return 2
         time.sleep(2.5)  # let it attach to every client (rescan runs every second)
-        h2srv = subprocess.Popen(["node", h2srv_js, str(h2port), key, crt], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        h2srv = subprocess.Popen(["node", h2srv_js, str(h2port), key, crt, str(h2cport)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(0.5)
         open(large_p, "w").write(json.dumps(REQ_LARGE))
         print("flag set at", time.strftime("%H:%M:%S"), f"{time.time() % 1:.3f}"[1:])

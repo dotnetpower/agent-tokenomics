@@ -41,6 +41,23 @@ def _read_state(path: str) -> Optional[dict]:
 
 
 def _alive(pid: int) -> bool:
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+            if not handle:
+                return False
+            try:
+                code = ctypes.c_ulong()
+                if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                    return False
+                return code.value == 259  # STILL_ACTIVE
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return False
     try:
         os.kill(pid, 0)
         return True
@@ -62,8 +79,9 @@ def serve(out: str, state_file: str, extra_maps: Optional[list] = None, use_tikt
     routes, overrides, azure_hosts = build_routes(env, extra_maps)
     writer = JsonlWriter(out)
     token = secrets.token_hex(16)
+    stop = threading.Event()
     gw = Gateway(routes, writer.write, salt=secrets.token_bytes(16), run_id=secrets.token_hex(4),
-                 azure_hosts=azure_hosts, use_tiktoken=use_tiktoken, ingest_token=token)
+                 azure_hosts=azure_hosts, use_tiktoken=use_tiktoken, ingest_token=token, on_shutdown=stop.set)
     thread = GatewayThread(gw)
     port = thread.start()
 
@@ -75,10 +93,9 @@ def serve(out: str, state_file: str, extra_maps: Optional[list] = None, use_tikt
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump({"pid": os.getpid(), "port": port, "out": os.path.abspath(out), "started": time.time(),
-                   "env": child, "originals": originals}, fh)
+                   "token": token, "env": child, "originals": originals}, fh)
     os.replace(tmp, state_file)
 
-    stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
     try:
@@ -187,10 +204,32 @@ def stop(state_file: str, force: bool) -> int:
         print(f"tokprof: the gateway handled a request {h['last_request_age_s']:.0f}s ago; processes started with its environment would "
               "fail after it stops. Stop them first, or use --force.", file=sys.stderr)
         return 2
-    os.kill(st["pid"], signal.SIGTERM)
+    if st.get("token"):
+        try:
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{st['port']}/__tokprof/shutdown",
+                data=b"",
+                headers={"X-Tokprof-Token": st["token"]},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=3) as r:
+                r.read()
+        except Exception:
+            pass
     deadline = time.time() + 15
+    killed = False
     while time.time() < deadline and _alive(st["pid"]):
+        if not killed and (not st.get("token") or time.time() + 10 >= deadline):
+            killed = True
+            try:
+                os.kill(st["pid"], signal.SIGTERM)
+            except OSError:
+                break
         time.sleep(0.1)
+    try:
+        os.remove(state_file)
+    except OSError:
+        pass
     print(f"tokprof: session stopped. Recorded data: {st['out']}")
     print("Processes that were started with the session environment still point at the stopped gateway; "
           "restart them, or restore this shell with: eval \"$(tokprof env --unset)\" (run it BEFORE stopping next time)")

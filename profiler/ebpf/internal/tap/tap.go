@@ -183,6 +183,36 @@ func (t *Tap) attachFile(pid int, pr inspect.Provider) ([]link.Link, error) {
 		return fail(fmt.Errorf("%s: %w", pr.File, err))
 	}
 	opts := &link.UprobeOptions{PID: pid}
+	if pr.Kind == "go-tls" {
+		for _, g := range []struct {
+			sym        string
+			enter, ret *ebpf.Program
+		}{
+			{inspect.GoTLSWriteSym, t.objs.GoTlsWriteEnter, t.objs.GoTlsWriteRet},
+			{inspect.GoTLSReadSym, t.objs.GoTlsReadEnter, t.objs.GoTlsReadRet},
+		} {
+			rets := pr.RetOffsets[g.sym]
+			if len(rets) == 0 {
+				continue
+			}
+			up, err := ex.Uprobe(g.sym, g.enter, opts)
+			if err != nil {
+				return fail(fmt.Errorf("uprobe %s in %s: %w", g.sym, pr.File, err))
+			}
+			ls = append(ls, up)
+			for _, off := range rets {
+				rp, err := ex.Uprobe(g.sym, g.ret, &link.UprobeOptions{PID: pid, Offset: off})
+				if err != nil {
+					return fail(fmt.Errorf("uprobe %s+%#x in %s: %w", g.sym, off, pr.File, err))
+				}
+				ls = append(ls, rp)
+			}
+		}
+		if len(ls) == 0 {
+			return nil, errors.New("no attachable Go crypto/tls symbols")
+		}
+		return ls, nil
+	}
 	for _, sym := range pr.Syms {
 		prog := t.enterProg(sym)
 		if prog == nil {
@@ -345,7 +375,7 @@ func LoadedPrograms() (int, error) {
 		}
 		info, err := p.Info()
 		p.Close()
-		if err == nil && (strings.HasPrefix(info.Name, "ssl_") || strings.HasPrefix(info.Name, "raw_sys_")) {
+		if err == nil && (strings.HasPrefix(info.Name, "ssl_") || strings.HasPrefix(info.Name, "go_tls_") || strings.HasPrefix(info.Name, "raw_sys_")) {
 			n++
 		}
 	}

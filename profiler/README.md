@@ -53,8 +53,8 @@ markdown headings and XML-style tags, and `--component NAME=@file` attributes a 
 
 - **Gateway:** child processes get `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` (and `AZURE_OPENAI_ENDPOINT` when set) pointing at
   `127.0.0.1`. Works for any language whose client honors those variables. Disable with `--no-gateway-env`.
-- **In-process hooks:** `PYTHONPATH` gets a `sitecustomize` that wraps `httpx`, `requests` and `aiohttp`; `NODE_OPTIONS` gets a `--require` shim
-  that wraps global `fetch`. Both copy request and response bodies to the local gateway and never modify traffic. Requests that
+- **In-process hooks:** `PYTHONPATH` gets a `sitecustomize` that wraps `httpx`, `requests`, `urllib3`, `aiohttp` and `urllib.request`; `NODE_OPTIONS` gets a `--require` shim
+  that wraps global `fetch`, `http.request` and `https.request` (covering `axios` and custom agents). Both copy request and response bodies to the local gateway and never modify traffic. Requests that
   already go through the gateway are not recorded twice. Disable with `--no-hooks`. Python's `-I` (isolated) mode ignores
   `PYTHONPATH`, so hooks do not load there.
 - The gateway honors `HTTPS_PROXY` / `NO_PROXY` for its upstream connection (HTTP proxies via CONNECT).
@@ -111,12 +111,11 @@ are counted and reported with the flag that forces them if they are model endpoi
 
 - Outside the eBPF tap, only processes started through `tokprof` (`run`, `shell`, or the environment from `tokprof env`) are captured.
   Already-running processes need the Linux eBPF tap or `tokprof mitm` (see below).
-- Under `tokprof run`, clients that neither honor the base-URL variables nor use `httpx`, `requests`, `aiohttp` or Node `fetch`
-  (for example `axios`, Node's `http`/`https` modules, `urllib3` used directly) are not captured by the gateway or hooks. `tokprof ebpf` (Linux) and `tokprof mitm`
-  see them at the network level.
-- `aiohttp` bodies passed as `data=` are captured only when they are `bytes`/`str`; `requests` bodies only when they are `bytes`/`str`.
+- Under `tokprof run`, clients that neither honor the base-URL variables nor use `httpx`, `requests`, `urllib3`, `aiohttp`, `urllib.request`,
+  Node `fetch` or Node `http`/`https` (for example raw `http.client` or compiled non-Python/Node binaries that hard-code their endpoint)
+  are not captured by the gateway or hooks. `tokprof ebpf` (Linux) and `tokprof mitm` see them at the network level.
+- Non-seekable streaming request bodies (for example a generator passed as `data=`) are not captured by in-process hooks.
 - The gateway opens a new upstream TLS connection per request and asks upstream for uncompressed responses.
-- `tokprof start`/`stop` is POSIX-only for now.
 
 ## Develop
 
@@ -131,12 +130,15 @@ tokprof selftest
 `tokprof ebpf` watches processes that are **already running** and records their LLM calls like any other capture. The agent is not
 modified, restarted or reconfigured. Two probe sets cover both kinds of traffic:
 
-- **HTTPS:** uprobes on the TLS library (`SSL_write`/`SSL_read` and the `_ex` variants) read the plaintext.
-- **Plain `http://`** (for example an on-prem vLLM on `http://gpu-box:8000`): no TLS library is involved, so the `write`, `writev`,
-  `sendto`, `read`, `recvfrom` and `close` syscalls of the selected processes are observed. A socket is copied only after a write that starts with
-  `POST ` has marked it, and it is unmarked when the exchange is complete. Disable with `--no-plain`.
+- **HTTPS:** uprobes on OpenSSL-compatible TLS libraries (`SSL_write`/`SSL_read` and the `_ex` variants) and Go's `crypto/tls`
+  (`crypto/tls.(*Conn).Write` and `crypto/tls.(*Conn).Read`, using entry + `RET`-offset uprobes rather than `uretprobe` so goroutine stack
+  growth is never disturbed) read the plaintext.
+- **Plain `http://`** (for example an on-prem vLLM on `http://gpu-box:8000` or cleartext HTTP/2 `h2c`): no TLS library is involved, so the
+  `write`, `writev`, `sendto`, `sendmsg`, `read`, `readv`, `recvfrom`, `recvmsg` and `close` syscalls of the selected processes are observed
+  via raw tracepoints. A socket is copied only after a write that starts with `POST ` or the HTTP/2 `PRI *` preface has marked it, and HTTP/1.1
+  sockets are unmarked when the exchange is complete. Disable with `--no-plain`.
 
-The helper rebuilds HTTP/1.1 (and HTTP/2 over TLS) exchanges and keeps the ones that look like LLM calls.
+The helper rebuilds HTTP/1.1 and HTTP/2 (both TLS and `h2c`) exchanges, decodes `gzip`, `deflate`, `br` and `zstd` bodies, and keeps the ones that look like LLM calls.
 
 ```bash
 cd ebpf && go build -o bin/tokprof-ebpf ./cmd/tokprof-ebpf     # Go 1.25+; the compiled BPF object is committed, clang is not needed
@@ -153,15 +155,14 @@ tokprof ebpf --comm node,python --out run.jsonl                   # by name; new
   counts, hashes and names as usual.
 - **Cleanup:** probes are file descriptors owned by the helper process, so the kernel removes them when the helper exits, even if it
   is killed. Closing the stdin of `tokprof-ebpf trace --exit-on-stdin-eof` (what `tokprof ebpf` does) makes it detach and exit cleanly.
-- **Works with:** plain HTTP/1.1 from any language whose runtime uses those syscalls (verified: system and `uv` Python, Node.js `fetch` (libuv `writev`),
-  Go `net/http`, curl; JSON, SSE and a 144 KB body), and OpenSSL-compatible libraries that export `SSL_write`/`SSL_read` (system Python, curl, Node.js) and statically linked
-  builds that keep those symbols in `.symtab` (for example `uv`-managed Python). Verified on Linux x86-64, kernel 6.18. An arm64 object is built from the same program and checked by CI on an arm64 runner.
-- **HTTP/2:** followed (HPACK, interleaved streams, SSE) for connections that were opened **after** the tap attached, because the
+- **Works with:** plain HTTP/1.1 and `h2c` from any language whose runtime uses those syscalls (verified: system and `uv` Python, Node.js `fetch` and `http2`,
+  Go `net/http`, curl; JSON, SSE and a 144 KB body), OpenSSL-compatible libraries that export `SSL_write`/`SSL_read` (system Python, curl, Node.js) or keep
+  them in `.symtab` (`uv`-managed Python), and unstripped Go binaries using `crypto/tls` (`go-tls`). Verified on Linux x86-64 (kernel 6.18) and arm64 (CI runner, kernel 7.0).
+- **HTTP/2:** followed (HPACK, interleaved streams, SSE, both TLS and `h2c`) for connections that were opened **after** the tap attached, because the
   header-compression state of an existing connection is unknown. A connection already in progress is counted as `non_http`.
-- **Does not capture:** Go `crypto/tls`, Java, Rust with rustls (all TLS; their plain HTTP is captured), cleartext HTTP/2 (`h2c`), the *server* side of a connection
-  (attach to the clients), `sendmsg`/`recvmsg`/`readv` based clients, more than 4 `writev` buffers per call, processes in another mount namespace,
-  responses compressed with `br`/`zstd` (the response is then estimated locally), and very short-lived processes that finish before the
-  helper attaches (it rescans every second; use `tokprof run` for those).
+- **Does not capture:** stripped Go TLS binaries (no `.symtab`), Java TLS, Rust with rustls (their plain HTTP is captured), the *server* side of a connection
+  (attach to the clients), more than 8 `iovec` buffers per vector syscall, processes in another mount namespace,
+  and very short-lived processes that finish before the helper attaches (it rescans every second; use `tokprof run` for those).
 - **Overhead (measured, WSL2):** 3 × 3,000 keep-alive HTTPS POSTs with 4 KiB bodies: mean 0.378 ms without the tap, 0.373 ms with
   it, 100% of calls captured, no kernel drops (`python3 ebpf/e2e/bench.py --helper ebpf/bin/tokprof-ebpf --sudo`). The plain-HTTP syscall probes run on
   every `read`/`write` of every process while the helper is attached: a 64-byte `write` to `/dev/null` went from 119 ns to 146 ns in a process that is not

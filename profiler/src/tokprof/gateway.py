@@ -196,6 +196,7 @@ class Gateway:
         ingest_token: Optional[str] = None,
         detector: Optional[Detector] = None,
         record_hosts: bool = False,
+        on_shutdown: Optional[Callable[[], None]] = None,
     ):
         self.routes = sorted(routes, key=lambda r: -len(r.prefix))
         self.sink = sink
@@ -209,6 +210,7 @@ class Gateway:
         self.ingest_token = ingest_token
         self.detector = detector or Detector()
         self.record_hosts = record_hosts or os.environ.get("TOKPROF_RECORD_HOSTS") == "1"
+        self.on_shutdown = on_shutdown
         self.stats = {"requests": 0, "recorded": 0, "record_errors": 0, "bypassed": 0}
         self._active = 0
         self._last_request: Optional[float] = None
@@ -308,6 +310,12 @@ class Gateway:
         if target.startswith("/__tokprof/health"):
             age = None if self._last_request is None else time.time() - self._last_request
             return await self._respond(writer, 200, "OK", json.dumps({"ok": True, "last_request_age_s": age, **self.stats}).encode(), "application/json")
+        if target.startswith("/__tokprof/shutdown") and method == "POST":
+            if self.ingest_token is None or hd.get("x-tokprof-token") != self.ingest_token:
+                return await self._respond(writer, 403, "Forbidden", b"tokprof: bad shutdown token")
+            if self.on_shutdown is not None:
+                self.on_shutdown()
+            return await self._respond(writer, 204, "No Content", b"")
         self._last_request = time.time()
         if target.startswith("/__tokprof/ingest") and method == "POST":
             body = await _read_request_body(reader, hd, leftover)

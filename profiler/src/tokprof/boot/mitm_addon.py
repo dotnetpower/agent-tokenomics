@@ -27,17 +27,39 @@ _CAP = 32 * 1024 * 1024
 
 
 def _decode(data, encoding):
-    enc = (encoding or "").lower()
-    if "gzip" in enc:
-        return gzip.decompress(data)
-    if "deflate" in enc:
-        try:
-            return zlib.decompress(data)
-        except zlib.error:
-            return zlib.decompress(data, -zlib.MAX_WBITS)
-    if enc and enc != "identity":
-        raise ValueError("unsupported content-encoding " + enc)
-    return data
+    enc = (encoding or "").lower().strip()
+    if not enc or enc == "identity":
+        return data
+    try:
+        if "gzip" in enc:
+            return gzip.decompress(data)
+        if "deflate" in enc:
+            try:
+                return zlib.decompress(data)
+            except zlib.error:
+                return zlib.decompress(data, -zlib.MAX_WBITS)
+        if "br" in enc:
+            for mod_name in ("brotli", "brotlicffi"):
+                try:
+                    return __import__(mod_name).decompress(data)
+                except Exception:
+                    pass
+            return b""
+        if "zstd" in enc:
+            try:
+                from compression import zstd as _zstd
+
+                return _zstd.decompress(data)
+            except Exception:
+                try:
+                    import zstandard
+
+                    return zstandard.ZstdDecompressor().decompress(data, max_output_size=_CAP)
+                except Exception:
+                    return b""
+    except Exception:
+        return b""
+    return b""
 
 
 def _plausible(method, path, text):

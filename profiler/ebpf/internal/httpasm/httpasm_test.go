@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 )
 
 func chunked(parts ...string) string {
@@ -134,5 +137,35 @@ func TestInterimContinueIsSkipped(t *testing.T) {
 	})
 	if len(got) != 1 || got[0].Status != 200 {
 		t.Fatalf("unexpected: %+v", got)
+	}
+}
+
+func TestBrotliAndZstdResponses(t *testing.T) {
+	body := `{"usage":{"prompt_tokens":19,"completion_tokens":4}}`
+	var brBuf bytes.Buffer
+	bw := brotli.NewWriter(&brBuf)
+	bw.Write([]byte(body))
+	bw.Close()
+
+	var zsBuf bytes.Buffer
+	zw, _ := zstd.NewWriter(&zsBuf)
+	zw.Write([]byte(body))
+	zw.Close()
+
+	for _, tc := range []struct {
+		enc  string
+		data string
+	}{
+		{"br", brBuf.String()},
+		{"zstd", zsBuf.String()},
+	} {
+		raw := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Encoding: %s\r\nContent-Length: %d\r\n\r\n%s", tc.enc, len(tc.data), tc.data)
+		got := run(t, func(a *Assembler, now time.Time) {
+			a.Feed(7, "c", 1, DirWrite, []byte(request("/v1/chat/completions", reqBody)), now)
+			a.Feed(7, "c", 1, DirRead, []byte(raw), now)
+		})
+		if len(got) != 1 || got[0].Response != body {
+			t.Fatalf("%s: got %+v", tc.enc, got)
+		}
 	}
 }

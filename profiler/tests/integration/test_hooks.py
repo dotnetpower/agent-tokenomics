@@ -64,6 +64,53 @@ async def main():
 asyncio.run(main())
 """
 
+URLLIB3_CLIENT = r"""
+import json, os, urllib3
+base = os.environ["MOCK_URL"]
+msgs = [{"role": "system", "content": "# Role\nBe brief.\n" + "rule. " * 80}, {"role": "user", "content": "hello"}]
+pm = urllib3.PoolManager()
+r1 = pm.request("POST", base + "/v1/chat/completions", body=json.dumps({"model": "gpt-4o", "messages": msgs}).encode(), headers={"Content-Type": "application/json"})
+assert r1.status == 200
+r2 = pm.request("POST", base + "/v1/chat/completions", body=json.dumps({"model": "gpt-4o", "messages": msgs, "stream": True}).encode(), headers={"Content-Type": "application/json"}, preload_content=False)
+for _ in r2.stream(1024):
+    pass
+r2.release_conn()
+"""
+
+URLLIB_STDLIB_CLIENT = r"""
+import json, os, urllib.request
+base = os.environ["MOCK_URL"]
+msgs = [{"role": "system", "content": "# Role\nBe brief.\n" + "rule. " * 80}, {"role": "user", "content": "hello"}]
+for stream in (False, True):
+    req = urllib.request.Request(base + "/v1/chat/completions", data=json.dumps({"model": "gpt-4o", "messages": msgs, "stream": stream}).encode(), headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        r.read()
+"""
+
+NODE_HTTP_CLIENT = r"""
+const http = require("http");
+const u = new URL(process.env.MOCK_URL);
+function post(bodyObj) {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(bodyObj);
+    const req = http.request({
+      hostname: u.hostname, port: u.port, path: "/v1/chat/completions", method: "POST",
+      headers: {"Content-Type": "application/json", "Content-Length": Buffer.byteLength(data)}
+    }, (res) => {
+      res.on("data", () => {});
+      res.on("end", resolve);
+    });
+    req.on("error", reject);
+    req.write(data.slice(0, 10));
+    req.end(data.slice(10));
+  });
+}
+(async () => {
+  await post({model: "gpt-4o", messages: [{role: "system", content: "terse"}, {role: "user", content: "node http.request"}]});
+  await post({model: "gpt-4o", stream: true, messages: [{role: "user", content: "node http.request stream"}]});
+})().then(() => setTimeout(() => process.exit(0), 300)).catch((e) => { console.error(e); process.exit(1); });
+"""
+
 
 @pytest.fixture()
 def mock():
@@ -135,7 +182,15 @@ def test_hook_never_breaks_the_app_when_gateway_is_unreachable(tmp_path, mock):
     assert r.returncode == 0, r.stderr
 
 
-@pytest.mark.parametrize("lib,script", [("requests", REQUESTS_CLIENT), ("aiohttp", AIOHTTP_CLIENT)])
+@pytest.mark.parametrize(
+    "lib,script",
+    [
+        ("requests", REQUESTS_CLIENT),
+        ("aiohttp", AIOHTTP_CLIENT),
+        ("urllib3", URLLIB3_CLIENT),
+        ("urllib.request", URLLIB_STDLIB_CLIENT),
+    ],
+)
 def test_python_hook_captures_requests_and_aiohttp(tmp_path, mock, lib, script):
     pytest.importorskip(lib)
     out = tmp_path / f"{lib}.jsonl"
@@ -145,3 +200,13 @@ def test_python_hook_captures_requests_and_aiohttp(tmp_path, mock, lib, script):
     assert len(recs) == 2 and sorted(r["stream"] for r in recs) == [False, True]
     assert all(r["usage"].get("input_total") for r in recs)
     assert "system" in {s["kind"] for r in recs for s in r["segments"]}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_node_hook_captures_http_request(tmp_path, mock):
+    out = tmp_path / "node_http.jsonl"
+    code = run(["node", "-e", NODE_HTTP_CLIENT], out, mock, gateway_env=False, hooks=True)
+    assert code == 0
+    recs = list(read_jsonl(str(out)))
+    assert len(recs) == 2 and sorted(r["stream"] for r in recs) == [False, True]
+    assert all(r["usage"].get("input_total") for r in recs)

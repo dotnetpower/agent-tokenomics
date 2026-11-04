@@ -67,13 +67,13 @@ tokprof report .tokprof/run-*.jsonl --prices prices.json
 tokprof compare before.jsonl after.jsonl        # 부트스트랩 구간, 3단계와 5단계용
 ```
 
-- **수집 방식**: `tokprof run`은 `127.0.0.1`에 게이트웨이를 띄우고, **해당 명령에서만** `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `AZURE_OPENAI_ENDPOINT`를 그곳으로 향하게 합니다. 엔드포인트를 코드에 고정한 클라이언트를 위해 프로세스 내부 훅(`sitecustomize`를 통한 Python `httpx`, `--require`를 통한 Node `fetch`)도 함께 로드합니다. `tokprof start` / `env` / `stop`은 셸에서 새로 시작하는 프로세스를 위한 백그라운드 세션을 유지합니다.
+- **수집 방식**: `tokprof run`은 `127.0.0.1`에 게이트웨이를 띄우고, **해당 명령에서만** `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `AZURE_OPENAI_ENDPOINT`와 패턴으로 찾은 기본 URL 변수(`VLLM_BASE_URL`, `OLLAMA_HOST` 등)를 그곳으로 향하게 합니다. 엔드포인트를 코드에 고정한 클라이언트를 위해 프로세스 내부 훅(`sitecustomize`를 통한 Python `httpx`, `requests`, `urllib3`, `aiohttp`, `urllib.request`와 `--require`를 통한 Node `fetch`, `http.request`, `https.request`)도 함께 로드합니다. `tokprof start` / `env` / `stop`은 셸에서 새로 시작하는 프로세스를 위한 백그라운드 세션을 유지합니다.
 - **LLM 호출로 인식하는 기준**: 고정된 URL 목록이 아닙니다. `tokprof`는 요청 본문의 형태(`messages` 목록, Gemini `contents`, Responses 방식의 `input`, `prompt`), 경로, 호스트(사설 DNS, RFC 1918, `.svc.cluster.local`, `privatelink`, `vllm`·`ollama` 같은 이름, 관례적인 포트), 그리고 모호한 본문에 대해서는 응답(사용량 카운터, `choices`, Ollama·llama.cpp·TGI 카운터)을 함께 점수화합니다. 그래서 사설 DNS 엔드포인트, 온프레미스 vLLM, Ollama, TGI, llama.cpp, LiteLLM 방식 게이트웨이, Azure 프라이빗 엔드포인트, Gemini를 모두 인식합니다. `tokprof explain <url> --body request.json`은 요청이 기록되었거나 기록되지 않은 이유를 보여 주고, `--llm-host`, `--llm-path`, `--exclude-host`로 판정을 직접 지정할 수 있습니다. 사설 CA는 `SSL_CERT_FILE` 또는 `--upstream-ca`로 신뢰합니다.
 - **보여 주는 것**: 시스템 프롬프트(구간별), 이력, 현재 프롬프트, 도구 정의·호출·결과별 입력 토큰, 고정 오버헤드, 단계별 토큰 지도, 요청당 호출 수, 사용되지 않는 도구, 반복되는 정적 블록.
 - **저장하는 것**: 토큰 수, 솔트 해시, 길이, 구간·도구 이름입니다. 프롬프트 원문, 헤더, 키는 저장하지 않습니다.
 - **정확도**: 제공자는 합계만 알려 주므로 구간별 수치는 로컬 추정치이고 나머지는 *미분류*로 표시됩니다. OpenAI 계열 모델은 `tiktoken`을 설치하세요. 분해 결과를 믿기 전에 잔차를 확인하세요.
-- **이미 실행 중인 프로세스(Linux)**: `tokprof ebpf --pid <PID>`는 프로세스의 TLS 라이브러리에 eBPF 프로브를 연결해, 재시작이나 변경 없이 LLM 호출을 기록하며, 온프레미스 서버로 가는 평문 `http://` 호출도 포함합니다. root 또는 `CAP_BPF` 권한이 필요합니다. HTTP/1.1과 HTTP/2(관찰을 시작한 뒤 열린 TLS 연결)는 따라가지만 Go `crypto/tls`는 볼 수 없습니다. 자세한 내용은 [profiler README](https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler#linux-ebpf-tap-running-processes-no-restart-no-code-change)를 참고하세요.
-- **현재 한계**: eBPF 관찰을 제외하면 `tokprof`로 시작한 프로세스만 수집합니다. 기본 URL 환경 변수를 따르지 않으면서 `httpx`, `requests`, `aiohttp`, Node `fetch` 중 어느 것도 쓰지 않는 클라이언트는 `tokprof run`으로 수집되지 않습니다. Windows와 macOS에서는 `tokprof mitm --local <프로세스>`가 mitmproxy의 로컬 캡처를 사용합니다(관리자 권한과 mitmproxy CA 신뢰가 필요합니다).
+- **이미 실행 중인 프로세스(Linux)**: `tokprof ebpf --pid <PID>`는 프로세스의 TLS 라이브러리(OpenSSL 및 Go `crypto/tls`)와 시스템 콜 트레이스포인트에 eBPF 프로브를 연결해, 재시작이나 변경 없이 LLM 호출을 기록하며, 온프레미스 서버로 가는 평문 `http://` 및 `h2c` 호출도 포함합니다. root 또는 `CAP_BPF` 권한이 필요하며, 관찰을 시작한 뒤 열린 HTTP/1.1과 HTTP/2 연결을 따라갑니다. 자세한 내용은 [profiler README](https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler#linux-ebpf-tap-running-processes-no-restart-no-code-change)를 참고하세요.
+- **현재 한계**: eBPF 관찰을 제외하면 `tokprof`로 시작한 프로세스만 수집합니다. 기본 URL 환경 변수를 따르지 않으면서 `httpx`, `requests`, `urllib3`, `aiohttp`, `urllib.request`, Node `fetch`, Node `http`/`https` 중 어느 것도 쓰지 않는 클라이언트는 `tokprof run`으로 수집되지 않습니다. Windows와 macOS에서는 `tokprof mitm --local <프로세스>`가 mitmproxy의 로컬 캡처를 사용합니다(관리자 권한과 mitmproxy CA 신뢰가 필요합니다).
 
 ## 점검 항목
 

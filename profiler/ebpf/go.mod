@@ -7,6 +7,10 @@ require (
 	golang.org/x/sys v0.49.0
 )
 
-require golang.org/x/net v0.62.0
+require (
+	github.com/andybalholm/brotli v1.2.7
+	github.com/klauspost/compress v1.20.3
+	golang.org/x/net v0.62.0
+)
 
 require golang.org/x/text v0.43.0 // indirect

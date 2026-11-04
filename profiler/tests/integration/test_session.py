@@ -9,8 +9,6 @@ from tokprof._mock_llm import MockProcess
 from tokprof.session import render_env
 from tokprof.store import read_jsonl
 
-pytestmark = pytest.mark.skipif(os.name == "nt", reason="background session is POSIX-only for now")
-
 
 def cli(*args, env=None, check=True):
     r = subprocess.run([sys.executable, "-m", "tokprof", *args], capture_output=True, text=True, env=env, timeout=60)

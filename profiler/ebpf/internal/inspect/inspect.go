@@ -8,6 +8,7 @@ package inspect
 import (
 	"bufio"
 	"debug/elf"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,11 +18,17 @@ import (
 
 var sslSymbols = []string{"SSL_write", "SSL_read", "SSL_write_ex", "SSL_read_ex"}
 
+const (
+	GoTLSWriteSym = "crypto/tls.(*Conn).Write"
+	GoTLSReadSym  = "crypto/tls.(*Conn).Read"
+)
+
 // Provider describes one mapped ELF file that defines TLS entry points.
 type Provider struct {
-	File string   `json:"file"`
-	Kind string   `json:"kind"` // "exported" (dynsym) | "local" (symtab only, e.g. statically linked)
-	Syms []string `json:"symbols"`
+	File       string              `json:"file"`
+	Kind       string              `json:"kind"` // "exported" (dynsym) | "local" (symtab) | "go-tls" (Go crypto/tls)
+	Syms       []string            `json:"symbols"`
+	RetOffsets map[string][]uint64 `json:"ret_offsets,omitempty"`
 }
 
 // Process is the result for one PID.
@@ -152,7 +159,7 @@ func scanProcess(procRoot string, pid int, cache map[string]*fileInfo) Process {
 	case len(p.Providers) > 0:
 		p.Attach = "yes"
 	case p.GoTLS:
-		p.Attach, p.Note = "go-only", "Go crypto/tls: needs a Go-specific probe (not implemented)"
+		p.Attach, p.Note = "go-only", "Go crypto/tls: RET offsets not found (unsupported ABI or architecture)"
 	}
 	return p
 }
@@ -175,14 +182,32 @@ func inspectFile(path string) *fileInfo {
 		}
 	}
 	if sym, err := ef.Symbols(); err == nil {
-		for _, s := range sym {
+		var goWrite, goRead *elf.Symbol
+		for i := range sym {
+			s := &sym[i]
 			if isTLS(s.Name) && s.Section != elf.SHN_UNDEF && elf.ST_TYPE(s.Info) == elf.STT_FUNC {
 				if _, ok := found[s.Name]; !ok {
 					found[s.Name] = "local"
 				}
 			}
-			if s.Name == "crypto/tls.(*Conn).Write" {
+			switch s.Name {
+			case GoTLSWriteSym:
 				fi.goTLS = true
+				goWrite = s
+			case GoTLSReadSym:
+				goRead = s
+			}
+		}
+		if found["SSL_write"] == "" && goWrite != nil && goRead != nil {
+			wRets := findGoRetOffsets(ef, *goWrite)
+			rRets := findGoRetOffsets(ef, *goRead)
+			if len(wRets) > 0 && len(rRets) > 0 {
+				fi.provider = &Provider{
+					File:       path,
+					Kind:       "go-tls",
+					Syms:       []string{GoTLSWriteSym, GoTLSReadSym},
+					RetOffsets: map[string][]uint64{GoTLSWriteSym: wRets, GoTLSReadSym: rRets},
+				}
 			}
 		}
 	}
@@ -199,6 +224,42 @@ func inspectFile(path string) *fileInfo {
 		fi.provider = &Provider{File: path, Kind: kind, Syms: names}
 	}
 	return fi
+}
+
+// findGoRetOffsets locates the RET instructions in a Go function so uprobes can be
+// placed at function return without using uretprobe (which rewrites stack return
+// addresses and breaks Go stack growth / scanning).
+func findGoRetOffsets(ef *elf.File, s elf.Symbol) []uint64 {
+	if s.Size == 0 || int(s.Section) >= len(ef.Sections) {
+		return nil
+	}
+	sec := ef.Sections[s.Section]
+	if s.Value < sec.Addr {
+		return nil
+	}
+	buf := make([]byte, s.Size)
+	if _, err := sec.ReadAt(buf, int64(s.Value-sec.Addr)); err != nil {
+		return nil
+	}
+	var out []uint64
+	switch ef.Machine {
+	case elf.EM_X86_64:
+		for i := 5; i < len(buf); i++ {
+			// Go amd64 frame epilogue: add $imm8/$imm32, %rsp; pop %rbp (0x5d); ret (0xc3)
+			if buf[i] == 0xc3 && buf[i-1] == 0x5d &&
+				((buf[i-5] == 0x48 && buf[i-4] == 0x83 && buf[i-3] == 0xc4) ||
+					(i >= 8 && buf[i-8] == 0x48 && buf[i-7] == 0x81 && buf[i-6] == 0xc4)) {
+				out = append(out, uint64(i))
+			}
+		}
+	case elf.EM_AARCH64:
+		for i := 0; i+4 <= len(buf); i += 4 {
+			if binary.LittleEndian.Uint32(buf[i:i+4]) == 0xd65f03c0 {
+				out = append(out, uint64(i))
+			}
+		}
+	}
+	return out
 }
 
 func isTLS(name string) bool {
