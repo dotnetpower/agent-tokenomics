@@ -361,8 +361,8 @@ func LoadedPrograms() (int, error) {
 
 // Counters returns the kernel-side debug counters: syscalls seen on watched processes, completed ones,
 // sockets marked as HTTP POST, chunks emitted, writes that were not a POST, exits without an entry, and exits of unwatched tasks.
-func (t *Tap) Counters() [8]uint64 {
-	var out [8]uint64
+func (t *Tap) Counters() [16]uint64 {
+	var out [16]uint64
 	for i := range out {
 		_ = t.objs.Counters.Lookup(uint32(i), &out[i])
 	}

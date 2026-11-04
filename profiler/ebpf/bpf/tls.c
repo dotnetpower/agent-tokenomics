@@ -271,7 +271,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 8);
+	__uint(max_entries, 16);
 	__type(key, __u32);
 	__type(value, __u64);
 } counters SEC(".maps");
@@ -317,6 +317,9 @@ static __always_inline int sys_enter(struct sys_enter_ctx *c, __u32 dir, __u32 v
 		if (comm[0] == 'g' && comm[1] == 'o' && comm[2] == 'c' && comm[3] == 'l') { // testing only: follow the Go e2e client
 			struct call_args da = {};
 
+			if (dir == DIR_WRITE)
+				bump(8); // a write-type syscall entered by the Go client, before anything is read from user memory
+
 			da.ssl = (1ULL << 61) | ((__u64)(c->id & 0xffff) << 32) | (__u32)c->args[0];
 			da.buf = vec ? 0 : c->args[1];
 			da.dir = dir;
@@ -357,6 +360,13 @@ static __always_inline int sys_exit(struct sys_exit_ctx *c)
 	}
 	k.pid = tgid;
 	k.fd = a.fd;
+	if (debug_unmatched && a.dir == DIR_WRITE) {
+		char comm[8] = {};
+
+		bpf_get_current_comm(comm, sizeof(comm));
+		if (comm[0] == 'g' && comm[1] == 'o' && comm[2] == 'c' && comm[3] == 'l')
+			bump(9); // the matching exit
+	}
 	marked = bpf_map_lookup_elem(&plain_conns, &k);
 	if (a.dir == DIR_WRITE && !marked) {
 		char head[5];
