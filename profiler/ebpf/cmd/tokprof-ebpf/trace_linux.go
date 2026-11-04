@@ -269,7 +269,8 @@ func runTrace(args []string) {
 	}
 	dropped := t.Dropped()
 	if *verbose {
-		logf("plain-HTTP probe counters: seen=%d completed=%d marked=%d emitted=%d", t.Counters()[0], t.Counters()[1], t.Counters()[2], t.Counters()[3])
+		c := t.Counters()
+		logf("plain-HTTP probe counters: seen=%d completed=%d marked=%d emitted=%d not_post=%d exit_unwatched=%d", c[0], c[1], c[2], c[3], c[4], c[6])
 	}
 	closeStart := time.Now()
 	t.Close()

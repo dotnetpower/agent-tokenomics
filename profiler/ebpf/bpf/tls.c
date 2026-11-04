@@ -330,14 +330,16 @@ static __always_inline int sys_exit(struct sys_exit_ctx *c)
 	long ret = c->ret;
 
 	if (!ap)
-		return 0;
+		return 0; // the entry was filtered out (not a watched process): by far the common case
 	bump(1);
 	a = *ap;
 	bpf_map_delete_elem(&sys_active, &id);
 	if (ret <= 0 || ret > 0x7fffffff || (!a.vec && (__u64)ret > a.len))
 		return 0;
-	if (!watching(&tgid))
+	if (!watching(&tgid)) {
+		bump(6);
 		return 0;
+	}
 	k.pid = tgid;
 	k.fd = a.fd;
 	marked = bpf_map_lookup_elem(&plain_conns, &k);
@@ -355,8 +357,10 @@ static __always_inline int sys_exit(struct sys_exit_ctx *c)
 		}
 		if (bpf_probe_read_user(head, sizeof(head), (void *)first))
 			return 0;
-		if (head[0] != 'P' || head[1] != 'O' || head[2] != 'S' || head[3] != 'T' || head[4] != ' ')
+		if (head[0] != 'P' || head[1] != 'O' || head[2] != 'S' || head[3] != 'T' || head[4] != ' ') {
+			bump(4); // a write on a watched process that does not start an HTTP POST (usual: logs, files, other protocols)
 			return 0;
+		}
 		bpf_map_update_elem(&plain_conns, &k, &one, BPF_ANY);
 		bump(2);
 	} else if (!marked) {
