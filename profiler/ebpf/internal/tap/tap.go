@@ -51,19 +51,21 @@ type Event struct {
 }
 
 type Tap struct {
-	objs   tlsObjects
-	reader *ringbuf.Reader
-	mu     sync.Mutex
-	links  map[int]map[string][]link.Link
-	once   sync.Once
-	tps    []link.Link // syscall tracepoints for plain HTTP
-	base   time.Time   // wall-clock time of CLOCK_MONOTONIC == 0
+	objs      tlsObjects
+	reader    *ringbuf.Reader
+	mu        sync.Mutex
+	fileLinks map[string][]link.Link
+	pidFiles  map[int]map[string]bool
+	once      sync.Once
+	tps       []link.Link // syscall tracepoints for plain HTTP
+	base      time.Time   // wall-clock time of CLOCK_MONOTONIC == 0
 }
 
 // Options tune what the kernel side watches.
 type Options struct {
-	WatchAll bool // observe plain HTTP in every process (otherwise only those added with Watch)
-	NoPlain  bool // do not attach the syscall tracepoints at all
+	WatchAll  bool   // observe plain HTTP in every process (otherwise only those added with Watch)
+	NoPlain   bool   // do not attach the syscall tracepoints at all
+	IgnorePID uint32 // extra PID (such as the tokprof gateway) to ignore
 	// DebugUnmatched reports the first bytes of writes that did not start an HTTP POST (testing only).
 	DebugUnmatched bool
 }
@@ -75,12 +77,19 @@ func New(opts Options) (*Tap, error) {
 	}
 	var ts unix.Timespec
 	_ = unix.ClockGettime(unix.CLOCK_MONOTONIC, &ts)
-	t := &Tap{base: time.Now().Add(-time.Duration(ts.Nano())), links: map[int]map[string][]link.Link{}}
+	t := &Tap{
+		base:      time.Now().Add(-time.Duration(ts.Nano())),
+		fileLinks: map[string][]link.Link{},
+		pidFiles:  map[int]map[string]bool{},
+	}
 	spec, err := loadTls()
 	if err != nil {
 		return nil, fmt.Errorf("load eBPF spec: %w", err)
 	}
 	_ = spec.Variables["self_tgid"].Set(uint32(os.Getpid()))
+	if opts.IgnorePID != 0 {
+		_ = spec.Variables["ignore_tgid"].Set(opts.IgnorePID)
+	}
 	if opts.DebugUnmatched {
 		_ = spec.Variables["debug_unmatched"].Set(uint32(1))
 	}
@@ -124,8 +133,15 @@ func (t *Tap) attachSyscalls() error {
 	return nil
 }
 
-// Watch makes the plain-HTTP syscall probes look at one process.
+// Watch makes the probes look at one process.
 func (t *Tap) Watch(pid int) { _ = t.objs.Watched.Put(uint32(pid), uint8(1)) }
+
+// WatchCgroup makes the probes look at every process in a container cgroup (including short-lived docker exec children).
+func (t *Tap) WatchCgroup(cgroupID uint64) {
+	if cgroupID != 0 {
+		_ = t.objs.WatchedCgroups.Put(cgroupID, uint8(1))
+	}
+}
 
 // Unwatch stops looking at a process (used after it exits).
 func (t *Tap) Unwatch(pid int) { _ = t.objs.Watched.Delete(uint32(pid)) }
@@ -136,33 +152,46 @@ func (t *Tap) ClearPlain(pid uint32, fd uint32) {
 	_ = t.objs.PlainConns.Delete(plainKey{pid, fd})
 }
 
-// Attach installs probes in every TLS provider of the process that is not
-// attached yet, so it can be called again when a library is loaded later.
-// Each provider file is all-or-nothing: on failure its partial probes are removed.
+func inodeKey(path string) string {
+	var st syscall.Stat_t
+	if err := syscall.Stat(path, &st); err == nil {
+		return fmt.Sprintf("%d:%d", st.Dev, st.Ino)
+	}
+	return path
+}
+
+// Attach installs probes in every TLS provider of the process whose underlying
+// file inode is not attached yet. Uprobes are attached once per unique inode
+// (PID 0) and filtered in BPF by watching(&tgid), which avoids hundreds of
+// duplicate perf_event attachments across processes that share libssl or python.
 func (t *Tap) Attach(p inspect.Process) (int, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.links[p.PID] == nil {
-		t.links[p.PID] = map[string][]link.Link{}
+	if t.pidFiles[p.PID] == nil {
+		t.pidFiles[p.PID] = map[string]bool{}
 	}
 	added := 0
 	var firstErr error
 	for _, pr := range p.Providers {
-		if _, done := t.links[p.PID][pr.File]; done {
+		ikey := inodeKey(pr.File)
+		if t.pidFiles[p.PID][ikey] {
 			continue
 		}
-		ls, err := t.attachFile(p.PID, pr)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
+		if _, ok := t.fileLinks[ikey]; !ok {
+			ls, err := t.attachFile(0, pr)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
 			}
-			continue
+			t.fileLinks[ikey] = ls
 		}
-		t.links[p.PID][pr.File] = ls
+		t.pidFiles[p.PID][ikey] = true
 		added++
 	}
-	if len(t.links[p.PID]) == 0 {
-		delete(t.links, p.PID)
+	if len(t.pidFiles[p.PID]) == 0 {
+		delete(t.pidFiles, p.PID)
 	}
 	if added == 0 && firstErr == nil {
 		return 0, nil
@@ -250,30 +279,36 @@ func (t *Tap) enterProg(sym string) *ebpf.Program {
 	return nil
 }
 
-// Detach removes the probes of one process (used after it exits).
+// Detach removes a process from the tracked set after it exits.
 func (t *Tap) Detach(pid int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	closeAll(t.links[pid])
-	delete(t.links, pid)
+	delete(t.pidFiles, pid)
 }
 
 // IsAttached reports whether the process has at least one probe installed.
 func (t *Tap) IsAttached(pid int) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return len(t.links[pid]) > 0
+	return len(t.pidFiles[pid]) > 0
 }
 
 // Attached lists the PIDs that currently have probes.
 func (t *Tap) Attached() []int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	out := make([]int, 0, len(t.links))
-	for pid := range t.links {
+	out := make([]int, 0, len(t.pidFiles))
+	for pid := range t.pidFiles {
 		out = append(out, pid)
 	}
 	return out
+}
+
+// AttachedFiles returns the number of unique TLS binaries/libraries currently hooked.
+func (t *Tap) AttachedFiles() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.fileLinks)
 }
 
 // Read blocks for the next event; it returns ringbuf.ErrClosed after Close.
@@ -315,6 +350,12 @@ func (t *Tap) Dropped() uint64 {
 	return v
 }
 
+// CloseReader stops the ring-buffer reader so the consumer loop can drain and flush
+// output immediately before the slower kernel uprobe detach begins.
+func (t *Tap) CloseReader() {
+	_ = t.reader.Close()
+}
+
 // Close removes every probe and frees the program. Safe to call once.
 func (t *Tap) Close() {
 	t.once.Do(t.close)
@@ -334,26 +375,17 @@ func (t *Tap) close() {
 		closeAsync(l)
 	}
 	t.mu.Lock()
-	for pid, files := range t.links {
-		for _, ls := range files {
-			for _, l := range ls {
-				closeAsync(l)
-			}
+	for k, ls := range t.fileLinks {
+		for _, l := range ls {
+			closeAsync(l)
 		}
-		delete(t.links, pid)
+		delete(t.fileLinks, k)
 	}
+	t.pidFiles = map[int]map[string]bool{}
 	t.mu.Unlock()
 	wg.Wait()
 	t.reader.Close()
 	t.objs.Close()
-}
-
-func closeAll(files map[string][]link.Link) {
-	for _, ls := range files {
-		for _, l := range ls {
-			l.Close()
-		}
-	}
 }
 
 // LoadedPrograms returns how many tokprof TLS programs the kernel currently holds,

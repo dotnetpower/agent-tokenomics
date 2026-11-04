@@ -58,6 +58,7 @@ const (
 	tlsMapPlainConns       = "plain_conns"
 	tlsMapSysActive        = "sys_active"
 	tlsMapWatched          = "watched"
+	tlsMapWatchedCgroups   = "watched_cgroups"
 	tlsProgGoTlsReadEnter  = "go_tls_read_enter"
 	tlsProgGoTlsReadRet    = "go_tls_read_ret"
 	tlsProgGoTlsWriteEnter = "go_tls_write_enter"
@@ -70,6 +71,7 @@ const (
 	tlsProgSslWriteEnter   = "ssl_write_enter"
 	tlsProgSslWriteExEnter = "ssl_write_ex_enter"
 	tlsVarDebugUnmatched   = "debug_unmatched"
+	tlsVarIgnoreTgid       = "ignore_tgid"
 	tlsVarNsDev            = "ns_dev"
 	tlsVarNsIno            = "ns_ino"
 	tlsVarSelfTgid         = "self_tgid"
@@ -135,14 +137,15 @@ type tlsProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tlsMapSpecs struct {
-	Active     *ebpf.MapSpec `ebpf:"active"`
-	Counters   *ebpf.MapSpec `ebpf:"counters"`
-	Dropped    *ebpf.MapSpec `ebpf:"dropped"`
-	Events     *ebpf.MapSpec `ebpf:"events"`
-	GoActive   *ebpf.MapSpec `ebpf:"go_active"`
-	PlainConns *ebpf.MapSpec `ebpf:"plain_conns"`
-	SysActive  *ebpf.MapSpec `ebpf:"sys_active"`
-	Watched    *ebpf.MapSpec `ebpf:"watched"`
+	Active         *ebpf.MapSpec `ebpf:"active"`
+	Counters       *ebpf.MapSpec `ebpf:"counters"`
+	Dropped        *ebpf.MapSpec `ebpf:"dropped"`
+	Events         *ebpf.MapSpec `ebpf:"events"`
+	GoActive       *ebpf.MapSpec `ebpf:"go_active"`
+	PlainConns     *ebpf.MapSpec `ebpf:"plain_conns"`
+	SysActive      *ebpf.MapSpec `ebpf:"sys_active"`
+	Watched        *ebpf.MapSpec `ebpf:"watched"`
+	WatchedCgroups *ebpf.MapSpec `ebpf:"watched_cgroups"`
 }
 
 // tlsVariableSpecs contains global variables before they are loaded into the kernel.
@@ -150,6 +153,7 @@ type tlsMapSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type tlsVariableSpecs struct {
 	DebugUnmatched *ebpf.VariableSpec `ebpf:"debug_unmatched"`
+	IgnoreTgid     *ebpf.VariableSpec `ebpf:"ignore_tgid"`
 	NsDev          *ebpf.VariableSpec `ebpf:"ns_dev"`
 	NsIno          *ebpf.VariableSpec `ebpf:"ns_ino"`
 	SelfTgid       *ebpf.VariableSpec `ebpf:"self_tgid"`
@@ -176,14 +180,15 @@ func (o *tlsObjects) Close() error {
 //
 // It can be passed to loadTlsObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tlsMaps struct {
-	Active     *ebpf.Map `ebpf:"active"`
-	Counters   *ebpf.Map `ebpf:"counters"`
-	Dropped    *ebpf.Map `ebpf:"dropped"`
-	Events     *ebpf.Map `ebpf:"events"`
-	GoActive   *ebpf.Map `ebpf:"go_active"`
-	PlainConns *ebpf.Map `ebpf:"plain_conns"`
-	SysActive  *ebpf.Map `ebpf:"sys_active"`
-	Watched    *ebpf.Map `ebpf:"watched"`
+	Active         *ebpf.Map `ebpf:"active"`
+	Counters       *ebpf.Map `ebpf:"counters"`
+	Dropped        *ebpf.Map `ebpf:"dropped"`
+	Events         *ebpf.Map `ebpf:"events"`
+	GoActive       *ebpf.Map `ebpf:"go_active"`
+	PlainConns     *ebpf.Map `ebpf:"plain_conns"`
+	SysActive      *ebpf.Map `ebpf:"sys_active"`
+	Watched        *ebpf.Map `ebpf:"watched"`
+	WatchedCgroups *ebpf.Map `ebpf:"watched_cgroups"`
 }
 
 func (m *tlsMaps) Close() error {
@@ -196,6 +201,7 @@ func (m *tlsMaps) Close() error {
 		m.PlainConns,
 		m.SysActive,
 		m.Watched,
+		m.WatchedCgroups,
 	)
 }
 
@@ -204,6 +210,7 @@ func (m *tlsMaps) Close() error {
 // It can be passed to loadTlsObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tlsVariables struct {
 	DebugUnmatched *ebpf.Variable `ebpf:"debug_unmatched"`
+	IgnoreTgid     *ebpf.Variable `ebpf:"ignore_tgid"`
 	NsDev          *ebpf.Variable `ebpf:"ns_dev"`
 	NsIno          *ebpf.Variable `ebpf:"ns_ino"`
 	SelfTgid       *ebpf.Variable `ebpf:"self_tgid"`

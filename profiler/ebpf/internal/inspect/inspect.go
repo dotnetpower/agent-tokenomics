@@ -10,14 +10,21 @@ import (
 	"debug/elf"
 	"debug/gosym"
 	"encoding/binary"
+	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 )
 
-var sslSymbols = []string{"SSL_write", "SSL_read", "SSL_write_ex", "SSL_read_ex"}
+var (
+	sslSymbols  = []string{"SSL_write", "SSL_read", "SSL_write_ex", "SSL_read_ex"}
+	containerRe = regexp.MustCompile(`(?:docker[-/]|containers/|-id\s+)([0-9a-f]{64})`)
+)
 
 const (
 	GoTLSWriteSym = "crypto/tls.(*Conn).Write"
@@ -38,6 +45,9 @@ type Process struct {
 	PID       int        `json:"pid"`
 	Comm      string     `json:"comm"`
 	Exe       string     `json:"exe"`
+	Cwd       string     `json:"cwd,omitempty"`
+	Container string     `json:"container,omitempty"`
+	CgroupID  uint64     `json:"cgroup_id,omitempty"`
 	Cmdline   string     `json:"cmdline"`
 	Providers []Provider `json:"providers,omitempty"`
 	GoTLS     bool       `json:"go_tls,omitempty"`
@@ -57,14 +67,14 @@ func Scan(procRoot string) ([]Process, error) {
 	if err != nil {
 		return nil, err
 	}
-	cache := map[string]*fileInfo{}
+	s := NewScanner(procRoot)
 	var out []Process
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil {
 			continue
 		}
-		out = append(out, scanProcess(procRoot, pid, cache))
+		out = append(out, s.Process(pid))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].PID < out[j].PID })
 	return out, nil
@@ -73,12 +83,13 @@ func Scan(procRoot string) ([]Process, error) {
 // Scanner inspects processes incrementally and caches per-file results, so a
 // long-running collector can look at new PIDs cheaply.
 type Scanner struct {
-	procRoot string
-	cache    map[string]*fileInfo
+	procRoot   string
+	cache      map[string]*fileInfo
+	containers map[string]string
 }
 
 func NewScanner(procRoot string) *Scanner {
-	return &Scanner{procRoot: procRoot, cache: map[string]*fileInfo{}}
+	return &Scanner{procRoot: procRoot, cache: map[string]*fileInfo{}, containers: map[string]string{}}
 }
 
 // PIDs lists the numeric entries under the proc root.
@@ -107,23 +118,25 @@ func (s *Scanner) Signature(pid int) string {
 
 // Process inspects one PID.
 func (s *Scanner) Process(pid int) Process {
-	return scanProcess(s.procRoot, pid, s.cache)
+	return scanProcess(s.procRoot, pid, s.cache, s.containers)
 }
 
-func scanProcess(procRoot string, pid int, cache map[string]*fileInfo) Process {
+func scanProcess(procRoot string, pid int, cache map[string]*fileInfo, containers map[string]string) Process {
 	base := filepath.Join(procRoot, strconv.Itoa(pid))
 	p := Process{PID: pid, Attach: "no"}
 	if b, err := os.ReadFile(filepath.Join(base, "comm")); err == nil {
 		p.Comm = strings.TrimSpace(string(b))
 	}
 	p.Exe, _ = os.Readlink(filepath.Join(base, "exe"))
+	p.Cwd, _ = os.Readlink(filepath.Join(base, "cwd"))
 	if b, err := os.ReadFile(filepath.Join(base, "cmdline")); err == nil {
 		s := strings.ReplaceAll(string(b), "\x00", " ")
-		if len(s) > 120 {
-			s = s[:120] + "..."
+		if len(s) > 1024 {
+			s = s[:1024] + "..."
 		}
 		p.Cmdline = strings.TrimSpace(s)
 	}
+	p.Container, p.CgroupID = detectContainer(base, p.Cmdline, containers)
 
 	f, err := os.Open(filepath.Join(base, "maps"))
 	if err != nil {
@@ -144,15 +157,16 @@ func scanProcess(procRoot string, pid int, cache map[string]*fileInfo) Process {
 			continue
 		}
 		path := strings.Join(fields[5:], " ")
-		if !strings.HasPrefix(path, "/") || strings.HasSuffix(path, "(deleted)") || seen[path] {
+		if !strings.HasPrefix(path, "/") || strings.HasSuffix(path, "(deleted)") || seen[path] || isNonHTTPTLSLib(path) {
 			continue
 		}
 		seen[path] = true
 		openPath := resolveProcPath(base, path, diffMnt)
-		fi, ok := cache[openPath]
+		ck := fileCacheKey(openPath)
+		fi, ok := cache[ck]
 		if !ok {
 			fi = inspectFile(openPath)
-			cache[openPath] = fi
+			cache[ck] = fi
 		}
 		if fi.provider != nil {
 			pr := *fi.provider
@@ -170,6 +184,69 @@ func scanProcess(procRoot string, pid int, cache map[string]*fileInfo) Process {
 		p.Attach, p.Note = "go-only", "Go crypto/tls: RET offsets not found (unsupported ABI or architecture)"
 	}
 	return p
+}
+
+func fileCacheKey(path string) string {
+	if dev, ino, ok := statIno(path); ok {
+		return fmt.Sprintf("%d:%d", dev, ino)
+	}
+	return path
+}
+
+func detectContainer(procBase, cmdline string, cache map[string]string) (string, uint64) {
+	var cid string
+	var cgID uint64
+	if b, err := os.ReadFile(filepath.Join(procBase, "cgroup")); err == nil {
+		if m := containerRe.FindSubmatch(b); m != nil {
+			cid = string(m[1])
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			if i := strings.Index(line, "::/"); i >= 0 {
+				rel := strings.TrimSpace(line[i+2:])
+				if _, ino, ok := statIno(filepath.Join("/sys/fs/cgroup", rel)); ok {
+					cgID = ino
+				}
+				break
+			}
+		}
+	}
+	if cid == "" {
+		if m := containerRe.FindStringSubmatch(cmdline); m != nil {
+			cid = m[1]
+		}
+	}
+	if cid == "" {
+		return "", 0
+	}
+	if cgID == 0 {
+		for _, cand := range []string{
+			filepath.Join("/sys/fs/cgroup/system.slice", "docker-"+cid+".scope"),
+			filepath.Join("/sys/fs/cgroup/docker", cid),
+		} {
+			if _, ino, ok := statIno(cand); ok {
+				cgID = ino
+				break
+			}
+		}
+	}
+	if name, ok := cache[cid]; ok {
+		return name, cgID
+	}
+	name := cid[:12]
+	if b, err := os.ReadFile(filepath.Join("/var/lib/docker/containers", cid, "config.v2.json")); err == nil {
+		var cfg struct {
+			Name string `json:"Name"`
+		}
+		if json.Unmarshal(b, &cfg) == nil && cfg.Name != "" {
+			name = strings.TrimPrefix(cfg.Name, "/") + " (" + cid[:12] + ")"
+		}
+	} else if out, err := exec.Command("docker", "inspect", "--format", "{{.Name}}", cid).Output(); err == nil {
+		if s := strings.TrimSpace(strings.TrimPrefix(string(out), "/")); s != "" {
+			name = s + " (" + cid[:12] + ")"
+		}
+	}
+	cache[cid] = name
+	return name, cgID
 }
 
 // resolveProcPath returns a host-openable path for a file mapped inside pid, falling back to
@@ -348,6 +425,23 @@ func findGoRetOffsets(ef *elf.File, s elf.Symbol) []uint64 {
 func isTLS(name string) bool {
 	for _, n := range sslSymbols {
 		if name == n {
+			return true
+		}
+	}
+	return false
+}
+
+// isNonHTTPTLSLib filters out embedded OpenSSL copies inside database, image, or
+// crypto-primitive wheels that never carry HTTP(S) client traffic.
+func isNonHTTPTLSLib(path string) bool {
+	for _, sub := range []string{
+		"pyarrow/libarrow",
+		"opencv_python.libs/",
+		"psycopg_binary.libs/",
+		"cryptography/hazmat/bindings/_rust",
+		"@esbuild/",
+	} {
+		if strings.Contains(path, sub) {
 			return true
 		}
 	}

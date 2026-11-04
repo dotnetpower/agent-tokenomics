@@ -73,8 +73,17 @@ def _health(port: int) -> Optional[dict]:
         return None
 
 
-def serve(out: str, state_file: str, extra_maps: Optional[list] = None, use_tiktoken: bool = True) -> int:
-    """Run the gateway in the foreground until SIGTERM/SIGINT, then drain and exit."""
+def serve(
+    out: str,
+    state_file: str,
+    extra_maps: Optional[list] = None,
+    use_tiktoken: bool = True,
+    *,
+    use_ebpf: bool = False,
+    pids: str = "",
+    comms: str = "",
+) -> int:
+    """Run the gateway (and optional Linux eBPF tap) in the foreground until SIGTERM/SIGINT, then drain and exit."""
     env = dict(os.environ)
     routes, overrides, azure_hosts = build_routes(env, extra_maps)
     writer = JsonlWriter(out)
@@ -85,6 +94,42 @@ def serve(out: str, state_file: str, extra_maps: Optional[list] = None, use_tikt
     thread = GatewayThread(gw)
     port = thread.start()
 
+    ebpf_proc = None
+    ebpf_thread = None
+    ebpf_scope = None
+    if use_ebpf:
+        from .ebpf import _ingest_lines, ebpf_can_run, helper_command
+
+        exe = ebpf_can_run(interactive=False)
+        if exe:
+            everything = not (pids or comms)
+            cmd = helper_command(exe, pids, comms, everything, duration=None, use_sudo=True, ignore_pid=os.getpid())
+            try:
+                ebpf_proc = subprocess.Popen(
+                    cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, encoding="utf-8", errors="replace",
+                )
+                ready_evt = threading.Event()
+
+                def _drain_err(stream) -> None:
+                    for line in stream:
+                        if line.strip().endswith("ready"):
+                            ready_evt.set()
+
+                threading.Thread(target=_drain_err, args=(ebpf_proc.stderr,), name="tokprof-ebpf-stderr", daemon=True).start()
+                if ready_evt.wait(timeout=10.0) and ebpf_proc.poll() is None:
+                    ebpf_thread = threading.Thread(target=_ingest_lines, args=(ebpf_proc.stdout, gw), name="tokprof-ebpf-ingest", daemon=True)
+                    ebpf_thread.start()
+                    ebpf_scope = f"pid={pids}" if pids else (f"comm={comms}" if comms else "all processes & Docker containers")
+                else:
+                    try:
+                        ebpf_proc.kill()
+                    except Exception:
+                        pass
+                    ebpf_proc = None
+            except OSError:
+                ebpf_proc = None
+
     originals = {k: env.get(k) for k in OVERRIDDEN}
     child = {k: v.format(port=port) for k, v in overrides.items()}
     child.update(hook_env(env, port, token))
@@ -93,7 +138,7 @@ def serve(out: str, state_file: str, extra_maps: Optional[list] = None, use_tikt
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump({"pid": os.getpid(), "port": port, "out": os.path.abspath(out), "started": time.time(),
-                   "token": token, "env": child, "originals": originals}, fh)
+                   "token": token, "ebpf": ebpf_scope, "env": child, "originals": originals}, fh)
     os.replace(tmp, state_file)
 
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -102,6 +147,13 @@ def serve(out: str, state_file: str, extra_maps: Optional[list] = None, use_tikt
         while not stop.wait(0.5):
             pass
     finally:
+        if ebpf_proc is not None:
+            try:
+                ebpf_proc.stdin.close()
+            except OSError:
+                pass
+            if ebpf_thread is not None:
+                ebpf_thread.join(timeout=3.0)
         thread.stop()
         writer.close()
         try:
@@ -111,16 +163,39 @@ def serve(out: str, state_file: str, extra_maps: Optional[list] = None, use_tikt
     return 0
 
 
-def start(out: str, state_file: str, extra_maps: Optional[list] = None, use_tiktoken: bool = True) -> int:
+def start(
+    out: str,
+    state_file: str,
+    extra_maps: Optional[list] = None,
+    use_tiktoken: bool = True,
+    *,
+    use_ebpf: Optional[bool] = None,
+    pids: str = "",
+    comms: str = "",
+) -> int:
     existing = _read_state(state_file)
     if existing and _alive(existing["pid"]):
         print(f"tokprof: a session is already running (pid {existing['pid']}, port {existing['port']}); use `tokprof status`", file=sys.stderr)
         return 1
+    if use_ebpf is None:
+        use_ebpf = sys.platform.startswith("linux")
+    if use_ebpf:
+        from .ebpf import ebpf_can_run
+
+        use_ebpf = ebpf_can_run(interactive=True) is not None
     cmd = [sys.executable, "-m", "tokprof", "serve", "--out", out, "--state", state_file]
     for m in extra_maps or []:
         cmd += ["--map", m]
     if not use_tiktoken:
         cmd.append("--no-tiktoken")
+    if use_ebpf:
+        cmd.append("--ebpf")
+    else:
+        cmd.append("--no-ebpf")
+    if pids:
+        cmd += ["--pid", pids]
+    if comms:
+        cmd += ["--comm", comms]
     kwargs: dict = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     if os.name == "nt":
         kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
@@ -131,9 +206,15 @@ def start(out: str, state_file: str, extra_maps: Optional[list] = None, use_tikt
     while time.time() < deadline:
         st = _read_state(state_file)
         if st and _health(st["port"]):
-            print(f"tokprof: session started (pid {st['pid']}, gateway 127.0.0.1:{st['port']}), recording to {st['out']}")
-            print('Route NEW processes through it in this shell with:  eval "$(tokprof env)"')
-            print("Already-running processes are not affected. Stop with: tokprof stop")
+            ebpf_info = f", eBPF: {st['ebpf']}" if st.get("ebpf") else ""
+            print(f"tokprof: session started (pid {st['pid']}, gateway 127.0.0.1:{st['port']}{ebpf_info})")
+            print(f"  recording to: {st['out']}")
+            if st.get("ebpf"):
+                print("  Running host processes, background services, and Docker containers are captured automatically.")
+                print("  Check progress: tokprof status   |   Live view: tokprof report --watch   |   Finish & report: tokprof stop")
+            else:
+                print('  Route NEW processes through it in this shell with:  eval "$(tokprof env)"')
+                print("  Stop and view report with: tokprof stop")
             return 0
         time.sleep(0.1)
     print("tokprof: the session did not start in time; run `tokprof serve` in the foreground to see errors", file=sys.stderr)
@@ -146,7 +227,8 @@ def status(state_file: str) -> int:
         print("tokprof: no active session")
         return 1
     h = _health(st["port"]) or {}
-    print(f"tokprof: active session pid {st['pid']}, gateway 127.0.0.1:{st['port']}, recording to {st['out']}")
+    ebpf_info = f", eBPF: {st['ebpf']}" if st.get("ebpf") else ""
+    print(f"tokprof: active session pid {st['pid']}, gateway 127.0.0.1:{st['port']}{ebpf_info}, recording to {st['out']}")
     print(f"  requests seen: {h.get('requests', '?')}, calls recorded: {h.get('recorded', '?')}, record errors: {h.get('record_errors', '?')}")
     return 0
 
@@ -231,6 +313,7 @@ def stop(state_file: str, force: bool) -> int:
     except OSError:
         pass
     print(f"tokprof: session stopped. Recorded data: {st['out']}")
-    print("Processes that were started with the session environment still point at the stopped gateway; "
-          "restart them, or restore this shell with: eval \"$(tokprof env --unset)\" (run it BEFORE stopping next time)")
+    if not st.get("ebpf") or h.get("last_request_age_s") is not None:
+        print("Processes that were started with the session environment still point at the stopped gateway; "
+              "restart them, or restore this shell with: eval \"$(tokprof env --unset)\" (run it BEFORE stopping next time)")
     return 0

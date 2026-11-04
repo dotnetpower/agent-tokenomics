@@ -21,8 +21,12 @@ uv tool install "./profiler[tiktoken]"  # better counting accuracy
 ## Use
 
 ```bash
-tokprof -- python my_agent.py          # one-step: run, print visual report, and write .tokprof/latest.html
-tokprof profile --comm python,node     # attach to already-running processes (Linux eBPF / Windows & macOS mitm)
+tokprof start                          # start background profiling (on Linux, auto-attaches eBPF to running processes & Docker)
+tokprof start --comm fdai              # scope background profiling to matching processes, working directories, or Docker containers
+tokprof status                         # check active session and recorded call count
+tokprof stop                           # stop session, print visual terminal report, and write .tokprof/latest.html
+tokprof -- python my_agent.py          # one-step command: run, print visual report, and write .tokprof/latest.html
+tokprof profile --comm python,node     # attach to already-running processes in the foreground
 tokprof report                         # summarize the latest run in .tokprof/ (no path needed)
 tokprof report --format pretty --html  # rich terminal view + self-contained HTML dashboard (.tokprof/latest.html)
 tokprof report --watch                 # live-updating terminal dashboard as calls arrive
@@ -31,8 +35,6 @@ tokprof shell                          # a shell whose child processes are profi
 tokprof report run.jsonl --prices prices.json   # add a cost estimate (per 1M tokens, your prices)
 tokprof compare before.jsonl after.jsonl        # per-request change with a 95% bootstrap interval
 tokprof export run.jsonl --out legacy.jsonl     # schema of examples/token_report.py
-tokprof start && eval "$(tokprof env)"          # background session for NEW processes in this shell
-tokprof env --unset; tokprof stop --report --html  # restore the shell, stop, and emit report + HTML
 tokprof doctor                         # what works on this machine
 tokprof selftest                       # verify the pipeline with a local mock LLM
 ```

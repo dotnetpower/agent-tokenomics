@@ -40,10 +40,49 @@ def find_helper(explicit: Optional[str] = None, auto_build: bool = False) -> Opt
     return None
 
 
-def helper_command(helper: str, pids: str, comms: str, everything: bool, duration: Optional[str], use_sudo: bool, plain: bool = True) -> list:
+def ebpf_can_run(explicit: Optional[str] = None, interactive: bool = False) -> Optional[str]:
+    """Return the helper path if it can run on this machine (as root or via sudo), or None."""
+    if not sys.platform.startswith("linux"):
+        return None
+    exe = find_helper(explicit, auto_build=True)
+    if not exe:
+        return None
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        return exe
+    if not shutil.which("sudo"):
+        return None
+    try:
+        r = subprocess.run(["sudo", "-n", exe, "status"], capture_output=True, timeout=5)
+        if r.returncode == 0:
+            return exe
+    except Exception:
+        pass
+    if interactive and sys.stdin.isatty() and sys.stderr.isatty():
+        try:
+            if subprocess.run(["sudo", "-v"]).returncode == 0:
+                r2 = subprocess.run(["sudo", "-n", exe, "status"], capture_output=True, timeout=5)
+                if r2.returncode == 0:
+                    return exe
+        except Exception:
+            pass
+    return None
+
+
+def helper_command(
+    helper: str,
+    pids: str,
+    comms: str,
+    everything: bool,
+    duration: Optional[str],
+    use_sudo: bool,
+    plain: bool = True,
+    ignore_pid: Optional[int] = None,
+) -> list:
     cmd = [helper, "trace", "--exit-on-stdin-eof"]
     if not plain:
         cmd.append("--no-plain")
+    if ignore_pid:
+        cmd += ["--ignore-pid", str(ignore_pid)]
     if pids:
         cmd += ["--pid", pids]
     if comms:
@@ -101,7 +140,7 @@ def run_ebpf(
 
     writer = JsonlWriter(out_path)
     gw = Gateway([], writer.write, salt=secrets.token_bytes(16), components=components, run_id=secrets.token_hex(4), use_tiktoken=use_tiktoken)
-    cmd = helper_command(exe, pids, comms, everything, duration, use_sudo, plain)
+    cmd = helper_command(exe, pids, comms, everything, duration, use_sudo, plain, ignore_pid=os.getpid())
     if not quiet:
         print(f"tokprof: profiling to {out_path} via eBPF; press Ctrl+C to stop", file=sys.stderr)
     try:
@@ -114,7 +153,7 @@ def run_ebpf(
         _ingest_lines(proc.stdout, gw)
     except KeyboardInterrupt:
         pass
-    code = 1
+    code = 0
     try:
         # Closing stdin asks the helper to detach its probes and flush pending exchanges.
         try:
@@ -122,9 +161,13 @@ def run_ebpf(
         except OSError:
             pass
         _ingest_lines(proc.stdout, gw)
-        code = proc.wait(timeout=15)
-    except (subprocess.TimeoutExpired, KeyboardInterrupt):
-        proc.kill()
+        try:
+            code = proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            # stdout is already closed (all exchanges flushed); let kernel probe detach finish in the background.
+            code = 0
+    except KeyboardInterrupt:
+        code = 1
     finally:
         writer.close()
     if not quiet:

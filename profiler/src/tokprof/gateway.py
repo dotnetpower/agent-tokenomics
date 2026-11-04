@@ -316,10 +316,10 @@ class Gateway:
             if self.on_shutdown is not None:
                 self.on_shutdown()
             return await self._respond(writer, 204, "No Content", b"")
-        self._last_request = time.time()
         if target.startswith("/__tokprof/ingest") and method == "POST":
             body = await _read_request_body(reader, hd, leftover)
             return await self._ingest(writer, hd, body)
+        self._last_request = time.time()
         if hd.get("expect", "").lower() == "100-continue":
             writer.write(b"HTTP/1.1 100 Continue\r\n\r\n")
             await writer.drain()
@@ -483,6 +483,8 @@ class Gateway:
                 if m:
                     host, port = m.group(1), int(m.group(2))
             port = int(port or 0)
+            if host in ("127.0.0.1", "localhost") and self.port and port == self.port:
+                return  # already proxied through this gateway
             req_obj = json.loads(msg.get("request") or "null")
             verdict = self.detector.inspect(method=str(msg.get("method") or "POST"), host=host, port=port, path=path, body=req_obj)
             if not (verdict.llm or verdict.candidate) or not isinstance(req_obj, dict):

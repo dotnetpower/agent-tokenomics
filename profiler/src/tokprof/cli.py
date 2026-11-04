@@ -200,11 +200,15 @@ def build_parser() -> argparse.ArgumentParser:
     exp.add_argument("--out")
     exp.add_argument("--gap", type=float, default=5.0)
 
-    for name, helptext in (("start", "start a background profiling session"), ("serve", "run the session gateway in the foreground")):
+    for name, helptext in (("start", "start a background profiling session (auto-attaches Linux eBPF to running processes & Docker)"), ("serve", "run the session gateway in the foreground")):
         sp = sub.add_parser(name, help=helptext)
         sp.add_argument("--out", help="JSONL output path")
         sp.add_argument("--state", help="session state file (default ~/.tokprof/session.json)")
         sp.add_argument("--map", action="append")
+        sp.add_argument("--pid", default="", help="comma-separated PIDs to watch (default: all processes & Docker containers)")
+        sp.add_argument("--comm", default="", help="comma-separated process/container/cwd substrings to watch (for example: fdai)")
+        sp.add_argument("--ebpf", action="store_true", help="enable the Linux eBPF tap in the background session")
+        sp.add_argument("--no-ebpf", action="store_true", help="disable the Linux eBPF tap (gateway only)")
         sp.add_argument("--no-tiktoken", action="store_true")
         _add_detect_args(sp)
     st = sub.add_parser("status", help="show the active session")
@@ -213,11 +217,13 @@ def build_parser() -> argparse.ArgumentParser:
     en.add_argument("--state")
     en.add_argument("--shell", choices=["bash", "fish", "powershell", "cmd"])
     en.add_argument("--unset", action="store_true", help="print commands that restore the previous values")
-    sp_stop = sub.add_parser("stop", help="stop the active session")
+    sp_stop = sub.add_parser("stop", help="stop the active session and emit the token profile report")
     sp_stop.add_argument("--state")
     sp_stop.add_argument("--force", action="store_true")
     sp_stop.add_argument("--report", action="store_true", help="print a report after stopping")
+    sp_stop.add_argument("--no-report", action="store_true", help="do not print a report after stopping")
     sp_stop.add_argument("--html", nargs="?", const="", metavar="FILE", help="write an HTML dashboard after stopping")
+    sp_stop.add_argument("--no-html", action="store_true", help="do not write an HTML dashboard")
     sp_stop.add_argument("--open", action="store_true", help="open the HTML dashboard in a browser")
 
     sub.add_parser("doctor", help="check this environment")
@@ -483,16 +489,20 @@ def main(argv: Optional[list] = None) -> int:
         state = session.state_path(getattr(args, "state", None))
         if args.cmd in ("start", "serve"):
             out = os.path.abspath(args.out or _default_out())
+            use_ebpf = True if args.ebpf else (False if args.no_ebpf else (args.state is None and sys.platform.startswith("linux")))
             fn = session.start if args.cmd == "start" else session.serve
-            return fn(out, state, args.map, not args.no_tiktoken)
+            return fn(out, state, args.map, not args.no_tiktoken, use_ebpf=use_ebpf, pids=args.pid, comms=args.comm)
         if args.cmd == "status":
             return session.status(state)
         if args.cmd == "env":
             return session.env(state, args.shell, args.unset)
         prev = session._read_state(state)
         rc = session.stop(state, args.force)
-        if rc == 0 and prev and prev.get("out"):
-            _finish_run(prev["out"], args)
+        if rc == 0 and prev and prev.get("out") and not getattr(args, "no_report", False):
+            auto_report = bool(prev.get("ebpf")) or args.state is None
+            if args.html is None and auto_report and not getattr(args, "no_html", False):
+                args.html = ""
+            _finish_run(prev["out"], args, default_report=auto_report, pretty=True)
         return rc
     if args.cmd == "explain":
         import json as _json

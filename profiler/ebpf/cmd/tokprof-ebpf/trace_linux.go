@@ -32,11 +32,23 @@ type selector struct {
 	all   bool
 }
 
+var ignoredInAll = map[string]bool{
+	"snapd": true, "dockerd": true, "containerd": true, "containerd-shim": true,
+	"clamd": true, "freshclam": true, "redpanda": true, "esbuild": true, "ruff": true,
+	"postgres": true, "copilot": true, "ssh": true, "sshd": true,
+}
+
 func (s selector) match(p inspect.Process) bool {
-	if s.all || s.pids[p.PID] {
+	if s.pids[p.PID] {
 		return true
 	}
-	hay := strings.ToLower(p.Comm + " " + p.Exe + " " + p.Cmdline)
+	if s.all {
+		if ignoredInAll[p.Comm] || strings.Contains(p.Exe, "/.vscode-server/") || strings.Contains(p.Cmdline, "/.vscode-server/") {
+			return false
+		}
+		return true
+	}
+	hay := strings.ToLower(p.Comm + " " + p.Exe + " " + p.Cwd + " " + p.Container + " " + p.Cmdline)
 	for _, c := range s.comms {
 		if strings.Contains(hay, c) {
 			return true
@@ -68,6 +80,7 @@ func runTrace(args []string) {
 	duration := fs.Duration("duration", 0, "stop after this long (0 = until interrupted)")
 	idle := fs.Duration("idle", 2*time.Second, "treat a response as finished after this much silence")
 	exitOnEOF := fs.Bool("exit-on-stdin-eof", false, "exit (and remove all probes) when stdin closes; used by the Python launcher")
+	ignorePID := fs.Uint("ignore-pid", 0, "PID to ignore (used by the Python gateway so its own outbound traffic is not recorded twice)")
 	crashAfter := fs.Duration("crash-after", 0, "testing only: SIGKILL this process after the delay, to check that the kernel removes the probes")
 	noPlain := fs.Bool("no-plain", false, "only observe TLS libraries; skip the syscall probes for cleartext HTTP")
 	debugUnmatched := fs.Bool("debug-unmatched", false, "testing only: log the first bytes of writes that do not start an HTTP POST")
@@ -95,7 +108,7 @@ func runTrace(args []string) {
 		fatal("choose what to watch: --pid, --comm or --all")
 	}
 
-	t, err := tap.New(tap.Options{WatchAll: sel.all, NoPlain: *noPlain, DebugUnmatched: *debugUnmatched})
+	t, err := tap.New(tap.Options{WatchAll: sel.all, NoPlain: *noPlain, IgnorePID: uint32(*ignorePID), DebugUnmatched: *debugUnmatched})
 	if err != nil {
 		if *debug {
 			var ve *ebpf.VerifierError
@@ -183,7 +196,7 @@ func runTrace(args []string) {
 		live := map[int]bool{}
 		for _, pid := range scanner.PIDs() {
 			live[pid] = true
-			if pid == self {
+			if pid == self || (*ignorePID != 0 && pid == int(*ignorePID)) {
 				continue
 			}
 			sig := scanner.Signature(pid)
@@ -201,13 +214,14 @@ func runTrace(args []string) {
 				st.done = true
 				continue
 			}
-			if !*noPlain && !sel.all && !st.watched {
+			if !sel.all && !st.watched {
 				t.Watch(pid)
+				t.WatchCgroup(p.CgroupID)
 				st.watched = true
 			}
 			if p.Attach != "yes" {
 				if st.watched || sel.all {
-					if !st.done {
+					if !st.done && (!sel.all || *verbose) {
 						logf("watching pid %d (%s) for plain HTTP (no TLS library visible)", pid, p.Comm)
 					}
 					st.done = true
@@ -223,13 +237,15 @@ func runTrace(args []string) {
 			if err != nil {
 				if st.tries++; st.tries >= maxTries {
 					st.done = true
-					logf("pid %d (%s): attach failed: %v", pid, p.Comm, err)
+					if !sel.all || *verbose {
+						logf("pid %d (%s): attach failed: %v", pid, p.Comm, err)
+					}
 				}
 			}
-			if added > 0 {
+			if added > 0 && (!sel.all || *verbose) {
 				logf("attached pid %d (%s)", pid, p.Comm)
 			}
-			if t.IsAttached(pid) {
+			if t.IsAttached(pid) || sel.all {
 				st.done = true // re-checked every few scans for libraries loaded later
 			}
 		}
@@ -244,6 +260,9 @@ func runTrace(args []string) {
 	}
 
 	rescan()
+	if sel.all {
+		logf("watching all processes (%d TLS libraries/binaries hooked)", t.AttachedFiles())
+	}
 	logf("ready")
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
@@ -277,11 +296,7 @@ func runTrace(args []string) {
 		c := t.Counters()
 		logf("plain-HTTP probe counters: seen=%d completed=%d marked=%d emitted=%d not_post=%d exit_unwatched=%d head_unreadable=%d", c[0], c[1], c[2], c[3], c[4], c[6], c[7])
 	}
-	closeStart := time.Now()
-	t.Close()
-	if *verbose {
-		logf("probes detached in %s", time.Since(closeStart).Round(time.Millisecond))
-	}
+	t.CloseReader()
 	// The reader goroutine may be blocked sending to a full channel, so keep consuming until it has stopped.
 drain:
 	for {
@@ -297,6 +312,13 @@ drain:
 		asm.Feed(ev.PID, ev.Comm, ev.SSL, int(ev.Dir), ev.Data, ev.Time)
 	}
 	asm.Close()
+	_ = out.Flush()
+	_ = os.Stdout.Close() // let callers reading stdout finish immediately while the kernel detaches probes
+	closeStart := time.Now()
+	t.Close()
+	if *verbose {
+		logf("probes detached in %s", time.Since(closeStart).Round(time.Millisecond))
+	}
 	s := asm.Stats
 	logf("stopped: exchanges=%d ignored=%d non_http=%d incomplete=%d unreadable=%d kernel_dropped=%d",
 		s.Exchanges, s.Ignored, s.NonHTTP, s.Incomplete, s.Unreadable, dropped)

@@ -235,16 +235,14 @@ def classify_body(obj: Any) -> Shape:
             return sh
     if isinstance(obj.get("message"), str) and obj["message"]:
         ch = obj.get("chat_history")
-        if (isinstance(ch, list) and any(isinstance(m, dict) and str(m.get("role") or "").lower() in _ROLES for m in ch)) or isinstance(obj.get("preamble"), str):
+        if isinstance(ch, list) or isinstance(obj.get("preamble"), str):
             sh.strong, sh.points, sh.api = True, 60, OPENAI_CHAT
             sh.reasons.append("body has Cohere chat_history/preamble and message")
             return sh
-        sh.api, sh.points = OPENAI_CHAT, 25
-        sh.reasons.append("body has a message field (Cohere chat shape: needs corroboration)")
-        if _SAMPLING_KEYS & set(obj):
-            sh.points += 10
-            sh.reasons.append("with sampling parameters")
-        return sh
+        if isinstance(obj.get("model"), str) and obj["model"]:
+            sh.api, sh.points = OPENAI_CHAT, 25
+            sh.reasons.append("body has model and message (Cohere chat shape: needs corroboration)")
+            return sh
     contents = obj.get("contents")
     if isinstance(contents, list) and contents and any(isinstance(c, dict) and isinstance(c.get("parts"), list) for c in contents):
         sh.strong, sh.points, sh.api = True, 60, GEMINI

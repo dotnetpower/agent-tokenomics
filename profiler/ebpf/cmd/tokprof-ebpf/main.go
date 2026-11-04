@@ -74,7 +74,11 @@ func runInspect(args []string) {
 		for i, pr := range p.Providers {
 			pid, comm, att := "", "", ""
 			if i == 0 {
-				pid, comm, att = fmt.Sprint(p.PID), p.Comm, p.Attach
+				comm = p.Comm
+				if p.Container != "" {
+					comm += " [" + p.Container + "]"
+				}
+				pid, att = fmt.Sprint(p.PID), p.Attach
 			}
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", pid, comm, att, pr.File, pr.Kind)
 		}

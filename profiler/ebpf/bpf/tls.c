@@ -63,12 +63,51 @@ struct {
 // PID namespace of the collector, so event PIDs match /proc as the collector sees it.
 const volatile __u64 ns_dev;
 const volatile __u64 ns_ino;
+const volatile __u32 self_tgid;
+const volatile __u32 ignore_tgid;
+const volatile __u32 watch_all;
+const volatile __u32 debug_unmatched; // testing only: report the first bytes of writes that did not start an HTTP POST
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 8192);
+	__type(key, __u32);
+	__type(value, __u8);
+} watched SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1024);
+	__type(key, __u64);
+	__type(value, __u8);
+} watched_cgroups SEC(".maps");
+
+// Looks the current process up in the collector's PID namespace: that is where /proc, and therefore the
+// collector's idea of a PID, lives, and it can differ from the kernel's global numbering (WSL, containers).
+static __always_inline int watching(__u32 *tgid)
+{
+	struct bpf_pidns_info ns = {};
+	__u64 cg;
+
+	*tgid = bpf_get_current_pid_tgid() >> 32;
+	if (ns_ino && !bpf_get_ns_current_pid_tgid(ns_dev, ns_ino, &ns, sizeof(ns)))
+		*tgid = ns.tgid;
+	if (*tgid == self_tgid || (ignore_tgid && *tgid == ignore_tgid))
+		return 0;
+	if (watch_all || bpf_map_lookup_elem(&watched, tgid))
+		return 1;
+	cg = bpf_get_current_cgroup_id();
+	return bpf_map_lookup_elem(&watched_cgroups, &cg) != NULL;
+}
 
 static __always_inline int enter(struct pt_regs *ctx, __u32 dir, __u32 ex)
 {
 	struct call_args a = {};
 	__u64 id = bpf_get_current_pid_tgid();
+	__u32 tgid;
 
+	if (!watching(&tgid))
+		return 0;
 	a.ssl = PT_REGS_PARM1(ctx);
 	a.buf = PT_REGS_PARM2(ctx);
 	a.num = PT_REGS_PARM3(ctx);
@@ -236,7 +275,10 @@ static __always_inline int go_enter(struct pt_regs *ctx, __u32 dir)
 {
 	struct call_args a = {};
 	struct go_key k = {};
+	__u32 tgid;
 
+	if (!watching(&tgid))
+		return 0;
 	k.g = GO_G(ctx);
 	k.tgid = bpf_get_current_pid_tgid() >> 32;
 	k.dir = dir;
@@ -324,10 +366,6 @@ int go_tls_read_ret(struct pt_regs *ctx) { return go_ret(ctx, DIR_READ); }
 #error "unsupported architecture: add its syscall numbers"
 #endif
 
-const volatile __u32 self_tgid;
-const volatile __u32 watch_all;
-const volatile __u32 debug_unmatched; // testing only: report the first bytes of writes that did not start an HTTP POST
-
 struct plain_key {
 	__u32 pid;
 	__u32 fd;
@@ -358,13 +396,6 @@ struct msghdr_head {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 8192);
-	__type(key, __u32);
-	__type(value, __u8);
-} watched SEC(".maps");
-
-struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, 16384);
 	__type(key, struct plain_key);
 	__type(value, __u8);
@@ -390,23 +421,6 @@ static __always_inline void bump(__u32 idx)
 
 	if (v)
 		__sync_fetch_and_add(v, 1);
-}
-
-// Looks the current process up in the collector's PID namespace: that is where /proc, and therefore the
-// collector's idea of a PID, lives, and it can differ from the kernel's global numbering (WSL, containers).
-static __always_inline int watching(__u32 *tgid)
-{
-	struct bpf_pidns_info ns = {};
-
-	*tgid = bpf_get_current_pid_tgid() >> 32;
-	if (ns_ino) {
-		if (bpf_get_ns_current_pid_tgid(ns_dev, ns_ino, &ns, sizeof(ns)))
-			return 0; // not visible from the collector's namespace
-		*tgid = ns.tgid;
-	}
-	if (*tgid == self_tgid)
-		return 0;
-	return watch_all || bpf_map_lookup_elem(&watched, tgid);
 }
 
 // The first three syscall arguments, read from the user registers saved at syscall entry.

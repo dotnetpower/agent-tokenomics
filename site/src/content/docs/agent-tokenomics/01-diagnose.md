@@ -61,17 +61,17 @@ Using GitHub Copilot in VS Code instead? These do not instrument it; use
 
 ```bash
 uv tool install ./profiler            # isolated install, nothing is added to the agent's project
-tokprof -- python my_agent.py                   # one-step: run, print visual report, and write .tokprof/latest.html
+tokprof start                                   # start background profiling (Linux: auto-captures running processes & Docker)
+tokprof stop                                    # stop session, print visual report, and write .tokprof/latest.html
+tokprof -- python my_agent.py                   # one-step command: run, print visual report, and write .tokprof/latest.html
 tokprof report --format pretty --html           # summarize the latest run and write an HTML dashboard
 tokprof report --watch                          # live-updating terminal view while an agent runs
 tokprof compare before.jsonl after.jsonl        # bootstrap interval, for stages 3 and 5
 ```
 
-- **How it captures.** `tokprof run` starts a gateway on `127.0.0.1` and points `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`,
-  `AZURE_OPENAI_ENDPOINT`, and pattern-matched base-URL variables (`VLLM_BASE_URL`, `OLLAMA_HOST`, …) at it **for that command only**.
-  For clients that hard-code their endpoint it also loads in-process hooks (Python `httpx`, `requests`, `urllib3`, `aiohttp`, and
-  `urllib.request` through `sitecustomize`; Node `fetch`, `http.request`, and `https.request` through `--require`). `tokprof start` /
-  `env` / `stop` keeps a background session for new processes in a shell.
+- **How it captures.** `tokprof start` launches a background session that on Linux automatically attaches the eBPF tap to running host processes and Docker containers (use `tokprof start --comm <name>` to scope by process, working directory, or container name) and stops with `tokprof stop` (printing the visual report and saving `.tokprof/latest.html`). `tokprof run` starts a gateway on `127.0.0.1` and points `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`,
+  `AZURE_OPENAI_ENDPOINT`, and pattern-matched base-URL variables (`VLLM_BASE_URL`, `OLLAMA_HOST`, …) at it **for that command only**, plus in-process hooks (Python `httpx`, `requests`, `urllib3`, `aiohttp`, and
+  `urllib.request` through `sitecustomize`; Node `fetch`, `http.request`, and `https.request` through `--require`).
 - **Which requests count as LLM calls.** Not a fixed list of URLs. `tokprof` scores the request body shape (a `messages` list, Gemini
   `contents`, a Responses-style `input`, a `prompt`), the path, the host (private DNS, RFC 1918, `.svc.cluster.local`, `privatelink`,
   `vllm`/`ollama` names, conventional ports) and, for ambiguous bodies, the response (usage counters, `choices`, Ollama/llama.cpp/TGI
