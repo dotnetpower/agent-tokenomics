@@ -5,6 +5,7 @@ dist/
 
 # profiler
 profiler/.venv/
+profiler/target/
 .tokprof/
 *.egg-info/
 __pycache__/

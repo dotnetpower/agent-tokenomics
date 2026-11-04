@@ -1,0 +1,39 @@
+[package]
+name = "tokprof"
+version = "0.2.0"
+edition = "2021"
+description = "Zero-code LLM agent token profiler (native Rust single-binary implementation)"
+license = "MIT"
+
+[lib]
+name = "tokprof"
+path = "rust_src/lib.rs"
+
+[[bin]]
+name = "tokprof"
+path = "rust_src/main.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+regex = "1.10"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+flate2 = "1.0"
+brotli = "7.0"
+ruzstd = "0.7"
+tiktoken-rs = "0.6"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
+rustls-pemfile = "2.1"
+webpki-roots = "0.26"
+once_cell = "1.19"
+rand = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
