@@ -307,6 +307,16 @@ static __always_inline int sys_enter(struct sys_enter_ctx *c, __u32 dir, __u32 v
 	struct sys_args a = {};
 	__u32 tgid;
 
+	if (debug_unmatched && dir == DIR_WRITE) {
+		char comm[8] = {};
+
+		bpf_get_current_comm(comm, sizeof(comm));
+		if (comm[0] == 'g' && comm[1] == 'o' && comm[2] == 'c' && comm[3] == 'l') {
+			bump(10); // the tracepoint fired for the Go client, before any filtering
+			if (!watching(&tgid))
+				bump(11); // ... and the process was not considered watched
+		}
+	}
 	if (!watching(&tgid))
 		return 0;
 	bump(0);
