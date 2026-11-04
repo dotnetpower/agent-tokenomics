@@ -363,6 +363,11 @@ def main():
                     detail += f" FAILED CHECKS: {bad} response={g['response'][:130]!r}"
             blob = json.dumps(got)
             leaked = "SECRET-TOKEN" in blob
+            if not (ok and not leaked) and not got:
+                try:
+                    detail += f" client rc={p.returncode} stdout={(p.stdout.read() or '')[:120]!r}"
+                except Exception:
+                    pass
             print(f"{'PASS' if ok and not leaked else 'FAIL'}  {name:18} exchanges={len(got)} {detail}{' LEAK' if leaked else ''}")
             failed += 0 if ok and not leaked else 1
         print("\n".join(err_lines))
