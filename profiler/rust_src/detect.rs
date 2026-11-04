@@ -144,12 +144,24 @@ const NAME_TOKENS: &[&str] = &[
 const PORT_HINTS: &[u16] = &[8000, 8001, 8080, 11434, 4000, 1234, 30000, 5000, 9000, 3000];
 
 pub fn normalize_path(path: &str) -> String {
-    let base = path.split('?').next().unwrap_or("").split('#').next().unwrap_or("");
-    let trimmed = base.trim_end_matches('/');
+    normalize_path_slice(path).to_string()
+}
+
+#[inline]
+pub fn normalize_path_slice(path: &str) -> &str {
+    let before_q = match path.find('?') {
+        Some(i) => &path[..i],
+        None => path,
+    };
+    let before_h = match before_q.find('#') {
+        Some(i) => &before_q[..i],
+        None => before_q,
+    };
+    let trimmed = before_h.trim_end_matches('/');
     if trimmed.is_empty() {
-        "/".to_string()
+        "/"
     } else {
-        trimmed.to_string()
+        trimmed
     }
 }
 
@@ -202,7 +214,30 @@ fn is_cgnat_v4(ip: std::net::Ipv4Addr) -> bool {
     octets[0] == 100 && (octets[1] & 0b1100_0000) == 64
 }
 
+static HOST_INFO_CACHE: Lazy<Mutex<HashMap<(String, u16), HostInfo>>> =
+    Lazy::new(|| Mutex::new(HashMap::with_capacity(256)));
+
 pub fn classify_host(host: &str, port: u16) -> HostInfo {
+    if host.len() <= 256 {
+        if let Ok(guard) = HOST_INFO_CACHE.lock() {
+            if let Some(cached) = guard.get(&(host.to_string(), port)) {
+                return cached.clone();
+            }
+        }
+    }
+    let info = classify_host_uncached(host, port);
+    if host.len() <= 256 {
+        if let Ok(mut guard) = HOST_INFO_CACHE.lock() {
+            if guard.len() >= 512 {
+                guard.clear();
+            }
+            guard.insert((host.to_string(), port), info.clone());
+        }
+    }
+    info
+}
+
+fn classify_host_uncached(host: &str, port: u16) -> HostInfo {
     let mut h = host
         .trim()
         .trim_matches(|c| c == '[' || c == ']')
@@ -219,7 +254,11 @@ pub fn classify_host(host: &str, port: u16) -> HostInfo {
         return info;
     }
     for &(suffix, name) in PROVIDERS {
-        if h == suffix || h.ends_with(&format!(".{suffix}")) {
+        if h == suffix
+            || (h.len() > suffix.len()
+                && h.ends_with(suffix)
+                && h.as_bytes()[h.len() - suffix.len() - 1] == b'.')
+        {
             info.cls = format!("provider:{name}");
             info.points = 15;
             info.reasons.push(format!("known provider domain ({name})"));
@@ -299,9 +338,24 @@ pub fn classify_host(host: &str, port: u16) -> HostInfo {
 }
 
 pub fn path_hint(path: &str) -> Option<&'static str> {
-    let p = normalize_path(path);
+    let p = normalize_path_slice(path);
+    if p.ends_with("/chat/completions") || p.ends_with("/api/chat") || p.ends_with("/chat") {
+        return Some(OPENAI_CHAT);
+    }
+    if p.ends_with("/responses") {
+        return Some(OPENAI_RESPONSES);
+    }
+    if p.ends_with("/messages") {
+        return Some(ANTHROPIC);
+    }
+    if p.ends_with("/completions") || p.ends_with("/api/generate") || p.ends_with("/generate") {
+        return Some(COMPLETIONS);
+    }
+    if p.ends_with(":generateContent") || p.ends_with(":streamGenerateContent") {
+        return Some(GEMINI);
+    }
     for (rx, api) in PATH_HINTS.iter() {
-        if rx.is_match(&p) {
+        if rx.is_match(p) {
             return Some(*api);
         }
     }
@@ -329,7 +383,17 @@ fn percent_decode(s: &str) -> String {
 }
 
 pub fn model_from_path(path: &str) -> Option<String> {
-    let p = format!("{}/", normalize_path(path));
+    let np = normalize_path_slice(path);
+    if !np.contains("/deployments/")
+        && !np.contains("/models/")
+        && !np.contains("/model/")
+        && !np.to_ascii_lowercase().contains("/deployments/")
+        && !np.to_ascii_lowercase().contains("/models/")
+        && !np.to_ascii_lowercase().contains("/model/")
+    {
+        return None;
+    }
+    let p = format!("{np}/");
     for rx in MODEL_FROM_PATH_RE.iter() {
         if let Some(caps) = rx.captures(&p) {
             if let Some(m) = caps.get(1) {

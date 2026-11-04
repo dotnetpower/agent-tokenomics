@@ -14,6 +14,7 @@ use std::time::Duration;
 
 struct MockLlmServer {
     pub url: String,
+    pub port: u16,
     stop: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
 }
@@ -22,7 +23,6 @@ impl MockLlmServer {
     fn start() -> std::io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         let port = listener.local_addr()?.port();
-        let _ = listener.set_nonblocking(true);
         let stop = Arc::new(AtomicBool::new(false));
         let stop_clone = stop.clone();
 
@@ -30,13 +30,13 @@ impl MockLlmServer {
             while !stop_clone.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        let _ = stream.set_nonblocking(false);
+                        if stop_clone.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        let _ = stream.set_nodelay(true);
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
                         let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
                         Self::serve_conn(&mut stream);
-                    }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(5));
                     }
                     Err(_) => break,
                 }
@@ -45,6 +45,7 @@ impl MockLlmServer {
 
         Ok(Self {
             url: format!("http://127.0.0.1:{port}"),
+            port,
             stop,
             handle: Some(handle),
         })
@@ -170,7 +171,12 @@ impl MockLlmServer {
     }
 
     fn stop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
+        if !self.stop.swap(true, Ordering::SeqCst) {
+            let _ = TcpStream::connect_timeout(
+                &std::net::SocketAddr::from(([127, 0, 0, 1], self.port)),
+                Duration::from_millis(50),
+            );
+        }
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
@@ -239,7 +245,7 @@ pub fn run_selftest() -> i32 {
         HashMap::new(),
         Some("selftest".to_string()),
         HashSet::new(),
-        true,
+        false,
         None,
         None,
         false,

@@ -1,5 +1,6 @@
 use crate::detect::{cidr_match, parse_url_parts};
 use base64::Engine;
+use once_cell::sync::Lazy;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, Error as TlsError, RootCertStore, SignatureScheme};
@@ -67,9 +68,37 @@ impl ServerCertVerifier for NoCertificateVerification {
     }
 }
 
-pub fn make_upstream_tls_config() -> Arc<ClientConfig> {
+static BASE_ROOT_STORE: Lazy<RootCertStore> = Lazy::new(|| {
+    let mut roots = RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let native_res = rustls_native_certs::load_native_certs();
+    for cert in native_res.certs {
+        let _ = roots.add(cert);
+    }
+    roots
+});
+
+static DEFAULT_TLS_CONFIG: Lazy<Arc<ClientConfig>> = Lazy::new(|| {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    if std::env::var("TOKPROF_INSECURE_UPSTREAM").ok().as_deref() == Some("1") {
+    let cfg = ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .expect("default TLS protocol versions")
+        .with_root_certificates(BASE_ROOT_STORE.clone())
+        .with_no_client_auth();
+    Arc::new(cfg)
+});
+
+pub fn make_upstream_tls_config() -> Arc<ClientConfig> {
+    let insecure = std::env::var("TOKPROF_INSECURE_UPSTREAM").ok().as_deref() == Some("1");
+    let has_custom_ca = CA_VARIABLES
+        .iter()
+        .any(|&v| std::env::var(v).map(|s| !s.trim().is_empty()).unwrap_or(false));
+    if !insecure && !has_custom_ca {
+        return DEFAULT_TLS_CONFIG.clone();
+    }
+
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    if insecure {
         eprintln!(
             "tokprof: WARNING: upstream TLS certificate verification is disabled (--insecure-upstream)"
         );
@@ -82,12 +111,7 @@ pub fn make_upstream_tls_config() -> Arc<ClientConfig> {
         return Arc::new(cfg);
     }
 
-    let mut roots = RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let native_res = rustls_native_certs::load_native_certs();
-    for cert in native_res.certs {
-        let _ = roots.add(cert);
-    }
+    let mut roots = BASE_ROOT_STORE.clone();
 
     for &var in CA_VARIABLES {
         let Ok(raw_val) = std::env::var(var) else {

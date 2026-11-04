@@ -417,7 +417,7 @@ pub struct Gateway {
     pub record_hosts: bool,
     pub shutdown_flag: Arc<AtomicBool>,
     pub stats: GatewayStats,
-    tls_cfg: Arc<ClientConfig>,
+    tls_cfg: std::sync::OnceLock<Arc<ClientConfig>>,
     warned: Mutex<HashSet<String>>,
 }
 
@@ -457,7 +457,7 @@ impl Gateway {
             record_hosts: rec_hosts,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             stats: GatewayStats::default(),
-            tls_cfg: make_upstream_tls_config(),
+            tls_cfg: std::sync::OnceLock::new(),
             warned: Mutex::new(HashSet::new()),
         })
     }
@@ -537,7 +537,8 @@ impl Gateway {
             connect_tcp_timeout(host, port, timeout).map_err(|e| e.to_string())?
         };
         let sname = ServerName::try_from(host.to_string()).map_err(|e| e.to_string())?;
-        let conn = ClientConnection::new(self.tls_cfg.clone(), sname).map_err(|e| e.to_string())?;
+        let tls_cfg = self.tls_cfg.get_or_init(make_upstream_tls_config).clone();
+        let conn = ClientConnection::new(tls_cfg, sname).map_err(|e| e.to_string())?;
         let mut tls_stream = StreamOwned::new(conn, tcp);
         // Complete TLS handshake eagerly so certificate errors surface on connect
         if let Err(e) = tls_stream.conn.complete_io(&mut tls_stream.sock) {
@@ -553,8 +554,20 @@ impl Gateway {
         body: &[u8],
         ctype: &str,
     ) -> std::io::Result<()> {
+        Self::respond_conn(writer, status, reason, body, ctype, false)
+    }
+
+    fn respond_conn(
+        writer: &mut TcpStream,
+        status: u16,
+        reason: &str,
+        body: &[u8],
+        ctype: &str,
+        keep_alive: bool,
+    ) -> std::io::Result<()> {
+        let conn_hdr = if keep_alive { "keep-alive" } else { "close" };
         let head = format!(
-            "HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: {conn_hdr}\r\n\r\n",
             body.len()
         );
         writer.write_all(head.as_bytes())?;
@@ -564,14 +577,28 @@ impl Gateway {
 
     pub fn handle_connection(self: &Arc<Self>, mut stream: TcpStream) {
         self.stats.active.fetch_add(1, Ordering::SeqCst);
+        let _ = stream.set_nodelay(true);
         let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
         let _ = stream.set_write_timeout(Some(Duration::from_secs(60)));
-        if let Err(e) = self.serve_one(&mut stream) {
-            self.stats.dropped.fetch_add(1, Ordering::SeqCst);
-            self.warn_once(
-                &format!("drop:{:?}", e.kind()),
-                &format!("client connection ended early ({e})"),
-            );
+        let mut req_idx = 0usize;
+        while !self.shutdown_flag.load(Ordering::SeqCst) {
+            match self.serve_one(&mut stream) {
+                Ok(true) => {
+                    req_idx += 1;
+                    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                }
+                Ok(false) => break,
+                Err(e) => {
+                    if req_idx == 0 && e.kind() != std::io::ErrorKind::UnexpectedEof {
+                        self.stats.dropped.fetch_add(1, Ordering::SeqCst);
+                        self.warn_once(
+                            &format!("drop:{:?}", e.kind()),
+                            &format!("client connection ended early ({e})"),
+                        );
+                    }
+                    break;
+                }
+            }
         }
         let _ = stream.shutdown(std::net::Shutdown::Both);
         self.stats.active.fetch_sub(1, Ordering::SeqCst);
@@ -584,12 +611,16 @@ impl Gateway {
             .unwrap_or(0.0)
     }
 
-    fn serve_one(self: &Arc<Self>, stream: &mut TcpStream) -> std::io::Result<()> {
+    fn serve_one(self: &Arc<Self>, stream: &mut TcpStream) -> std::io::Result<bool> {
         let (raw_head, leftover) = read_head(stream, MAX_HEAD)?;
         let (first, headers, hd) = parse_head(&raw_head);
         let mut parts = first.split(' ');
         let method = parts.next().unwrap_or("").to_string();
         let target = parts.next().unwrap_or("").to_string();
+        let want_keep_alive = hd
+            .get("connection")
+            .map(|v| v.eq_ignore_ascii_case("keep-alive"))
+            .unwrap_or(false);
         self.stats.requests.fetch_add(1, Ordering::SeqCst);
 
         if target.starts_with("/__tokprof/health") {
@@ -610,28 +641,33 @@ impl Gateway {
                 "bypassed": self.stats.bypassed.load(Ordering::SeqCst),
             }))
             .unwrap_or_default();
-            return Self::respond(stream, 200, "OK", &body, "application/json");
+            Self::respond_conn(stream, 200, "OK", &body, "application/json", want_keep_alive)?;
+            return Ok(want_keep_alive);
         }
 
         if target.starts_with("/__tokprof/shutdown") && method == "POST" {
             if !self.valid_token(hd.get("x-tokprof-token").map(|s| s.as_str())) {
-                return Self::respond(stream, 403, "Forbidden", b"tokprof: bad shutdown token", "text/plain");
+                Self::respond(stream, 403, "Forbidden", b"tokprof: bad shutdown token", "text/plain")?;
+                return Ok(false);
             }
             self.shutdown_flag.store(true, Ordering::SeqCst);
-            return Self::respond(stream, 204, "No Content", b"", "text/plain");
+            Self::respond(stream, 204, "No Content", b"", "text/plain")?;
+            return Ok(false);
         }
 
         if target.starts_with("/__tokprof/ingest") && method == "POST" {
             let body = read_request_body(stream, &hd, &leftover)?;
             if !self.valid_token(hd.get("x-tokprof-token").map(|s| s.as_str())) {
-                return Self::respond(stream, 403, "Forbidden", b"tokprof: bad ingest token", "text/plain");
+                Self::respond(stream, 403, "Forbidden", b"tokprof: bad ingest token", "text/plain")?;
+                return Ok(false);
             }
             if let Ok(msg) = serde_json::from_slice::<Value>(&body) {
                 self.ingest_message(&msg);
             } else {
                 self.stats.record_errors.fetch_add(1, Ordering::SeqCst);
             }
-            return Self::respond(stream, 204, "No Content", b"", "text/plain");
+            Self::respond_conn(stream, 204, "No Content", b"", "text/plain", want_keep_alive)?;
+            return Ok(want_keep_alive);
         }
 
         if let Ok(mut g) = self.stats.last_request_ts.lock() {
@@ -648,13 +684,14 @@ impl Gateway {
         let body = read_request_body(stream, &hd, &leftover)?;
         let Some((scheme, host, port, upath)) = self.resolve(&target) else {
             self.stats.bypassed.fetch_add(1, Ordering::SeqCst);
-            return Self::respond(
+            Self::respond(
                 stream,
                 404,
                 "Not Found",
                 b"tokprof: no upstream route for this path",
                 "text/plain",
-            );
+            )?;
+            return Ok(false);
         };
 
         let mut verdict_opt: Option<Verdict> = None;
@@ -690,7 +727,8 @@ impl Gateway {
                     hint = " (the endpoint's certificate is not trusted: for a private CA pass --upstream-ca FILE or set SSL_CERT_FILE)";
                 }
                 let msg = format!("tokprof: upstream connect failed: {e}{hint}");
-                return Self::respond(stream, 502, "Bad Gateway", msg.as_bytes(), "text/plain");
+                Self::respond(stream, 502, "Bad Gateway", msg.as_bytes(), "text/plain")?;
+                return Ok(false);
             }
         };
 
@@ -818,7 +856,8 @@ impl Gateway {
             }
             Err(e) => {
                 let msg = format!("tokprof: upstream closed the connection: {e}");
-                return Self::respond(stream, 502, "Bad Gateway", msg.as_bytes(), "text/plain");
+                Self::respond(stream, 502, "Bad Gateway", msg.as_bytes(), "text/plain")?;
+                return Ok(false);
             }
         }
 
@@ -847,7 +886,7 @@ impl Gateway {
                 );
             }
         }
-        Ok(())
+        Ok(false)
     }
 
     fn decide(
@@ -1046,6 +1085,7 @@ pub struct GatewayServer {
     pub port: u16,
     stop: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
+    workers: Vec<thread::JoinHandle<()>>,
 }
 
 impl GatewayServer {
@@ -1053,10 +1093,28 @@ impl GatewayServer {
         let listener = TcpListener::bind((gateway.host.as_str(), 0))?;
         let port = listener.local_addr()?.port();
         gateway.port.store(port as usize, Ordering::SeqCst);
-        let _ = listener.set_nonblocking(true);
         let stop = gateway.shutdown_flag.clone();
         let stop_thread = stop.clone();
-        let gw_clone = gateway.clone();
+
+        let (tx, rx) = std::sync::mpsc::sync_channel::<TcpStream>(256);
+        let shared_rx = Arc::new(Mutex::new(rx));
+        let mut workers = Vec::with_capacity(8);
+        for w_idx in 0..8 {
+            let rx_clone = shared_rx.clone();
+            let gw_worker = gateway.clone();
+            if let Ok(wh) = thread::Builder::new()
+                .name(format!("tokprof-w{w_idx}"))
+                .spawn(move || loop {
+                    let stream_opt = rx_clone.lock().ok().and_then(|r| r.recv().ok());
+                    match stream_opt {
+                        Some(stream) => gw_worker.handle_connection(stream),
+                        None => break,
+                    }
+                })
+            {
+                workers.push(wh);
+            }
+        }
 
         let handle = thread::Builder::new()
             .name("tokprof-gateway".to_string())
@@ -1064,23 +1122,19 @@ impl GatewayServer {
                 while !stop_thread.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((stream, _)) => {
-                            if gw_clone.stats.active.load(Ordering::SeqCst) >= 256 {
+                            if stop_thread.load(Ordering::SeqCst) {
                                 let _ = stream.shutdown(std::net::Shutdown::Both);
-                                continue;
+                                break;
                             }
-                            let _ = stream.set_nonblocking(false);
-                            let gw = gw_clone.clone();
-                            let _ = thread::Builder::new()
-                                .name("tokprof-conn".to_string())
-                                .spawn(move || {
-                                    gw.handle_connection(stream);
-                                });
-                        }
-                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                            thread::sleep(Duration::from_millis(5));
+                            if tx.try_send(stream).is_err() {
+                                // Channel full or closed
+                            }
                         }
                         Err(_) => {
-                            thread::sleep(Duration::from_millis(10));
+                            if stop_thread.load(Ordering::SeqCst) {
+                                break;
+                            }
+                            thread::sleep(Duration::from_millis(2));
                         }
                     }
                 }
@@ -1091,17 +1145,26 @@ impl GatewayServer {
             port,
             stop,
             handle: Some(handle),
+            workers,
         })
     }
 
     pub fn stop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while self.gateway.stats.active.load(Ordering::SeqCst) > 0 && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(5));
+        if !self.stop.swap(true, Ordering::SeqCst) {
+            let _ = TcpStream::connect_timeout(
+                &std::net::SocketAddr::from(([127, 0, 0, 1], self.port)),
+                Duration::from_millis(50),
+            );
         }
         if let Some(h) = self.handle.take() {
             let _ = h.join();
+        }
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while self.gateway.stats.active.load(Ordering::SeqCst) > 0 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(2));
+        }
+        for wh in self.workers.drain(..) {
+            let _ = wh.join();
         }
     }
 }

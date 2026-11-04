@@ -1,7 +1,10 @@
 use crate::analyze::{estimate_cost, summarize, SummaryReport};
+use crate::counting::fast_hash_pair;
 use crate::model::CallRecord;
-use crate::segment::safe_char_prefix;
+use crate::segment::{fast_char_count, format_with_commas, safe_char_prefix};
 use serde_json::{Map, Value};
+use std::collections::HashMap;
+use std::fmt::Write as _;
 
 pub const CSV_COLUMNS: &[&str] = &[
     "row_type",
@@ -100,23 +103,17 @@ fn ansi_code(tag: &str) -> &'static str {
 }
 
 pub fn fmt_num(n: i64) -> String {
-    let neg = n < 0;
-    let s = n.unsigned_abs().to_string();
-    let mut out = String::with_capacity(s.len() + s.len() / 3 + 1);
-    for (i, ch) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            out.push(',');
-        }
-        out.push(ch);
+    let abs = n.unsigned_abs() as usize;
+    let s = format_with_commas(abs);
+    if n < 0 {
+        format!("-{s}")
+    } else {
+        s
     }
-    if neg {
-        out.push('-');
-    }
-    out.chars().rev().collect()
 }
 
 pub fn fmt_usize(n: usize) -> String {
-    fmt_num(n as i64)
+    format_with_commas(n)
 }
 
 fn ascii_bar(share: f64, width: usize) -> String {
@@ -164,7 +161,7 @@ pub fn preview_line(text: &str, limit: usize) -> String {
     }
     let (sample, _) = safe_char_prefix(text, limit * 3);
     let clean: String = sample.split_whitespace().collect::<Vec<_>>().join(" ");
-    let clean_chars = clean.chars().count();
+    let clean_chars = fast_char_count(&clean);
     if clean_chars > limit {
         let (pref, _) = safe_char_prefix(&clean, limit.saturating_sub(1));
         format!("{pref}…")
@@ -177,7 +174,7 @@ pub fn indent_block(text: &str, prefix: &str, max_lines: usize, max_chars: usize
     if text.is_empty() {
         return Vec::new();
     }
-    let orig_chars = text.chars().count();
+    let orig_chars = fast_char_count(text);
     let trimmed = text.trim();
     let (clipped, clipped_chars) = safe_char_prefix(trimmed, max_chars);
     let mut truncated = clipped_chars > max_chars;
@@ -996,18 +993,66 @@ pub fn csv_quote(val: &str) -> String {
     if val.is_empty() {
         return String::new();
     }
-    let clean = if val.contains('\0') || val.contains('\r') {
+    let bytes = val.as_bytes();
+    let mut needs_clean = false;
+    let mut needs_quote = false;
+    for &b in bytes {
+        match b {
+            b'\0' | b'\r' => needs_clean = true,
+            b',' | b'"' | b'\n' => needs_quote = true,
+            _ => {}
+        }
+    }
+    if !needs_clean && !needs_quote {
+        return val.to_string();
+    }
+    let clean = if needs_clean {
         val.replace('\0', "")
             .replace("\r\n", "\n")
             .replace('\r', "\n")
     } else {
         val.to_string()
     };
-    if clean.contains(',') || clean.contains('"') || clean.contains('\n') {
-        format!("\"{}\"", clean.replace('"', "\"\""))
+    if needs_quote || clean.contains('\n') {
+        if clean.contains('"') {
+            format!("\"{}\"", clean.replace('"', "\"\""))
+        } else {
+            format!("\"{clean}\"")
+        }
     } else {
         clean
     }
+}
+
+fn write_csv_cached<'a>(
+    val: &'a str,
+    cache: &'a mut HashMap<(u64, u64, usize), String>,
+    out: &mut String,
+) {
+    if val.is_empty() {
+        return;
+    }
+    if val.len() <= 64 {
+        let bytes = val.as_bytes();
+        if !bytes
+            .iter()
+            .any(|&b| matches!(b, b'\0' | b'\r' | b',' | b'"' | b'\n'))
+        {
+            out.push_str(val);
+            return;
+        }
+        out.push_str(&csv_quote(val));
+        return;
+    }
+    let (h1, h2) = fast_hash_pair(val.as_bytes());
+    let key = (h1, h2, val.len());
+    if let Some(q) = cache.get(&key) {
+        out.push_str(q);
+        return;
+    }
+    let q = csv_quote(val);
+    out.push_str(&q);
+    cache.insert(key, q);
 }
 
 pub fn render_csv(
@@ -1027,144 +1072,140 @@ pub fn render_csv(
             &owned_s
         }
     };
-    let mut lines = vec![header];
+    let mut out = String::with_capacity(header.len() + s.call_details.len() * 1024 + 512);
+    out.push_str(&header);
+    let mut cache: HashMap<(u64, u64, usize), String> = HashMap::with_capacity(64);
+
     for sess in &s.sessions {
-        let row: [String; 34] = [
-            "session".to_string(),
-            csv_quote(&sess.session),
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-            csv_quote(&sess.models.join(",")),
-            String::new(),
-            String::new(),
-            String::new(),
-            sess.turns_count.to_string(),
-            sess.calls_count.to_string(),
-            sess.input_total.to_string(),
-            sess.cached_total.to_string(),
-            sess.output_total.to_string(),
-            sess.system.to_string(),
-            sess.history.to_string(),
-            String::new(),
-            String::new(),
-            sess.user_prompt.to_string(),
-            sess.tools_schema.to_string(),
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-            sess.other.to_string(),
-            sess.residual.to_string(),
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-        ];
-        lines.push(row.join(","));
+        out.push_str("\nsession,");
+        write_csv_cached(&sess.session, &mut cache, &mut out);
+        out.push_str(",,,,,");
+        write_csv_cached(&sess.models.join(","), &mut cache, &mut out);
+        let _ = write!(
+            out,
+            ",,,,{},{},{},{},{},{},{},,,{},{},,,,,{},{},,,,,,,",
+            sess.turns_count,
+            sess.calls_count,
+            sess.input_total,
+            sess.cached_total,
+            sess.output_total,
+            sess.system,
+            sess.history,
+            sess.user_prompt,
+            sess.tools_schema,
+            sess.other,
+            sess.residual
+        );
     }
     for t in &s.turns {
-        let row: [String; 34] = [
-            "turn".to_string(),
-            csv_quote(&t.session),
-            t.turn.to_string(),
-            String::new(),
-            String::new(),
-            String::new(),
-            csv_quote(&t.models.join(",")),
-            String::new(),
-            String::new(),
-            String::new(),
-            "1".to_string(),
-            t.calls_count.to_string(),
-            t.input_total.to_string(),
-            t.cached_total.to_string(),
-            t.output_total.to_string(),
-            t.system.to_string(),
-            t.history.to_string(),
-            t.history_user.to_string(),
-            t.history_assistant.to_string(),
-            t.user_prompt.to_string(),
-            t.tools_schema.to_string(),
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-            t.other.to_string(),
-            t.residual.to_string(),
-            t.latency_ms.to_string(),
-            String::new(),
-            String::new(),
-            csv_quote(&t.history_text),
-            csv_quote(&t.user_text),
-            String::new(),
-            csv_quote(&t.response_text),
-        ];
-        lines.push(row.join(","));
+        out.push_str("\nturn,");
+        write_csv_cached(&t.session, &mut cache, &mut out);
+        let _ = write!(out, ",{},,,,", t.turn);
+        write_csv_cached(&t.models.join(","), &mut cache, &mut out);
+        let _ = write!(
+            out,
+            ",,,,1,{},{},{},{},{},{},{},{},{},{},,,,,{},{},{},,,",
+            t.calls_count,
+            t.input_total,
+            t.cached_total,
+            t.output_total,
+            t.system,
+            t.history,
+            t.history_user,
+            t.history_assistant,
+            t.user_prompt,
+            t.tools_schema,
+            t.other,
+            t.residual,
+            t.latency_ms,
+        );
+        write_csv_cached(&t.history_text, &mut cache, &mut out);
+        out.push(',');
+        write_csv_cached(&t.user_text, &mut cache, &mut out);
+        out.push_str(",,");
+        write_csv_cached(&t.response_text, &mut cache, &mut out);
     }
     for cd in &s.call_details {
         let p = &cd.prompts;
-        let lat = cd
-            .latency_ms
-            .map(|v| v.to_string())
-            .unwrap_or_default();
-        let st = cd.status.map(|v| v.to_string()).unwrap_or_default();
-        let row: [String; 34] = [
-            "call".to_string(),
-            csv_quote(&cd.session),
-            cd.turn.to_string(),
-            cd.index.to_string(),
-            csv_quote(&cd.id),
-            cd.ts.to_string(),
-            csv_quote(&cd.model),
-            csv_quote(&cd.provider),
-            csv_quote(&cd.step),
-            csv_quote(cd.step_label.as_deref().unwrap_or("")),
-            String::new(),
-            "1".to_string(),
-            cd.input_total.to_string(),
-            cd.cached.to_string(),
-            cd.output.to_string(),
-            cd.system.to_string(),
-            cd.history.to_string(),
-            cd.history_user.to_string(),
-            cd.history_assistant.to_string(),
-            cd.user_prompt.to_string(),
-            cd.tools_schema.to_string(),
-            cd.tool_def.to_string(),
-            cd.tool_call.to_string(),
-            cd.tool_result.to_string(),
-            cd.response_schema.to_string(),
-            cd.other.to_string(),
-            cd.residual.to_string(),
-            lat,
-            st,
-            csv_quote(&p.system),
-            csv_quote(&p.history),
-            csv_quote(&p.user_prompt),
-            csv_quote(&p.tools_schema),
-            csv_quote(&p.response),
-        ];
-        lines.push(row.join(","));
+        out.push_str("\ncall,");
+        write_csv_cached(&cd.session, &mut cache, &mut out);
+        let _ = write!(out, ",{},{},", cd.turn, cd.index);
+        write_csv_cached(&cd.id, &mut cache, &mut out);
+        let _ = write!(out, ",{},", cd.ts);
+        write_csv_cached(&cd.model, &mut cache, &mut out);
+        out.push(',');
+        write_csv_cached(&cd.provider, &mut cache, &mut out);
+        out.push(',');
+        write_csv_cached(&cd.step, &mut cache, &mut out);
+        out.push(',');
+        write_csv_cached(cd.step_label.as_deref().unwrap_or(""), &mut cache, &mut out);
+        let _ = write!(
+            out,
+            ",,1,{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},",
+            cd.input_total,
+            cd.cached,
+            cd.output,
+            cd.system,
+            cd.history,
+            cd.history_user,
+            cd.history_assistant,
+            cd.user_prompt,
+            cd.tools_schema,
+            cd.tool_def,
+            cd.tool_call,
+            cd.tool_result,
+            cd.response_schema,
+            cd.other,
+            cd.residual,
+        );
+        if let Some(lat) = cd.latency_ms {
+            let _ = write!(out, "{lat}");
+        }
+        out.push(',');
+        if let Some(st) = cd.status {
+            let _ = write!(out, "{st}");
+        }
+        out.push(',');
+        write_csv_cached(&p.system, &mut cache, &mut out);
+        out.push(',');
+        write_csv_cached(&p.history, &mut cache, &mut out);
+        out.push(',');
+        write_csv_cached(&p.user_prompt, &mut cache, &mut out);
+        out.push(',');
+        write_csv_cached(&p.tools_schema, &mut cache, &mut out);
+        out.push(',');
+        write_csv_cached(&p.response, &mut cache, &mut out);
     }
-    lines.join("\n")
+    out
 }
 
 pub fn html_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#x27;"),
-            _ => out.push(ch),
+    let bytes = s.as_bytes();
+    if !bytes
+        .iter()
+        .any(|&b| matches!(b, b'&' | b'<' | b'>' | b'"' | b'\''))
+    {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len() + s.len() / 8);
+    let mut last = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        let rep = match b {
+            b'&' => "&amp;",
+            b'<' => "&lt;",
+            b'>' => "&gt;",
+            b'"' => "&quot;",
+            b'\'' => "&#x27;",
+            _ => continue,
+        };
+        if i > last {
+            out.push_str(&s[last..i]);
         }
+        out.push_str(rep);
+        last = i + 1;
+    }
+    if last < s.len() {
+        out.push_str(&s[last..]);
     }
     out
 }
@@ -1312,9 +1353,39 @@ pub fn render_html(
         .map(|cd| cd.input_total.max(1))
         .max()
         .unwrap_or(1) as f64;
-    let mut call_rows = Vec::new();
+    let shown_cnt = s.call_details.len().min(150);
+    let mut call_html = String::with_capacity(shown_cnt * 2048);
+    let mut sec_cache: HashMap<(&'static str, i64, u64, u64, usize), String> =
+        HashMap::with_capacity(64);
     for cd in s.call_details.iter().take(150) {
-        let mut bars = Vec::new();
+        let _ = write!(
+            call_html,
+            r#"<tr><td class="num">#{}</td><td><code>{}·T{}</code></td><td><code>{}"#,
+            cd.index,
+            html_escape(&cd.session),
+            cd.turn,
+            html_escape(&cd.model)
+        );
+        if let Some(ref sl) = cd.step_label {
+            if sl != &cd.model {
+                let _ = write!(call_html, r#" <span class="sub">({})</span>"#, html_escape(sl));
+            }
+        }
+        let lat = cd
+            .latency_ms
+            .map(|ms| format!("{} ms", fmt_num(ms)))
+            .unwrap_or_else(|| "-".to_string());
+        let _ = write!(
+            call_html,
+            r#"</code></td><td class="num">{}</td><td class="num">{}</td><td class="num">{}</td><td class="num">{}</td><td class="num"><strong>{}</strong></td><td class="num">{}</td><td class="num">{}</td><td class="num">{lat}</td><td><div class="call-bar">"#,
+            fmt_num(cd.system),
+            fmt_num(cd.history),
+            fmt_num(cd.user_prompt),
+            fmt_num(cd.tools_schema),
+            fmt_num(cd.input_total),
+            fmt_num(cd.cached),
+            fmt_num(cd.output),
+        );
         for (k_name, kv, col) in [
             ("System Prompt", cd.system, kind_color_hex("system")),
             (
@@ -1327,78 +1398,74 @@ pub fn render_html(
         ] {
             if kv > 0 {
                 let w = 100.0 * (kv as f64) / max_in;
-                bars.push(format!(
+                let _ = write!(
+                    call_html,
                     r#"<span style="width:{w:.2}%;background:{col}" title="{k_name}: {} tok"></span>"#,
                     fmt_num(kv)
-                ));
+                );
             }
         }
-        let mut model_lbl = html_escape(&cd.model);
-        if let Some(ref sl) = cd.step_label {
-            if sl != &cd.model {
-                model_lbl.push_str(&format!(r#" <span class="sub">({})</span>"#, html_escape(sl)));
-            }
-        }
-        let lat = cd
-            .latency_ms
-            .map(|ms| format!("{} ms", fmt_num(ms)))
-            .unwrap_or_else(|| "-".to_string());
+        call_html.push_str("</div>");
         let p = &cd.prompts;
-        let mut prompt_blocks = Vec::new();
-        for (val, label, tok_cnt, col) in [
-            (&p.system, "System Prompt", cd.system, kind_color_hex("system")),
-            (
-                &p.history,
-                "Conversation History",
-                cd.history,
-                kind_color_hex("history_user"),
-            ),
-            (
-                &p.user_prompt,
-                "Current User Prompt",
-                cd.user_prompt,
-                kind_color_hex("user_prompt"),
-            ),
-            (
-                &p.tools_schema,
-                "Tools & Response Schema",
-                cd.tools_schema,
-                kind_color_hex("tool_def"),
-            ),
-            (&p.other, "Other Context", cd.other, kind_color_hex("other")),
-            (&p.response, "Assistant Output", cd.output, "#10b981"),
-        ] {
-            if !val.is_empty() {
-                prompt_blocks.push(format!(
-                    r#"<div class="p-sec"><div class="p-head"><span class="dot" style="background:{col}"></span><strong>{label}</strong> <span class="sub">({} tokens)</span></div><pre class="p-pre">{}</pre></div>"#,
-                    fmt_num(tok_cnt),
-                    html_escape(val)
-                ));
+        let has_any_prompt = !p.system.is_empty()
+            || !p.history.is_empty()
+            || !p.user_prompt.is_empty()
+            || !p.tools_schema.is_empty()
+            || !p.other.is_empty()
+            || !p.response.is_empty();
+        if has_any_prompt {
+            call_html.push_str(
+                r#"<details class="p-details"><summary>View prompts &amp; response</summary><div class="p-box">"#,
+            );
+            for (val, label, tok_cnt, col) in [
+                (&p.system, "System Prompt", cd.system, kind_color_hex("system")),
+                (
+                    &p.history,
+                    "Conversation History",
+                    cd.history,
+                    kind_color_hex("history_user"),
+                ),
+                (
+                    &p.user_prompt,
+                    "Current User Prompt",
+                    cd.user_prompt,
+                    kind_color_hex("user_prompt"),
+                ),
+                (
+                    &p.tools_schema,
+                    "Tools & Response Schema",
+                    cd.tools_schema,
+                    kind_color_hex("tool_def"),
+                ),
+                (&p.other, "Other Context", cd.other, kind_color_hex("other")),
+                (&p.response, "Assistant Output", cd.output, "#10b981"),
+            ] {
+                if !val.is_empty() {
+                    let (h1, h2) = fast_hash_pair(val.as_bytes());
+                    let ckey = (label, tok_cnt, h1, h2, val.len());
+                    if let Some(cached_sec) = sec_cache.get(&ckey) {
+                        call_html.push_str(cached_sec);
+                    } else {
+                        let sec_html = format!(
+                            r#"<div class="p-sec"><div class="p-head"><span class="dot" style="background:{col}"></span><strong>{label}</strong> <span class="sub">({} tokens)</span></div><pre class="p-pre">{}</pre></div>"#,
+                            fmt_num(tok_cnt),
+                            html_escape(val)
+                        );
+                        call_html.push_str(&sec_html);
+                        sec_cache.insert(ckey, sec_html);
+                    }
+                }
             }
-        }
-        let inspector = if !prompt_blocks.is_empty() {
-            format!(
-                r#"<details class="p-details"><summary>View prompts &amp; response</summary><div class="p-box">{}</div></details>"#,
-                prompt_blocks.join("")
-            )
+            call_html.push_str("</div></details>");
         } else {
-            r#"<span class="sub">no text stored (re-capture to inspect full prompt text)</span>"#
-                .to_string()
-        };
-        call_rows.push(format!(
-            r#"<tr><td class="num">#{}</td><td><code>{}·T{}</code></td><td><code>{model_lbl}</code></td><td class="num">{}</td><td class="num">{}</td><td class="num">{}</td><td class="num">{}</td><td class="num"><strong>{}</strong></td><td class="num">{}</td><td class="num">{}</td><td class="num">{lat}</td><td><div class="call-bar">{}</div>{inspector}</td></tr>"#,
-            cd.index,
-            html_escape(&cd.session),
-            cd.turn,
-            fmt_num(cd.system),
-            fmt_num(cd.history),
-            fmt_num(cd.user_prompt),
-            fmt_num(cd.tools_schema),
-            fmt_num(cd.input_total),
-            fmt_num(cd.cached),
-            fmt_num(cd.output),
-            bars.join("")
-        ));
+            call_html.push_str(
+                r#"<span class="sub">no text stored (re-capture to inspect full prompt text)</span>"#,
+            );
+        }
+        call_html.push_str("</td></tr>");
+    }
+    if call_html.is_empty() {
+        call_html.push_str(r#"<tr><td colspan="12" class="sub">No calls recorded</td></tr>"#);
     }
 
     let mut step_rows = Vec::new();
@@ -1640,13 +1707,9 @@ footer {{ color: var(--muted); font-size: 0.8rem; margin-top: 24px; text-align: 
         } else {
             turn_rows.join("")
         },
-        shown_calls = s.call_details.len().min(150),
+        shown_calls = shown_cnt,
         total_calls = s.call_details.len(),
-        call_html = if call_rows.is_empty() {
-            r#"<tr><td colspan="12" class="sub">No calls recorded</td></tr>"#.to_string()
-        } else {
-            call_rows.join("")
-        },
+        call_html = call_html,
         findings_html = finding_cards.join(""),
         steps_html = if step_rows.is_empty() {
             r#"<tr><td colspan="5" class="sub">No steps recorded</td></tr>"#.to_string()

@@ -494,6 +494,47 @@ pub fn parse_response_json(provider: &str, obj: &Value) -> ParsedResponse {
     r
 }
 
+fn find_next_sse_boundary(slice: &[u8]) -> Option<(usize, usize)> {
+    let mut offset = 0usize;
+    while offset < slice.len() {
+        let rel = slice[offset..].iter().position(|&b| b == b'\n')?;
+        let i = offset + rel;
+        if i + 1 < slice.len() && slice[i + 1] == b'\n' {
+            if i > 0 && slice[i - 1] == b'\r' {
+                return Some((i - 1, 3));
+            }
+            return Some((i, 2));
+        }
+        if i + 2 < slice.len() && slice[i + 1] == b'\r' && slice[i + 2] == b'\n' {
+            if i > 0 && slice[i - 1] == b'\r' {
+                return Some((i - 1, 4));
+            }
+            return Some((i, 3));
+        }
+        offset = i + 1;
+    }
+    None
+}
+
+#[inline]
+fn trim_ascii(mut s: &[u8]) -> &[u8] {
+    while let Some(&first) = s.first() {
+        if first.is_ascii_whitespace() {
+            s = &s[1..];
+        } else {
+            break;
+        }
+    }
+    while let Some(&last) = s.last() {
+        if last.is_ascii_whitespace() {
+            s = &s[..s.len() - 1];
+        } else {
+            break;
+        }
+    }
+    s
+}
+
 pub struct SSEParser {
     pub provider: String,
     buf: Vec<u8>,
@@ -522,24 +563,13 @@ impl SSEParser {
         }
         self.buf.extend_from_slice(data);
         while self.pos < self.buf.len() {
-            let slice = &self.buf[self.pos..];
-            let idx_lf = find_subslice(slice, b"\n\n");
-            let idx_crlf = find_subslice(slice, b"\r\n\r\n");
-            let (idx, sep_len) = match (idx_lf, idx_crlf) {
-                (None, None) => break,
-                (Some(l), None) => (l, 2),
-                (None, Some(c)) => (c, 4),
-                (Some(l), Some(c)) => {
-                    if c < l {
-                        (c, 4)
-                    } else {
-                        (l, 2)
-                    }
-                }
+            let Some((idx, sep_len)) = find_next_sse_boundary(&self.buf[self.pos..]) else {
+                break;
             };
-            let event = self.buf[self.pos..self.pos + idx].to_vec();
+            let ev_start = self.pos;
+            let ev_end = self.pos + idx;
             self.pos += idx + sep_len;
-            self.process_event(&event);
+            self.process_event_range(ev_start, ev_end);
         }
         if self.pos > 65_536 || self.pos == self.buf.len() {
             self.buf.drain(..self.pos);
@@ -562,34 +592,71 @@ impl SSEParser {
 
     pub fn finish(&mut self) -> ParsedResponse {
         if self.pos < self.buf.len() {
-            let rem = self.buf[self.pos..].to_vec();
+            let ev_start = self.pos;
+            let ev_end = self.buf.len();
+            self.pos = ev_end;
+            self.process_event_range(ev_start, ev_end);
             self.buf.clear();
             self.pos = 0;
-            self.process_event(&rem);
         }
         self.result.clone()
     }
 
-    fn process_event(&mut self, raw: &[u8]) {
+    fn process_event_range(&mut self, start: usize, end: usize) {
+        let raw = &self.buf[start..end];
         if find_subslice(raw, b"data:").is_none() {
             return;
         }
-        let s = String::from_utf8_lossy(raw);
-        let mut payloads = Vec::new();
-        for line in s.lines() {
-            if let Some(rest) = line.strip_prefix("data:") {
-                payloads.push(rest.trim());
+        let mut first_payload: Option<(usize, usize)> = None;
+        let mut multi_payload: Option<Vec<u8>> = None;
+        let mut line_start = start;
+        while line_start <= end {
+            let rel_nl = self.buf[line_start..end]
+                .iter()
+                .position(|&b| b == b'\n')
+                .unwrap_or(end - line_start);
+            let mut line_end = line_start + rel_nl;
+            if line_end > line_start && self.buf[line_end - 1] == b'\r' {
+                line_end -= 1;
             }
+            let line = &self.buf[line_start..line_end];
+            if line.starts_with(b"data:") {
+                let p = trim_ascii(&line[5..]);
+                if let Some(ref mut joined) = multi_payload {
+                    joined.push(b'\n');
+                    joined.extend_from_slice(p);
+                } else if let Some((fs, fe)) = first_payload {
+                    let mut v = Vec::with_capacity((fe - fs) + 1 + p.len());
+                    v.extend_from_slice(&self.buf[fs..fe]);
+                    v.push(b'\n');
+                    v.extend_from_slice(p);
+                    multi_payload = Some(v);
+                } else {
+                    let off = p.as_ptr() as usize - self.buf.as_ptr() as usize;
+                    first_payload = Some((off, off + p.len()));
+                }
+            }
+            if line_start + rel_nl >= end {
+                break;
+            }
+            line_start += rel_nl + 1;
         }
-        if payloads.is_empty() {
-            return;
-        }
-        let joined = payloads.join("\n");
-        if joined == "[DONE]" || joined.is_empty() {
-            return;
-        }
-        if let Ok(Value::Object(o)) = serde_json::from_str::<Value>(&joined) {
-            self.process_obj(&o);
+
+        if let Some(joined) = multi_payload {
+            if joined.is_empty() || joined == b"[DONE]" {
+                return;
+            }
+            if let Ok(Value::Object(o)) = serde_json::from_slice::<Value>(&joined) {
+                self.process_obj(&o);
+            }
+        } else if let Some((ps, pe)) = first_payload {
+            let slice = &self.buf[ps..pe];
+            if slice.is_empty() || slice == b"[DONE]" {
+                return;
+            }
+            if let Ok(Value::Object(o)) = serde_json::from_slice::<Value>(slice) {
+                self.process_obj(&o);
+            }
         }
     }
 
@@ -700,10 +767,28 @@ impl SSEParser {
 }
 
 pub fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || haystack.len() < needle.len() {
+    let nlen = needle.len();
+    if nlen == 0 || haystack.len() < nlen {
         return None;
     }
-    haystack.windows(needle.len()).position(|w| w == needle)
+    let first = needle[0];
+    if nlen == 1 {
+        return haystack.iter().position(|&b| b == first);
+    }
+    let last_start = haystack.len() - nlen;
+    let tail = &needle[1..];
+    let mut offset = 0usize;
+    while offset <= last_start {
+        let rel = haystack[offset..=last_start]
+            .iter()
+            .position(|&b| b == first)?;
+        let pos = offset + rel;
+        if &haystack[pos + 1..pos + nlen] == tail {
+            return Some(pos);
+        }
+        offset = pos + 1;
+    }
+    None
 }
 
 fn unwrap_eventstream_obj(obj: Map<String, Value>) -> Vec<Map<String, Value>> {

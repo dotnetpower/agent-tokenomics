@@ -4,20 +4,83 @@ use std::sync::Mutex;
 use tiktoken_rs::CoreBPE;
 
 const MAX_CACHE_TEXT_LEN: usize = 65_536;
-const MAX_CACHE_ENTRIES: usize = 2048;
+const SHARD_COUNT: usize = 16;
+const MAX_SHARD_ENTRIES: usize = 256;
 
 static O200K_BPE: Lazy<Option<CoreBPE>> = Lazy::new(|| tiktoken_rs::o200k_base().ok());
 static CL100K_BPE: Lazy<Option<CoreBPE>> = Lazy::new(|| tiktoken_rs::cl100k_base().ok());
 static P50K_BPE: Lazy<Option<CoreBPE>> = Lazy::new(|| tiktoken_rs::p50k_base().ok());
 static R50K_BPE: Lazy<Option<CoreBPE>> = Lazy::new(|| tiktoken_rs::r50k_base().ok());
 
-static COUNT_CACHE: Lazy<Mutex<HashMap<(String, String), i64>>> =
-    Lazy::new(|| Mutex::new(HashMap::with_capacity(512)));
+type CacheKey = (u8, usize, u64, u64);
+static COUNT_SHARDS: Lazy<[Mutex<HashMap<CacheKey, i64>>; SHARD_COUNT]> = Lazy::new(|| {
+    std::array::from_fn(|_| Mutex::new(HashMap::with_capacity(MAX_SHARD_ENTRIES)))
+});
+
+#[inline]
+pub fn fast_hash_pair(bytes: &[u8]) -> (u64, u64) {
+    let mut h1: u64 = 0xcbf29ce484222325;
+    let mut h2: u64 = 0x84222325cbf29ce4;
+    let len = bytes.len();
+    if len <= 512 {
+        for &b in bytes {
+            h1 = (h1 ^ (b as u64)).wrapping_mul(0x100000001b3);
+            h2 = (h2.wrapping_add(b as u64)).wrapping_mul(0x517cc1b727220a95);
+        }
+    } else {
+        for &b in &bytes[..128] {
+            h1 = (h1 ^ (b as u64)).wrapping_mul(0x100000001b3);
+        }
+        for &b in &bytes[len - 128..] {
+            h2 = (h2 ^ (b as u64)).wrapping_mul(0x517cc1b727220a95);
+        }
+        let step = (len - 256) / 64;
+        if step > 0 {
+            let mut idx = 128;
+            while idx < len - 128 {
+                let b = bytes[idx];
+                h1 = (h1 ^ (b as u64)).wrapping_mul(0x100000001b3);
+                h2 = (h2.rotate_left(5) ^ (b as u64)).wrapping_mul(0x517cc1b727220a95);
+                idx += step;
+            }
+        }
+    }
+    (h1, h2)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncodingId {
+    O200k = 1,
+    Cl100k = 2,
+    P50k = 3,
+    R50k = 4,
+}
+
+impl EncodingId {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "o200k_base" => Some(Self::O200k),
+            "cl100k_base" => Some(Self::Cl100k),
+            "p50k_base" => Some(Self::P50k),
+            "r50k_base" => Some(Self::R50k),
+            _ => None,
+        }
+    }
+
+    pub fn bpe(self) -> Option<&'static CoreBPE> {
+        match self {
+            Self::O200k => O200K_BPE.as_ref(),
+            Self::Cl100k => CL100K_BPE.as_ref(),
+            Self::P50k => P50K_BPE.as_ref(),
+            Self::R50k => R50K_BPE.as_ref(),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum CounterKind {
     Heuristic,
-    Tiktoken { encoding: String, approx: bool },
+    Tiktoken { enc_id: EncodingId, approx: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -35,26 +98,15 @@ impl TokenCounter {
     }
 
     pub fn tiktoken(encoding: &str, approx: bool) -> Option<Self> {
-        let avail = match encoding {
-            "o200k_base" => O200K_BPE.is_some(),
-            "cl100k_base" => CL100K_BPE.is_some(),
-            "p50k_base" => P50K_BPE.is_some(),
-            "r50k_base" => R50K_BPE.is_some(),
-            _ => false,
-        };
-        if !avail {
-            return None;
-        }
+        let enc_id = EncodingId::from_name(encoding)?;
+        enc_id.bpe()?;
         let method = if approx {
             format!("tiktoken:{encoding}~approx")
         } else {
             format!("tiktoken:{encoding}")
         };
         Some(Self {
-            kind: CounterKind::Tiktoken {
-                encoding: encoding.to_string(),
-                approx,
-            },
+            kind: CounterKind::Tiktoken { enc_id, approx },
             method,
         })
     }
@@ -63,40 +115,34 @@ impl TokenCounter {
         if text.is_empty() {
             return 0;
         }
-        match &self.kind {
+        match self.kind {
             CounterKind::Heuristic => heuristic_count(text),
-            CounterKind::Tiktoken { encoding, .. } => {
+            CounterKind::Tiktoken { enc_id, .. } => {
                 if text.len() <= MAX_CACHE_TEXT_LEN {
-                    if let Ok(guard) = COUNT_CACHE.lock() {
-                        if let Some(&cached) = guard.get(&(encoding.clone(), text.to_string())) {
+                    let (h1, h2) = fast_hash_pair(text.as_bytes());
+                    let key: CacheKey = (enc_id as u8, text.len(), h1, h2);
+                    let shard_idx = (h1 as usize) & (SHARD_COUNT - 1);
+                    if let Ok(guard) = COUNT_SHARDS[shard_idx].lock() {
+                        if let Some(&cached) = guard.get(&key) {
                             return cached;
                         }
                     }
+                    let n = match enc_id.bpe() {
+                        Some(bpe) => bpe.encode_ordinary(text).len() as i64,
+                        None => heuristic_count(text),
+                    };
+                    if let Ok(mut guard) = COUNT_SHARDS[shard_idx].lock() {
+                        if guard.len() >= MAX_SHARD_ENTRIES {
+                            guard.clear();
+                        }
+                        guard.insert(key, n);
+                    }
+                    return n;
                 }
-                let bpe_opt = match encoding.as_str() {
-                    "o200k_base" => O200K_BPE.as_ref(),
-                    "cl100k_base" => CL100K_BPE.as_ref(),
-                    "p50k_base" => P50K_BPE.as_ref(),
-                    "r50k_base" => R50K_BPE.as_ref(),
-                    _ => None,
-                };
-                let n = match bpe_opt {
+                match enc_id.bpe() {
                     Some(bpe) => bpe.encode_ordinary(text).len() as i64,
                     None => heuristic_count(text),
-                };
-                if text.len() <= MAX_CACHE_TEXT_LEN {
-                    if let Ok(mut guard) = COUNT_CACHE.lock() {
-                        if guard.len() >= MAX_CACHE_ENTRIES {
-                            let to_drop: Vec<(String, String)> =
-                                guard.keys().take(MAX_CACHE_ENTRIES / 4).cloned().collect();
-                            for k in to_drop {
-                                guard.remove(&k);
-                            }
-                        }
-                        guard.insert((encoding.clone(), text.to_string()), n);
-                    }
                 }
-                n
             }
         }
     }
@@ -111,10 +157,10 @@ pub fn heuristic_count(text: &str) -> i64 {
     }
     let mut ascii_chars: i64 = 0;
     let mut other_chars: i64 = 0;
-    for ch in text.chars() {
-        if ch.is_ascii() {
+    for &b in text.as_bytes() {
+        if b < 0x80 {
             ascii_chars += 1;
-        } else {
+        } else if (b & 0xC0) != 0x80 {
             other_chars += 1;
         }
     }

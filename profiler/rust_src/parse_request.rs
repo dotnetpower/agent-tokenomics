@@ -136,8 +136,42 @@ pub fn sorted_json(v: &Value) -> Value {
     }
 }
 
+fn write_canonical_value(v: &Value, buf: &mut Vec<u8>) {
+    match v {
+        Value::Object(map) => {
+            buf.push(b'{');
+            let mut entries: Vec<(&String, &Value)> = map.iter().collect();
+            entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
+            for (i, (k, val)) in entries.into_iter().enumerate() {
+                if i > 0 {
+                    buf.push(b',');
+                }
+                let _ = serde_json::to_writer(&mut *buf, k);
+                buf.push(b':');
+                write_canonical_value(val, buf);
+            }
+            buf.push(b'}');
+        }
+        Value::Array(arr) => {
+            buf.push(b'[');
+            for (i, item) in arr.iter().enumerate() {
+                if i > 0 {
+                    buf.push(b',');
+                }
+                write_canonical_value(item, buf);
+            }
+            buf.push(b']');
+        }
+        other => {
+            let _ = serde_json::to_writer(buf, other);
+        }
+    }
+}
+
 pub fn dumps_canonical(v: &Value) -> String {
-    serde_json::to_string(&sorted_json(v)).unwrap_or_else(|_| v.to_string())
+    let mut buf = Vec::with_capacity(128);
+    write_canonical_value(v, &mut buf);
+    String::from_utf8(buf).unwrap_or_else(|_| v.to_string())
 }
 
 pub fn norm_role(role: Option<&str>) -> String {

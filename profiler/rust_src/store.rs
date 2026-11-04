@@ -78,15 +78,27 @@ pub fn read_jsonl(path: &str, mut stats: Option<&mut ReadStats>) -> Vec<CallReco
     let Ok(file) = File::open(path) else {
         return Vec::new();
     };
-    let reader = BufReader::new(file);
+    let mut reader = BufReader::with_capacity(65_536, file);
+    let mut raw_line = String::with_capacity(16_384);
     let mut out = Vec::new();
-    for line_res in reader.lines() {
-        let Ok(raw_line) = line_res else {
-            if let Some(ref mut st) = stats {
-                st.bad_lines += 1;
+    loop {
+        raw_line.clear();
+        match reader.read_line(&mut raw_line) {
+            Ok(0) => break,
+            Ok(n) if n > 32 * 1024 * 1024 => {
+                if let Some(ref mut st) = stats {
+                    st.bad_lines += 1;
+                }
+                continue;
             }
-            continue;
-        };
+            Ok(_) => {}
+            Err(_) => {
+                if let Some(ref mut st) = stats {
+                    st.bad_lines += 1;
+                }
+                continue;
+            }
+        }
         let line = raw_line.trim_start_matches('\u{feff}').trim();
         if line.is_empty() {
             continue;

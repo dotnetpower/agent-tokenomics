@@ -1,4 +1,4 @@
-use crate::counting::TokenCounter;
+use crate::counting::{fast_hash_pair, TokenCounter};
 use crate::model::{CallRecord, RawSegment, Segment, SCHEMA_VERSION};
 use crate::parse_request::ParsedRequest;
 use crate::parse_response::ParsedResponse;
@@ -8,6 +8,8 @@ use rand::RngCore;
 use regex::Regex;
 use sha2::Sha256;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -15,6 +17,29 @@ type HmacSha256 = Hmac<Sha256>;
 pub const MIN_SECTION_CHARS: usize = 200;
 pub const MAX_SEGMENT_TEXT_CHARS: usize = 32_768;
 pub const MAX_SECTION_SPLIT_CHARS: usize = 524_288;
+
+const HASH_SHARDS: usize = 16;
+type HashCacheKey = (u64, u64, usize, u64);
+type HashShardMap = HashMap<HashCacheKey, [u8; 16]>;
+static HASH_CACHE: Lazy<[Mutex<HashShardMap>; HASH_SHARDS]> =
+    Lazy::new(|| std::array::from_fn(|_| Mutex::new(HashMap::with_capacity(256))));
+
+static ID_SEED: Lazy<u64> = Lazy::new(|| {
+    let mut b = [0u8; 8];
+    rand::thread_rng().fill_bytes(&mut b);
+    u64::from_le_bytes(b)
+});
+static ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+fn next_fast_id() -> String {
+    let seq = ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut z = ID_SEED.wrapping_add(seq.wrapping_mul(0x9E3779B97F4A7C15));
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    z ^= z >> 31;
+    let bytes = z.to_be_bytes();
+    hex::encode(&bytes[..6])
+}
 
 static BOUNDARY_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?m)^(?:#{1,3}[ \t]+(?P<h>.+?)|<(?P<t>[A-Za-z_][\w:-]*)>[ \t]*)$").unwrap()
@@ -44,7 +69,28 @@ const SECRET_MARKERS: &[&str] = &[
     "eyJ",
 ];
 
+#[inline]
+pub fn fast_char_count(s: &str) -> usize {
+    if s.is_ascii() {
+        s.len()
+    } else {
+        s.as_bytes()
+            .iter()
+            .filter(|&&b| (b & 0xC0) != 0x80)
+            .count()
+    }
+}
+
 pub fn safe_char_prefix(s: &str, max_chars: usize) -> (&str, usize) {
+    if s.len() <= max_chars && s.is_ascii() {
+        return (s, s.len());
+    }
+    if s.len() <= max_chars {
+        return (s, fast_char_count(s));
+    }
+    if s.is_ascii() {
+        return (&s[..max_chars], s.len());
+    }
     let mut total_chars = 0usize;
     let mut byte_idx = s.len();
     for (i, (b_idx, _)) in s.char_indices().enumerate() {
@@ -84,16 +130,24 @@ pub fn redact_secrets(text: &str) -> String {
     }
 }
 
-fn format_with_commas(n: usize) -> String {
-    let s = n.to_string();
-    let mut out = String::with_capacity(s.len() + s.len() / 3);
-    for (i, ch) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            out.push(',');
-        }
-        out.push(ch);
+pub fn format_with_commas(mut n: usize) -> String {
+    if n < 1000 {
+        return n.to_string();
     }
-    out.chars().rev().collect()
+    let mut buf = [0u8; 32];
+    let mut pos = buf.len();
+    let mut digits = 0usize;
+    while n > 0 {
+        if digits > 0 && digits.is_multiple_of(3) {
+            pos -= 1;
+            buf[pos] = b',';
+        }
+        pos -= 1;
+        buf[pos] = b'0' + (n % 10) as u8;
+        n /= 10;
+        digits += 1;
+    }
+    std::str::from_utf8(&buf[pos..]).unwrap_or("0").to_string()
 }
 
 pub fn hash_text(text: &str, salt: &[u8]) -> String {
@@ -101,6 +155,29 @@ pub fn hash_text(text: &str, salt: &[u8]) -> String {
         return String::new();
     }
     let key = if salt.is_empty() { b"tokprof" } else { salt };
+    if text.len() <= 65_536 {
+        let (h1, h2) = fast_hash_pair(text.as_bytes());
+        let (s1, _) = fast_hash_pair(key);
+        let ckey: HashCacheKey = (h1, h2, text.len(), s1);
+        let shard = (h1 as usize) & (HASH_SHARDS - 1);
+        if let Ok(guard) = HASH_CACHE[shard].lock() {
+            if let Some(hex_arr) = guard.get(&ckey) {
+                return std::str::from_utf8(hex_arr).unwrap_or("").to_string();
+            }
+        }
+        let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key size");
+        mac.update(text.as_bytes());
+        let result = mac.finalize().into_bytes();
+        let mut hex_arr = [0u8; 16];
+        let _ = hex::encode_to_slice(&result[..8], &mut hex_arr);
+        if let Ok(mut guard) = HASH_CACHE[shard].lock() {
+            if guard.len() >= 256 {
+                guard.clear();
+            }
+            guard.insert(ckey, hex_arr);
+        }
+        return std::str::from_utf8(&hex_arr).unwrap_or("").to_string();
+    }
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key size");
     mac.update(text.as_bytes());
     let result = mac.finalize().into_bytes();
@@ -145,7 +222,7 @@ pub fn split_sections(text: &str, min_chars: usize) -> Vec<(Option<String>, Stri
     }
     let mut merged: Vec<(String, String)> = Vec::new();
     for (name, body) in pieces {
-        let body_chars = body.chars().count();
+        let body_chars = fast_char_count(&body);
         if !merged.is_empty() && body_chars < min_chars {
             if let Some(last) = merged.last_mut() {
                 last.1.push_str(&body);
@@ -154,7 +231,7 @@ pub fn split_sections(text: &str, min_chars: usize) -> Vec<(Option<String>, Stri
             merged.push((name, body));
         }
     }
-    if merged.len() > 1 && merged[0].1.chars().count() < min_chars {
+    if merged.len() > 1 && fast_char_count(&merged[0].1) < min_chars {
         let first = merged.remove(0);
         merged[0].1 = format!("{}{}", first.1, merged[0].1);
     }
@@ -257,7 +334,7 @@ pub fn build_segments(
                 } else {
                     counter.count(&body)
                 };
-                let chars = body.chars().count();
+                let chars = fast_char_count(&body);
                 let hash = if body.is_empty() {
                     String::new()
                 } else {
@@ -396,9 +473,6 @@ pub fn build_record(args: BuildRecordArgs<'_>) -> CallRecord {
         _ => (None, None),
     };
 
-    let mut id_bytes = [0u8; 6];
-    rand::thread_rng().fill_bytes(&mut id_bytes);
-
     let now_ts = args.ts.unwrap_or_else(|| {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -408,7 +482,7 @@ pub fn build_record(args: BuildRecordArgs<'_>) -> CallRecord {
 
     CallRecord {
         v: SCHEMA_VERSION,
-        id: hex::encode(id_bytes),
+        id: next_fast_id(),
         ts: now_ts,
         run: args.run,
         provider: args.parsed.provider.clone(),

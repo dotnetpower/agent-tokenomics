@@ -65,33 +65,57 @@ pub fn median_f64(vals: &[usize]) -> f64 {
     }
 }
 
+pub fn is_sorted_by_ts(records: &[CallRecord]) -> bool {
+    if records.len() <= 1 {
+        return true;
+    }
+    let mut prev = if records[0].ts.is_finite() {
+        records[0].ts
+    } else {
+        0.0
+    };
+    for r in &records[1..] {
+        let cur = if r.ts.is_finite() { r.ts } else { 0.0 };
+        if cur < prev {
+            return false;
+        }
+        prev = cur;
+    }
+    true
+}
+
 pub fn sorted_records(records: &[CallRecord]) -> Vec<CallRecord> {
     let mut out = records.to_vec();
-    out.sort_by(|a, b| {
-        let ta = if a.ts.is_finite() { a.ts } else { 0.0 };
-        let tb = if b.ts.is_finite() { b.ts } else { 0.0 };
-        ta.total_cmp(&tb)
-    });
+    if !is_sorted_by_ts(&out) {
+        out.sort_by(|a, b| {
+            let ta = if a.ts.is_finite() { a.ts } else { 0.0 };
+            let tb = if b.ts.is_finite() { b.ts } else { 0.0 };
+            ta.total_cmp(&tb)
+        });
+    }
     out
 }
 
-pub fn group_requests(records: &[CallRecord], gap_s: f64) -> Vec<Vec<CallRecord>> {
-    let ordered = sorted_records(records);
-    let mut groups: Vec<Vec<CallRecord>> = Vec::new();
+pub fn group_requests_ref<'a>(ordered: &'a [CallRecord], gap_s: f64) -> Vec<Vec<&'a CallRecord>> {
+    let mut groups: Vec<Vec<&'a CallRecord>> = Vec::new();
     let mut last_end: Option<f64> = None;
-    let mut seen_step: HashMap<(Option<String>, Option<String>), Option<String>> = HashMap::new();
+    let mut seen_step: HashMap<(&str, &str), Option<&str>> = HashMap::new();
 
     for r in ordered {
         let start = if r.ts.is_finite() { r.ts } else { 0.0 };
         let end = start + (r.latency_ms.unwrap_or(0).max(0) as f64) / 1000.0;
-        let step_key = (r.sysfp.clone(), r.model.clone());
+        let step_key = (
+            r.sysfp.as_deref().unwrap_or(""),
+            r.model.as_deref().unwrap_or(""),
+        );
+        let conv_ref = r.conv.as_deref();
         let mut new_turn = false;
         if let Some(le) = last_end {
             if start - le > gap_s {
                 new_turn = true;
             } else if r.sysfp.is_some() {
-                if let Some(prev_conv) = seen_step.get(&step_key) {
-                    if *prev_conv != r.conv && (start - le) >= 1.0 {
+                if let Some(&prev_conv) = seen_step.get(&step_key) {
+                    if prev_conv != conv_ref && (start - le) >= 1.0 {
                         new_turn = true;
                     }
                 }
@@ -104,7 +128,7 @@ pub fn group_requests(records: &[CallRecord], gap_s: f64) -> Vec<Vec<CallRecord>
             seen_step.clear();
         }
         if r.sysfp.is_some() {
-            seen_step.insert(step_key, r.conv.clone());
+            seen_step.insert(step_key, conv_ref);
         }
         if let Some(last_g) = groups.last_mut() {
             last_g.push(r);
@@ -114,7 +138,15 @@ pub fn group_requests(records: &[CallRecord], gap_s: f64) -> Vec<Vec<CallRecord>
     groups
 }
 
-pub fn infer_history_deltas(turns: &[Vec<CallRecord>]) -> HashMap<(usize, usize), i64> {
+pub fn group_requests(records: &[CallRecord], gap_s: f64) -> Vec<Vec<CallRecord>> {
+    let ordered = sorted_records(records);
+    group_requests_ref(&ordered, gap_s)
+        .into_iter()
+        .map(|g| g.into_iter().cloned().collect())
+        .collect()
+}
+
+pub fn infer_history_deltas(turns: &[Vec<&CallRecord>]) -> HashMap<(usize, usize), i64> {
     let has_explicit = turns.iter().any(|g| {
         g.iter().any(|r| {
             r.segments.iter().any(|s| {
@@ -125,17 +157,17 @@ pub fn infer_history_deltas(turns: &[Vec<CallRecord>]) -> HashMap<(usize, usize)
     if has_explicit || turns.len() < 2 {
         return HashMap::new();
     }
-    let mut base_user: HashMap<(Option<String>, Option<String>), i64> = HashMap::new();
+    let mut base_user: HashMap<(&str, &str), i64> = HashMap::new();
     for r in &turns[0] {
-        let sk = (r.sysfp.clone(), r.model.clone());
-        if r.sysfp.is_some() && !base_user.contains_key(&sk) {
-            let u_tok: i64 = r
-                .segments
-                .iter()
-                .filter(|s| s.kind == "user_prompt" || s.kind == "raw_prompt")
-                .map(|s| s.tokens)
-                .sum();
-            base_user.insert(sk, u_tok);
+        if let Some(ref sfp) = r.sysfp {
+            let sk = (sfp.as_str(), r.model.as_deref().unwrap_or(""));
+            base_user.entry(sk).or_insert_with(|| {
+                r.segments
+                    .iter()
+                    .filter(|s| s.kind == "user_prompt" || s.kind == "raw_prompt")
+                    .map(|s| s.tokens)
+                    .sum()
+            });
         }
     }
     if base_user.is_empty() {
@@ -146,7 +178,10 @@ pub fn infer_history_deltas(turns: &[Vec<CallRecord>]) -> HashMap<(usize, usize)
         let mut deltas = Vec::new();
         let mut call_deltas = Vec::new();
         for (ci, r) in g.iter().enumerate() {
-            let sk = (r.sysfp.clone(), r.model.clone());
+            let sk = (
+                r.sysfp.as_deref().unwrap_or(""),
+                r.model.as_deref().unwrap_or(""),
+            );
             let u_tok: i64 = r
                 .segments
                 .iter()
@@ -310,19 +345,13 @@ pub struct SummaryReport {
 }
 
 fn format_with_commas_i64(n: i64) -> String {
-    let neg = n < 0;
-    let s = n.unsigned_abs().to_string();
-    let mut out = String::with_capacity(s.len() + s.len() / 3 + 1);
-    for (i, ch) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            out.push(',');
-        }
-        out.push(ch);
+    let abs = n.unsigned_abs() as usize;
+    let s = crate::segment::format_with_commas(abs);
+    if n < 0 {
+        format!("-{s}")
+    } else {
+        s
     }
-    if neg {
-        out.push('-');
-    }
-    out.chars().rev().collect()
 }
 
 pub fn step_map(records: &[CallRecord]) -> Vec<StepRow> {
@@ -432,12 +461,29 @@ pub fn endpoint_map(records: &[CallRecord]) -> Vec<EndpointRow> {
     out
 }
 
+#[inline]
+fn append_seg_text(buf: &mut String, prefix: Option<&str>, name: Option<&str>, txt: &str) {
+    if !buf.is_empty() {
+        buf.push_str("\n\n");
+    }
+    if let Some(p) = prefix {
+        buf.push_str(p);
+    }
+    if let Some(nm) = name {
+        buf.push('[');
+        buf.push_str(nm);
+        buf.push_str("]\n");
+    }
+    buf.push_str(txt);
+}
+
 fn build_call_detail(
     rec: &CallRecord,
     call_index: usize,
     session_id: &str,
     turn_index: usize,
     inferred_hist: i64,
+    sys_cache: &mut HashMap<String, String>,
 ) -> CallDetail {
     let mut sys_tok = 0i64;
     let mut hist_u = 0i64;
@@ -449,77 +495,79 @@ fn build_call_detail(
     let mut rs_tok = 0i64;
     let mut other_tok = 0i64;
 
-    let mut t_sys = Vec::new();
-    let mut t_hist = Vec::new();
-    let mut t_user = Vec::new();
-    let mut t_tools = Vec::new();
-    let mut t_other = Vec::new();
+    let cached_sys = rec.sysfp.as_ref().and_then(|sfp| sys_cache.get(sfp)).cloned();
+    let mut s_sys = cached_sys.clone().unwrap_or_default();
+    let mut s_hist = String::new();
+    let mut s_user = String::new();
+    let mut s_tools = String::new();
+    let mut s_other = String::new();
 
     for s in &rec.segments {
         let k = s.kind.as_str();
         let tok = s.tokens;
-        let label = s.text.as_ref().map(|txt| {
-            if let Some(ref nm) = s.name {
-                format!("[{nm}]\n{txt}")
-            } else {
-                txt.clone()
-            }
-        });
+        let nm = s.name.as_deref();
         match k {
             "system" => {
                 sys_tok += tok;
-                if let Some(l) = label {
-                    t_sys.push(l);
+                if cached_sys.is_none() {
+                    if let Some(ref txt) = s.text {
+                        append_seg_text(&mut s_sys, None, nm, txt);
+                    }
                 }
             }
             "history_user" => {
                 hist_u += tok;
-                if let Some(l) = label {
-                    t_hist.push(format!("(User/Context) {l}"));
+                if let Some(ref txt) = s.text {
+                    append_seg_text(&mut s_hist, Some("(User/Context) "), nm, txt);
                 }
             }
             "history_assistant" => {
                 hist_a += tok;
-                if let Some(l) = label {
-                    t_hist.push(format!("(Assistant) {l}"));
+                if let Some(ref txt) = s.text {
+                    append_seg_text(&mut s_hist, Some("(Assistant) "), nm, txt);
                 }
             }
             "user_prompt" | "raw_prompt" => {
                 user_tok += tok;
-                if let Some(l) = label {
-                    t_user.push(l);
+                if let Some(ref txt) = s.text {
+                    append_seg_text(&mut s_user, None, nm, txt);
                 }
             }
             "tool_def" => {
                 td_tok += tok;
-                if let Some(l) = label {
-                    t_tools.push(format!("(tool_def) {l}"));
+                if let Some(ref txt) = s.text {
+                    append_seg_text(&mut s_tools, Some("(tool_def) "), nm, txt);
                 }
             }
             "tool_call" => {
                 tc_tok += tok;
-                if let Some(l) = label {
-                    t_tools.push(format!("(tool_call) {l}"));
+                if let Some(ref txt) = s.text {
+                    append_seg_text(&mut s_tools, Some("(tool_call) "), nm, txt);
                 }
             }
             "tool_result" => {
                 tr_tok += tok;
-                if let Some(l) = label {
-                    t_tools.push(format!("(tool_result) {l}"));
+                if let Some(ref txt) = s.text {
+                    append_seg_text(&mut s_tools, Some("(tool_result) "), nm, txt);
                 }
             }
             "response_schema" => {
                 rs_tok += tok;
-                if let Some(l) = label {
-                    t_tools.push(format!("(response_schema) {l}"));
+                if let Some(ref txt) = s.text {
+                    append_seg_text(&mut s_tools, Some("(response_schema) "), nm, txt);
                 }
             }
             _ => {
                 other_tok += tok;
-                if let Some(l) = label {
-                    t_other.push(l);
+                if let Some(ref txt) = s.text {
+                    append_seg_text(&mut s_other, None, nm, txt);
                 }
             }
+        }
+    }
+    if cached_sys.is_none() && !s_sys.is_empty() {
+        if let Some(ref sfp) = rec.sysfp {
+            sys_cache.insert(sfp.clone(), s_sys.clone());
         }
     }
 
@@ -587,31 +635,31 @@ fn build_call_detail(
         status: rec.status,
         inferred_history: inferred_hist > 0,
         prompts: CallPrompts {
-            system: t_sys.join("\n\n"),
-            history: t_hist.join("\n\n"),
-            user_prompt: t_user.join("\n\n"),
-            tools_schema: t_tools.join("\n\n"),
-            other: t_other.join("\n\n"),
+            system: s_sys,
+            history: s_hist,
+            user_prompt: s_user,
+            tools_schema: s_tools,
+            other: s_other,
             response: rec.response_text.clone().unwrap_or_default(),
         },
     }
 }
 
 pub fn session_turn_breakdown(
-    turns: &[Vec<CallRecord>],
+    turns: &[Vec<&CallRecord>],
     inferred: &HashMap<(usize, usize), i64>,
 ) -> (Vec<SessionSummary>, Vec<TurnSummary>, Vec<CallDetail>) {
     if turns.is_empty() {
         return (Vec::new(), Vec::new(), Vec::new());
     }
-    let mut session_groups: Vec<Vec<(usize, &Vec<CallRecord>)>> = Vec::new();
-    let mut prev_sysfps: HashSet<String> = HashSet::new();
-    let mut prev_convs: HashSet<String> = HashSet::new();
+    let mut session_groups: Vec<Vec<(usize, &Vec<&CallRecord>)>> = Vec::new();
+    let mut prev_sysfps: HashSet<&str> = HashSet::new();
+    let mut prev_convs: HashSet<&str> = HashSet::new();
     let mut prev_had_history = false;
 
     for (ti, g) in turns.iter().enumerate() {
-        let cur_sysfps: HashSet<String> = g.iter().filter_map(|r| r.sysfp.clone()).collect();
-        let cur_convs: HashSet<String> = g.iter().filter_map(|r| r.conv.clone()).collect();
+        let cur_sysfps: HashSet<&str> = g.iter().filter_map(|r| r.sysfp.as_deref()).collect();
+        let cur_convs: HashSet<&str> = g.iter().filter_map(|r| r.conv.as_deref()).collect();
         let cur_hist: i64 = g
             .iter()
             .enumerate()
@@ -650,84 +698,121 @@ pub fn session_turn_breakdown(
         }
     }
 
-    let mut sessions_out = Vec::new();
-    let mut turns_out = Vec::new();
-    let mut calls_out = Vec::new();
+    let total_calls: usize = turns.iter().map(|g| g.len()).sum();
+    let mut sessions_out = Vec::with_capacity(session_groups.len());
+    let mut turns_out = Vec::with_capacity(turns.len());
+    let mut calls_out = Vec::with_capacity(total_calls);
+    let mut sys_cache: HashMap<String, String> = HashMap::with_capacity(16);
     let mut call_idx = 0usize;
 
     for (si, s_turns) in session_groups.into_iter().enumerate() {
         let sid = format!("S{}", si + 1);
-        let mut s_calls = Vec::new();
-        let mut s_turn_objs = Vec::new();
+        let turns_count = s_turns.len();
+        let mut s_calls_count = 0usize;
+        let mut s_models: BTreeSet<String> = BTreeSet::new();
+        let mut s_sys = 0i64;
+        let mut s_hist = 0i64;
+        let mut s_user = 0i64;
+        let mut s_tools = 0i64;
+        let mut s_other = 0i64;
+        let mut s_res = 0i64;
+        let mut s_in = 0i64;
+        let mut s_cached = 0i64;
+        let mut s_out = 0i64;
+
         for (local_ti, (orig_ti, g)) in s_turns.into_iter().enumerate() {
             let turn_num = local_ti + 1;
-            let mut t_calls = Vec::new();
+            let t_start = calls_out.len();
             for (ci, r) in g.iter().enumerate() {
                 call_idx += 1;
                 let inf = inferred.get(&(orig_ti, ci)).copied().unwrap_or(0);
-                let cd = build_call_detail(r, call_idx, &sid, turn_num, inf);
-                t_calls.push(cd.clone());
-                s_calls.push(cd.clone());
+                let cd = build_call_detail(r, call_idx, &sid, turn_num, inf, &mut sys_cache);
                 calls_out.push(cd);
             }
-            let user_preview = t_calls
+            let t_slice = &calls_out[t_start..];
+            let user_preview = t_slice
                 .iter()
                 .find(|c| !c.prompts.user_prompt.is_empty())
                 .map(|c| c.prompts.user_prompt.clone())
                 .unwrap_or_default();
-            let hist_preview = t_calls
+            let hist_preview = t_slice
                 .iter()
                 .find(|c| !c.prompts.history.is_empty())
                 .map(|c| c.prompts.history.clone())
                 .unwrap_or_default();
-            let resp_preview = t_calls
+            let resp_preview = t_slice
                 .iter()
                 .rev()
                 .find(|c| !c.prompts.response.is_empty())
                 .map(|c| c.prompts.response.clone())
                 .unwrap_or_default();
-            let models: BTreeSet<String> = t_calls.iter().map(|c| c.model.clone()).collect();
-            let t_obj = TurnSummary {
+            let mut models: BTreeSet<String> = BTreeSet::new();
+            for c in t_slice {
+                models.insert(c.model.clone());
+                s_models.insert(c.model.clone());
+            }
+            let t_sys: i64 = t_slice.iter().map(|c| c.system).sum();
+            let t_hist: i64 = t_slice.iter().map(|c| c.history).sum();
+            let t_hist_u: i64 = t_slice.iter().map(|c| c.history_user).sum();
+            let t_hist_a: i64 = t_slice.iter().map(|c| c.history_assistant).sum();
+            let t_user: i64 = t_slice.iter().map(|c| c.user_prompt).sum();
+            let t_tools: i64 = t_slice.iter().map(|c| c.tools_schema).sum();
+            let t_other: i64 = t_slice.iter().map(|c| c.other).sum();
+            let t_res: i64 = t_slice.iter().map(|c| c.residual).sum();
+            let t_in: i64 = t_slice.iter().map(|c| c.input_total).sum();
+            let t_cached: i64 = t_slice.iter().map(|c| c.cached).sum();
+            let t_out: i64 = t_slice.iter().map(|c| c.output).sum();
+            let t_lat: i64 = t_slice.iter().map(|c| c.latency_ms.unwrap_or(0)).sum();
+
+            s_calls_count += t_slice.len();
+            s_sys += t_sys;
+            s_hist += t_hist;
+            s_user += t_user;
+            s_tools += t_tools;
+            s_other += t_other;
+            s_res += t_res;
+            s_in += t_in;
+            s_cached += t_cached;
+            s_out += t_out;
+
+            turns_out.push(TurnSummary {
                 session: sid.clone(),
                 turn: turn_num,
-                calls_count: t_calls.len(),
+                calls_count: t_slice.len(),
                 models: models.into_iter().collect(),
-                system: t_calls.iter().map(|c| c.system).sum(),
-                history: t_calls.iter().map(|c| c.history).sum(),
-                history_user: t_calls.iter().map(|c| c.history_user).sum(),
-                history_assistant: t_calls.iter().map(|c| c.history_assistant).sum(),
-                user_prompt: t_calls.iter().map(|c| c.user_prompt).sum(),
-                tools_schema: t_calls.iter().map(|c| c.tools_schema).sum(),
-                other: t_calls.iter().map(|c| c.other).sum(),
-                residual: t_calls.iter().map(|c| c.residual).sum(),
-                input_total: t_calls.iter().map(|c| c.input_total).sum(),
-                cached_total: t_calls.iter().map(|c| c.cached).sum(),
-                output_total: t_calls.iter().map(|c| c.output).sum(),
-                latency_ms: t_calls.iter().map(|c| c.latency_ms.unwrap_or(0)).sum(),
+                system: t_sys,
+                history: t_hist,
+                history_user: t_hist_u,
+                history_assistant: t_hist_a,
+                user_prompt: t_user,
+                tools_schema: t_tools,
+                other: t_other,
+                residual: t_res,
+                input_total: t_in,
+                cached_total: t_cached,
+                output_total: t_out,
+                latency_ms: t_lat,
                 user_text: user_preview,
                 history_text: hist_preview,
                 response_text: resp_preview,
-                calls: t_calls,
-            };
-            s_turn_objs.push(t_obj.clone());
-            turns_out.push(t_obj);
+                calls: Vec::new(),
+            });
         }
-        let s_models: BTreeSet<String> = s_calls.iter().map(|c| c.model.clone()).collect();
         sessions_out.push(SessionSummary {
             session: sid,
-            turns_count: s_turn_objs.len(),
-            calls_count: s_calls.len(),
+            turns_count,
+            calls_count: s_calls_count,
             models: s_models.into_iter().collect(),
-            system: s_calls.iter().map(|c| c.system).sum(),
-            history: s_calls.iter().map(|c| c.history).sum(),
-            user_prompt: s_calls.iter().map(|c| c.user_prompt).sum(),
-            tools_schema: s_calls.iter().map(|c| c.tools_schema).sum(),
-            other: s_calls.iter().map(|c| c.other).sum(),
-            residual: s_calls.iter().map(|c| c.residual).sum(),
-            input_total: s_calls.iter().map(|c| c.input_total).sum(),
-            cached_total: s_calls.iter().map(|c| c.cached).sum(),
-            output_total: s_calls.iter().map(|c| c.output).sum(),
-            turns: s_turn_objs,
+            system: s_sys,
+            history: s_hist,
+            user_prompt: s_user,
+            tools_schema: s_tools,
+            other: s_other,
+            residual: s_res,
+            input_total: s_in,
+            cached_total: s_cached,
+            output_total: s_out,
+            turns: Vec::new(),
         });
     }
 
@@ -735,7 +820,7 @@ pub fn session_turn_breakdown(
 }
 
 pub fn compute_by_kind(
-    turns: &[Vec<CallRecord>],
+    turns: &[Vec<&CallRecord>],
     inferred: &HashMap<(usize, usize), i64>,
 ) -> (BTreeMap<String, i64>, i64) {
     let mut totals: BTreeMap<String, i64> = BTreeMap::new();
@@ -769,7 +854,7 @@ pub fn compute_by_kind(
 
 pub fn findings(
     ordered: &[CallRecord],
-    turns: &[Vec<CallRecord>],
+    turns: &[Vec<&CallRecord>],
     by_kind: &BTreeMap<String, i64>,
     min_cacheable: i64,
 ) -> Vec<Finding> {
@@ -1148,8 +1233,14 @@ pub fn findings(
 }
 
 pub fn summarize(records: &[CallRecord], gap_s: f64) -> SummaryReport {
-    let ordered = sorted_records(records);
-    let turns = group_requests(&ordered, gap_s);
+    let owned_ordered;
+    let ordered: &[CallRecord] = if is_sorted_by_ts(records) {
+        records
+    } else {
+        owned_ordered = sorted_records(records);
+        &owned_ordered
+    };
+    let turns = group_requests_ref(ordered, gap_s);
     let inferred = infer_history_deltas(&turns);
     let (by_kind, input_total) = compute_by_kind(&turns, &inferred);
     let inputs: Vec<i64> = ordered.iter().map(rec_input).collect();
@@ -1168,15 +1259,15 @@ pub fn summarize(records: &[CallRecord], gap_s: f64) -> SummaryReport {
             .sum(),
         cached_total: ordered.iter().map(rec_cached).sum(),
         by_kind: by_kind.clone(),
-        steps: step_map(&ordered),
-        endpoints: endpoint_map(&ordered),
+        steps: step_map(ordered),
+        endpoints: endpoint_map(ordered),
         sessions,
         turns: turn_summaries,
         call_details,
         fan_out,
         first_call_input,
         median_input: median_i64(&inputs),
-        findings: findings(&ordered, &turns, &by_kind, 1024),
+        findings: findings(ordered, &turns, &by_kind, 1024),
         kinds_order,
     }
 }

@@ -23,6 +23,127 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::collections::HashMap;
+    use std::time::Instant;
+
+    #[test]
+    fn test_perf_metrics_snapshot() {
+        let tk = counting::get_counter(Some("gpt-4o"), true);
+        let sys_prompt = (0..40)
+            .map(|i| format!("# Section {i}\n{}", "Detailed guidance for section. ".repeat(20)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let _ = tk.count(&sys_prompt); // warm up cache
+
+        // 1. Token count cache hit (10,000 lookups on 26 KB system prompt)
+        let t0 = Instant::now();
+        for _ in 0..10_000 {
+            let _ = tk.count(&sys_prompt);
+        }
+        let count_cache_us = t0.elapsed().as_micros();
+
+        // 2. hash_text (10,000 calls on 26 KB system prompt)
+        let salt = b"0123456789abcdef";
+        let t0 = Instant::now();
+        for _ in 0..10_000 {
+            let _ = segment::hash_text(&sys_prompt, salt);
+        }
+        let hash_text_us = t0.elapsed().as_micros();
+
+        // 3. Canonical JSON serialization + parse_request (1,000 calls)
+        let payload = json!({
+            "untrusted_input": {
+                "utterance": "How do I optimize tokens?",
+                "context": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
+                "capabilities": (0..15).map(|i| json!({"name": format!("tool_{i}"), "description": "desc ".repeat(20)})).collect::<Vec<_>>()
+            }
+        });
+        let req_body = json!({
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": payload.to_string()}
+            ],
+            "tools": (0..15).map(|i| json!({"type": "function", "function": {"name": format!("fn_{i}"), "parameters": {"type": "object", "properties": {"x": {"type": "string"}}}}})).collect::<Vec<_>>()
+        });
+        let t0 = Instant::now();
+        let mut parsed = None;
+        for _ in 0..500 {
+            parsed = parse_request::parse_request(parse_request::OPENAI_CHAT, &req_body).ok();
+        }
+        let parse_req_us = t0.elapsed().as_micros();
+        let parsed = parsed.unwrap();
+
+        // 4. SSEParser streaming 2,000 chunks x 20 runs
+        let mut sse_blob = Vec::new();
+        for i in 0..2000 {
+            sse_blob.extend_from_slice(
+                format!("data: {{\"choices\":[{{\"delta\":{{\"content\":\"token_{i} \"}}}}]}}\n\n").as_bytes(),
+            );
+        }
+        sse_blob.extend_from_slice(
+            b"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":2000}}\n\ndata: [DONE]\n\n",
+        );
+        let t0 = Instant::now();
+        for _ in 0..20 {
+            let mut sp = parse_response::SSEParser::new(parse_request::OPENAI_CHAT);
+            sp.feed(&sse_blob);
+            let _ = sp.finish();
+        }
+        let sse_us = t0.elapsed().as_micros();
+
+        // 5. Detector classify_host + path_hint + model_from_path (10,000 calls)
+        let t0 = Instant::now();
+        for _ in 0..10_000 {
+            let _ = detect::classify_host("vllm.inference.svc.cluster.local", 8000);
+            let _ = detect::path_hint("/openai/deployments/gpt-4o/chat/completions");
+            let _ = detect::model_from_path("/openai/deployments/gpt-4o/chat/completions");
+        }
+        let detect_us = t0.elapsed().as_micros();
+
+        // 6. Full summarize + render_pretty + render_html + render_csv (200 records x 20 runs)
+        let base_rec = segment::build_record(segment::BuildRecordArgs {
+            parsed: &parsed,
+            response: None,
+            counter: &tk,
+            salt,
+            components: None,
+            endpoint: "/v1/chat/completions",
+            status: Some(200),
+            latency_ms: Some(250),
+            ttfb_ms: Some(80),
+            run: Some("r1".to_string()),
+            error: None,
+            ts: Some(1700000000.0),
+            include_text: Some(true),
+        });
+        let mut recs = Vec::with_capacity(200);
+        for i in 0..200 {
+            let mut r = base_rec.clone();
+            r.ts = 1700000000.0 + ((i / 4) as f64) * 10.0 + ((i % 4) as f64) * 0.2;
+            r.usage.insert("input_total".to_string(), json!(4500 + (i % 10) * 100));
+            r.usage.insert("cached".to_string(), json!(2000));
+            r.usage.insert("output".to_string(), json!(150));
+            recs.push(r);
+        }
+        let t0 = Instant::now();
+        for _ in 0..20 {
+            let s = analyze::summarize(&recs, 5.0);
+            let _ = report::render_pretty(&recs, 5.0, false, None, false, Some(&s));
+            let _ = report::render_html(&recs, 5.0, None, "Bench", Some(&s));
+            let _ = report::render_csv(&recs, 5.0, Some(&s));
+        }
+        let report_suite_us = t0.elapsed().as_micros();
+
+        eprintln!(
+            "BENCH_SNAPSHOT: count_cache_10k_ms={:.2} hash_10k_ms={:.2} parse_req_500_ms={:.2} sse_20x_ms={:.2} detect_10k_ms={:.2} report_200recs_20x_ms={:.2}",
+            count_cache_us as f64 / 1000.0,
+            hash_text_us as f64 / 1000.0,
+            parse_req_us as f64 / 1000.0,
+            sse_us as f64 / 1000.0,
+            detect_us as f64 / 1000.0,
+            report_suite_us as f64 / 1000.0,
+        );
+    }
 
     #[test]
     fn test_counting_and_caching() {
