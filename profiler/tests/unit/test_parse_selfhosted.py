@@ -30,6 +30,15 @@ def test_llama3_gemma_and_llama2_templates():
     assert split_chat_template(l2) == [("system", "Rules"), ("user", "First"), ("assistant", "Answer one"), ("user", "Second")]
 
 
+def test_deepseek_phi_and_command_r_templates():
+    ds = "<｜begin▁of▁sentence｜><｜System｜>Be brief.<｜User｜>Hi<｜Assistant｜>Hello<｜end▁of▁sentence｜><｜User｜>2+2?<｜Assistant｜>"
+    assert split_chat_template(ds) == [("system", "Be brief."), ("user", "Hi"), ("assistant", "Hello"), ("user", "2+2?")]
+    phi = "<|system|>\nSystem rule<|end|>\n<|user|>\nQuestion 1<|end|>\n<|assistant|>\nAnswer 1<|end|>\n<|user|>\nQuestion 2<|end|>\n<|assistant|>\n"
+    assert split_chat_template(phi) == [("system", "System rule"), ("user", "Question 1"), ("assistant", "Answer 1"), ("user", "Question 2")]
+    cr = "<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>Preamble<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|USER_TOKEN|>Hello<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>Hi!<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|USER_TOKEN|>Next<|END_OF_TURN_TOKEN|>"
+    assert split_chat_template(cr) == [("system", "Preamble"), ("user", "Hello"), ("assistant", "Hi!"), ("user", "Next")]
+
+
 def test_unknown_template_is_not_guessed():
     assert split_chat_template("just some text with no markers") is None
 
@@ -106,3 +115,75 @@ def test_gemini_json_array_and_sse_responses():
 def test_unparseable_response_is_empty_not_an_error():
     assert not parse_response_body(OPENAI_CHAT, "<html>nope</html>").has_usage
     assert not parse_response_body(OPENAI_CHAT, "").has_usage
+
+
+def test_cohere_v1_and_v2_request_and_response():
+    req = {
+        "model": "command-r-plus",
+        "preamble": "Always answer concisely.",
+        "chat_history": [
+            {"role": "USER", "message": "Hi"},
+            {"role": "CHATBOT", "message": "Hello!"},
+        ],
+        "message": "What is tokenomics?",
+        "tools": [{"name": "lookup", "description": "search"}],
+    }
+    p = parse_request(OPENAI_CHAT, req)
+    assert [s.kind for s in p.segments] == ["system", "history_user", "history_assistant", "user_prompt", "tool_def"]
+    assert p.tools == ["lookup"]
+
+    r_v1 = parse_response_body(OPENAI_CHAT, json.dumps({"text": "Done", "tool_calls": [{"name": "lookup"}], "meta": {"billed_units": {"input_tokens": 42, "output_tokens": 7}}}))
+    assert r_v1.has_usage and r_v1.usage.input_total == 42 and r_v1.usage.output == 7 and r_v1.text == "Done" and r_v1.tool_calls == ["lookup"]
+
+    r_v2 = parse_response_body(OPENAI_CHAT, json.dumps({"message": {"role": "assistant", "content": [{"type": "text", "text": "v2 reply"}]}, "usage": {"tokens": {"input_tokens": 55, "output_tokens": 9}}}))
+    assert r_v2.has_usage and r_v2.usage.input_total == 55 and r_v2.usage.output == 9 and r_v2.text == "v2 reply"
+
+
+def test_bedrock_converse_and_binary_eventstream():
+    import base64
+    import struct
+    from tokprof.parse.request import ANTHROPIC
+
+    req = {
+        "system": [{"text": "You are an AWS assistant."}],
+        "messages": [
+            {"role": "user", "content": [{"text": "Check status"}]},
+            {"role": "assistant", "content": [{"toolUse": {"toolUseId": "t1", "name": "get_status", "input": {"id": 1}}}]},
+            {"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "content": [{"text": "healthy"}]}}]},
+            {"role": "user", "content": [{"text": "Summarize"}]},
+        ],
+        "toolConfig": {"tools": [{"toolSpec": {"name": "get_status", "description": "d"}}]},
+    }
+    p = parse_request(OPENAI_CHAT, req)
+    assert [s.kind for s in p.segments] == ["system", "history_user", "tool_call", "tool_result", "user_prompt", "tool_def"]
+    assert p.tools == ["get_status"]
+
+    # Non-streaming Converse response
+    resp = {
+        "output": {"message": {"role": "assistant", "content": [{"text": "All good"}, {"toolUse": {"name": "get_status"}}]}},
+        "usage": {"inputTokens": 120, "outputTokens": 15, "cacheReadInputTokens": 80},
+    }
+    r = parse_response_body(OPENAI_CHAT, json.dumps(resp))
+    assert r.has_usage and r.usage.input_total == 120 and r.usage.cached == 80 and r.usage.output == 15
+    assert r.text == "All good" and r.tool_calls == ["get_status"]
+
+    # Binary AWS EventStream framing (12-byte prelude + headers + JSON payload + 4-byte CRC)
+    def make_frame(payload_dict):
+        payload = json.dumps(payload_dict).encode("utf-8")
+        headers = b"\x0b:event-type\x07\x00\x05chunk"
+        total_len = 12 + len(headers) + len(payload) + 4
+        return struct.pack(">III", total_len, len(headers), 0) + headers + payload + b"\x00\x00\x00\x00"
+
+    converse_stream = (
+        make_frame({"contentBlockDelta": {"delta": {"text": "Hello "}, "contentBlockIndex": 0}})
+        + make_frame({"contentBlockDelta": {"delta": {"text": "world"}, "contentBlockIndex": 0}})
+        + make_frame({"metadata": {"usage": {"inputTokens": 95, "outputTokens": 12, "cacheReadInputTokens": 40}}})
+    )
+    rs = parse_response_body(OPENAI_CHAT, converse_stream)
+    assert rs.has_usage and rs.usage.input_total == 95 and rs.usage.cached == 40 and rs.usage.output == 12 and rs.text == "Hello world"
+
+    # Base64-wrapped Anthropic chunk inside invoke-with-response-stream decoded as UTF-8 text
+    b64_chunk = base64.b64encode(json.dumps({"type": "message_delta", "usage": {"output_tokens": 11}, "amazon-bedrock-invocationMetrics": {"inputTokenCount": 77, "outputTokenCount": 11}}).encode()).decode()
+    text_stream = make_frame({"bytes": b64_chunk}).decode("utf-8", "replace")
+    ra = parse_response_body(ANTHROPIC, text_stream)
+    assert ra.has_usage and ra.usage.input_total == 77 and ra.usage.output == 11

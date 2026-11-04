@@ -21,14 +21,18 @@ uv tool install "./profiler[tiktoken]"  # better counting accuracy
 ## Use
 
 ```bash
-tokprof run -- python my_agent.py      # any command, any language; no code changes
+tokprof -- python my_agent.py          # one-step: run, print visual report, and write .tokprof/latest.html
+tokprof profile --comm python,node     # attach to already-running processes (Linux eBPF / Windows & macOS mitm)
+tokprof report                         # summarize the latest run in .tokprof/ (no path needed)
+tokprof report --format pretty --html  # rich terminal view + self-contained HTML dashboard (.tokprof/latest.html)
+tokprof report --watch                 # live-updating terminal dashboard as calls arrive
+tokprof run -- python my_agent.py      # run a command with LLM base URLs routed through the local gateway
 tokprof shell                          # a shell whose child processes are profiled
-tokprof report .tokprof/run-*.jsonl    # breakdown, per-step map, findings
 tokprof report run.jsonl --prices prices.json   # add a cost estimate (per 1M tokens, your prices)
 tokprof compare before.jsonl after.jsonl        # per-request change with a 95% bootstrap interval
 tokprof export run.jsonl --out legacy.jsonl     # schema of examples/token_report.py
 tokprof start && eval "$(tokprof env)"          # background session for NEW processes in this shell
-tokprof env --unset; tokprof stop               # restore the shell, then stop (refuses while calls are in flight)
+tokprof env --unset; tokprof stop --report --html  # restore the shell, stop, and emit report + HTML
 tokprof doctor                         # what works on this machine
 tokprof selftest                       # verify the pipeline with a local mock LLM
 ```
@@ -77,12 +81,12 @@ A call is recorded at score >= 50. An ambiguous body (score 25-49) becomes a **c
 looks like a model answer, and an endpoint that proved itself is trusted for later calls to the same host, port and path. Embeddings,
 moderation, rerank, tokenization, image/audio generation, files and batches are never recorded.
 
-Understood request shapes: OpenAI Chat, OpenAI Responses, Anthropic Messages, text completions (`prompt` / `inputs`: vLLM `/v1/completions`,
-TGI `/generate`, llama.cpp, Ollama `/api/generate`; a prompt already rendered with ChatML, Llama 2/3, Mistral or Gemma templates is split
+Understood request shapes: OpenAI Chat, OpenAI Responses, Anthropic Messages, AWS Bedrock Converse (`/converse`, `/converse-stream`, `/invoke`, `/invoke-with-response-stream`), Cohere Chat v1 & v2 (`/v1/chat`, `/v2/chat`), text completions (`prompt` / `inputs`: vLLM `/v1/completions`,
+TGI `/generate`, llama.cpp, Ollama `/api/generate`; a prompt already rendered with ChatML, Llama 2/3, Mistral, Gemma, DeepSeek, Phi-3/4, or Cohere Command-R templates is split
 into system / history / current turns, otherwise it is reported as one **raw prompt**), Ollama `/api/chat`, Gemini `contents`.
-Response usage formats: OpenAI, Anthropic, Gemini `usageMetadata`, Ollama `prompt_eval_count`/`eval_count`, llama.cpp `tokens_evaluated`,
-TGI `details.prefill`; stream formats SSE, NDJSON and JSON arrays. The model name is taken from the URL when the body has none
-(Azure deployments, Gemini, Bedrock).
+Response usage formats: OpenAI, Anthropic, Gemini `usageMetadata`, AWS Bedrock (`usage.inputTokens`, `metadata.usage`, `amazon-bedrock-invocationMetrics`), Cohere (`meta.tokens`/`billed_units`, `usage.tokens`/`billed_units`), Ollama `prompt_eval_count`/`eval_count`, llama.cpp `tokens_evaluated`,
+TGI `details.prefill`; stream formats SSE, NDJSON, JSON arrays, and AWS EventStream (`application/vnd.amazon.eventstream` binary framing). The model name is taken from the URL when the body has none
+(Azure deployments, Gemini, Bedrock). Pass `--tokenizer FILE_OR_NAME` (or `TOKPROF_TOKENIZER`) to count segments with a local HuggingFace `tokenizer.json` or pretrained model tokenizer.
 
 ```bash
 tokprof explain http://vllm.llm.svc.cluster.local:8000/v1/chat/completions --body request.json   # why would this be (not) recorded?
@@ -157,12 +161,12 @@ tokprof ebpf --comm node,python --out run.jsonl                   # by name; new
   is killed. Closing the stdin of `tokprof-ebpf trace --exit-on-stdin-eof` (what `tokprof ebpf` does) makes it detach and exit cleanly.
 - **Works with:** plain HTTP/1.1 and `h2c` from any language whose runtime uses those syscalls (verified: system and `uv` Python, Node.js `fetch` and `http2`,
   Go `net/http`, curl; JSON, SSE and a 144 KB body), OpenSSL-compatible libraries that export `SSL_write`/`SSL_read` (system Python, curl, Node.js) or keep
-  them in `.symtab` (`uv`-managed Python), and unstripped Go binaries using `crypto/tls` (`go-tls`). Verified on Linux x86-64 (kernel 6.18) and arm64 (CI runner, kernel 7.0).
+  them in `.symtab` (`uv`-managed Python), and both unstripped and stripped (`-ldflags="-s -w"`, via `.gopclntab`) Go binaries using `crypto/tls` (`go-tls`). Processes in another mount namespace (such as Docker/Kubernetes containers) are resolved through `/proc/<pid>/root`, and forked child processes of watched PIDs are automatically watched in the kernel. Verified on Linux x86-64 (kernel 6.18) and arm64 (CI runner, kernel 7.0).
 - **HTTP/2:** followed (HPACK, interleaved streams, SSE, both TLS and `h2c`) for connections that were opened **after** the tap attached, because the
   header-compression state of an existing connection is unknown. A connection already in progress is counted as `non_http`.
-- **Does not capture:** stripped Go TLS binaries (no `.symtab`), Java TLS, Rust with rustls (their plain HTTP is captured), the *server* side of a connection
-  (attach to the clients), more than 8 `iovec` buffers per vector syscall, processes in another mount namespace,
-  and very short-lived processes that finish before the helper attaches (it rescans every second; use `tokprof run` for those).
+- **Does not capture:** Java TLS, Rust with rustls (their plain HTTP is captured), the *server* side of a connection
+  (attach to the clients), more than 8 `iovec` buffers per vector syscall,
+  and very short-lived TLS processes that finish before the helper attaches (use `tokprof -- <cmd>` for those).
 - **Overhead (measured, WSL2):** 3 × 3,000 keep-alive HTTPS POSTs with 4 KiB bodies: mean 0.378 ms without the tap, 0.373 ms with
   it, 100% of calls captured, no kernel drops (`python3 ebpf/e2e/bench.py --helper ebpf/bin/tokprof-ebpf --sudo`). The plain-HTTP syscall probes run on
   every `read`/`write` of every process while the helper is attached: a 64-byte `write` to `/dev/null` went from 119 ns to 146 ns in a process that is not

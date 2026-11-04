@@ -28,6 +28,28 @@ def _default_out() -> str:
     return os.path.join(".tokprof", time.strftime("run-%Y%m%d-%H%M%S.jsonl"))
 
 
+def _find_latest_jsonl(directory: str = ".tokprof") -> Optional[str]:
+    candidates = []
+    if os.path.isdir(directory):
+        for name in os.listdir(directory):
+            if name.endswith(".jsonl"):
+                p = os.path.join(directory, name)
+                if os.path.isfile(p):
+                    candidates.append(p)
+    if candidates:
+        candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        return candidates[0]
+    try:
+        from . import session
+
+        st = session._read_state(session.state_path())
+        if st and st.get("out") and os.path.isfile(st["out"]):
+            return st["out"]
+    except Exception:
+        pass
+    return None
+
+
 def _split_cmd(argv: list) -> tuple:
     if "--" in argv:
         i = argv.index("--")
@@ -44,6 +66,7 @@ def _add_detect_args(sp) -> None:
     g.add_argument("--insecure-upstream", action="store_true", help="do NOT verify upstream TLS certificates (last resort for private endpoints; prints a warning)")
     g.add_argument("--no-auto-env", action="store_true", help="do not redirect LLM base-URL variables other than OPENAI/ANTHROPIC/AZURE (for example VLLM_BASE_URL, OLLAMA_HOST)")
     g.add_argument("--record-hosts", action="store_true", help="store host names in the JSONL file (by default only a salted hash and a class such as private-dns)")
+    g.add_argument("--tokenizer", metavar="SPEC", help="tokenizer for local segment counting: o200k_base, cl100k_base, a path to tokenizer.json, or a HuggingFace repo ID")
 
 
 def _apply_detect_args(args) -> None:
@@ -62,6 +85,8 @@ def _apply_detect_args(args) -> None:
         os.environ["TOKPROF_NO_AUTO_ENV"] = "1"
     if getattr(args, "record_hosts", False):
         os.environ["TOKPROF_RECORD_HOSTS"] = "1"
+    if getattr(args, "tokenizer", None):
+        os.environ["TOKPROF_TOKENIZER"] = args.tokenizer
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -69,14 +94,38 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"tokprof {__version__}")
     sub = p.add_subparsers(dest="cmd")
 
+    prof = sub.add_parser(
+        "profile",
+        help="one-step profile: run a command or attach to a running process, then print a visual report and save an HTML dashboard",
+    )
+    prof.add_argument("--pid", default="", help="comma-separated PIDs of already-running processes to watch")
+    prof.add_argument("--comm", default="", help="comma-separated process names to watch")
+    prof.add_argument("--all", action="store_true", help="watch every process on this machine (Linux eBPF)")
+    prof.add_argument("--duration", help="stop after this long (for example 30s or 5m)")
+    prof.add_argument("--out", help="JSONL output path (default .tokprof/run-<time>.jsonl)")
+    prof.add_argument("--html", nargs="?", const="", default="", metavar="FILE", help="HTML dashboard path (default: <out>.html and .tokprof/latest.html)")
+    prof.add_argument("--no-html", action="store_true", help="do not write the HTML dashboard")
+    prof.add_argument("--open", action="store_true", help="open the HTML dashboard in a browser when finished")
+    prof.add_argument("--prices", help="JSON price file per 1M tokens")
+    prof.add_argument("--component", action="append", metavar="NAME=@FILE")
+    prof.add_argument("--map", action="append", metavar="ENV=UPSTREAM")
+    prof.add_argument("--no-tiktoken", action="store_true")
+    prof.add_argument("--no-hooks", action="store_true")
+    prof.add_argument("--no-gateway-env", action="store_true")
+    prof.add_argument("command", nargs=argparse.REMAINDER, help="command to run (when not watching --pid/--comm/--all)")
+    _add_detect_args(prof)
+
     run = sub.add_parser("run", help="run a command with LLM base URLs routed through the local gateway")
     run.add_argument("--out", help="JSONL output path (default .tokprof/run-<time>.jsonl)")
     run.add_argument("--component", action="append", metavar="NAME=@FILE", help="name a known static text so it is attributed separately")
     run.add_argument("--map", action="append", metavar="ENV=UPSTREAM", help="redirect another base-URL env var to this upstream URL")
     run.add_argument("--no-tiktoken", action="store_true", help="use the dependency-free heuristic counter")
     run.add_argument("--report", action="store_true", help="print a report when the command exits")
+    run.add_argument("--html", nargs="?", const="", metavar="FILE", help="write a self-contained HTML dashboard when the command exits")
+    run.add_argument("--open", action="store_true", help="open the HTML dashboard in a browser")
     run.add_argument("--no-hooks", action="store_true", help="do not load the in-process Python/Node hooks")
     run.add_argument("--no-gateway-env", action="store_true", help="do not redirect *_BASE_URL environment variables")
+    run.add_argument("command", nargs=argparse.REMAINDER, help="command to run (with or without --)")
 
     _add_detect_args(run)
 
@@ -86,6 +135,8 @@ def build_parser() -> argparse.ArgumentParser:
     sh.add_argument("--map", action="append")
     sh.add_argument("--no-tiktoken", action="store_true")
     sh.add_argument("--report", action="store_true")
+    sh.add_argument("--html", nargs="?", const="", metavar="FILE")
+    sh.add_argument("--open", action="store_true")
     sh.add_argument("--no-hooks", action="store_true")
     sh.add_argument("--no-gateway-env", action="store_true")
 
@@ -101,6 +152,8 @@ def build_parser() -> argparse.ArgumentParser:
     eb.add_argument("--no-plain", action="store_true", help="only observe TLS libraries; skip the syscall probes that see cleartext http:// traffic")
     eb.add_argument("--no-tiktoken", action="store_true")
     eb.add_argument("--report", action="store_true")
+    eb.add_argument("--html", nargs="?", const="", metavar="FILE")
+    eb.add_argument("--open", action="store_true")
 
     mm = sub.add_parser("mitm", help="capture LLM calls of selected processes through mitmproxy (Windows, macOS, or any OS)")
     mm.add_argument("--local", default="", help="comma-separated process names or PIDs for mitmproxy local capture")
@@ -111,6 +164,8 @@ def build_parser() -> argparse.ArgumentParser:
     mm.add_argument("--component", action="append", metavar="NAME=@FILE")
     mm.add_argument("--no-tiktoken", action="store_true")
     mm.add_argument("--report", action="store_true")
+    mm.add_argument("--html", nargs="?", const="", metavar="FILE")
+    mm.add_argument("--open", action="store_true")
     mm.add_argument("--trust-help", action="store_true", help="explain how processes can trust the mitmproxy CA, then exit")
 
     _add_detect_args(sh)
@@ -124,9 +179,13 @@ def build_parser() -> argparse.ArgumentParser:
     ex.add_argument("--sse", action="store_true", help="the response file is a server-sent-event stream")
     _add_detect_args(ex)
 
-    rep = sub.add_parser("report", help="summarize a recorded JSONL file")
-    rep.add_argument("file")
-    rep.add_argument("--format", choices=["text", "md", "json"], default="text")
+    rep = sub.add_parser("report", help="summarize a recorded JSONL file (defaults to the latest run in .tokprof/)")
+    rep.add_argument("file", nargs="?", help="JSONL file to summarize (default: most recent .tokprof/run-*.jsonl)")
+    rep.add_argument("--format", choices=["text", "pretty", "md", "json", "html"], default="text")
+    rep.add_argument("--out", help="write the formatted report to this file instead of stdout")
+    rep.add_argument("--html", nargs="?", const="", metavar="FILE", help="also write a self-contained HTML dashboard (default: <file>.html)")
+    rep.add_argument("--open", action="store_true", help="open the HTML dashboard in a browser")
+    rep.add_argument("--watch", action="store_true", help="refresh the report in the terminal as new calls arrive")
     rep.add_argument("--gap", type=float, default=5.0, help="seconds of quiet that separate user requests")
     rep.add_argument("--prices", help="JSON price file: {model: {input, cached, output}} per 1M tokens")
 
@@ -157,27 +216,142 @@ def build_parser() -> argparse.ArgumentParser:
     sp_stop = sub.add_parser("stop", help="stop the active session")
     sp_stop.add_argument("--state")
     sp_stop.add_argument("--force", action="store_true")
+    sp_stop.add_argument("--report", action="store_true", help="print a report after stopping")
+    sp_stop.add_argument("--html", nargs="?", const="", metavar="FILE", help="write an HTML dashboard after stopping")
+    sp_stop.add_argument("--open", action="store_true", help="open the HTML dashboard in a browser")
 
     sub.add_parser("doctor", help="check this environment")
     sub.add_parser("selftest", help="verify the pipeline end to end with a local mock LLM")
     return p
 
 
-def _report(path: str, fmt: str, gap: float, prices: Optional[str] = None) -> int:
-    from .report import render_json, render_markdown, render_text
+def _load_prices(prices: Optional[str]) -> Optional[dict]:
+    if not prices:
+        return None
+    import json as _json
+
+    with open(prices, "r", encoding="utf-8") as fh:
+        return _json.load(fh)
+
+
+def _write_html_dashboard(
+    jsonl_path: str,
+    html_arg: Optional[str] = "",
+    *,
+    gap: float = 5.0,
+    prices: Optional[str] = None,
+    open_browser: bool = False,
+) -> Optional[str]:
+    from .report import render_html
+    from .store import read_jsonl
+
+    if not os.path.exists(jsonl_path):
+        return None
+    records = list(read_jsonl(jsonl_path))
+    if not records:
+        return None
+    stem = jsonl_path[:-6] if jsonl_path.endswith(".jsonl") else jsonl_path
+    dest = html_arg if html_arg else (stem + ".html")
+    parent = os.path.dirname(os.path.abspath(dest))
+    os.makedirs(parent, exist_ok=True)
+    content = render_html(records, gap, prices=_load_prices(prices))
+    with open(dest, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    if not html_arg and os.path.basename(os.path.dirname(os.path.abspath(jsonl_path))) == ".tokprof":
+        latest = os.path.join(os.path.dirname(os.path.abspath(jsonl_path)), "latest.html")
+        try:
+            with open(latest, "w", encoding="utf-8") as fh:
+                fh.write(content)
+        except OSError:
+            pass
+    print(f"tokprof: HTML dashboard written to {dest}", file=sys.stderr)
+    if open_browser:
+        try:
+            import webbrowser
+
+            webbrowser.open("file://" + os.path.abspath(dest))
+        except Exception:
+            pass
+    return dest
+
+
+def _finish_run(out: str, args, *, default_report: bool = False, pretty: bool = False) -> None:
+    if not os.path.exists(out):
+        return
+    want_report = getattr(args, "report", False) or default_report
+    html_arg = getattr(args, "html", None)
+    want_html = (html_arg is not None) and not getattr(args, "no_html", False)
+    if want_report:
+        print()
+        _report(out, "pretty" if pretty else "text", 5.0, getattr(args, "prices", None))
+    if want_html:
+        _write_html_dashboard(out, html_arg, prices=getattr(args, "prices", None), open_browser=getattr(args, "open", False))
+    if not want_report and not want_html:
+        print(f"tokprof: view the breakdown with: tokprof report   (or: tokprof report --html)", file=sys.stderr)
+
+
+def _watch_report(path: str, gap: float, prices: Optional[str] = None) -> int:
+    try:
+        while True:
+            sys.stdout.write("\033[2J\033[H")
+            _report(path, "pretty", gap, prices)
+            print(f"\nWatching {path} (Ctrl+C to stop)...", file=sys.stderr)
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        return 0
+
+
+def _report(
+    path: Optional[str],
+    fmt: str,
+    gap: float,
+    prices: Optional[str] = None,
+    *,
+    out_file: Optional[str] = None,
+    html_arg: Optional[str] = None,
+    open_browser: bool = False,
+    watch: bool = False,
+) -> int:
+    from .report import render_html, render_json, render_markdown, render_pretty, render_text
     from .store import ReadStats, read_jsonl
+
+    if not path:
+        path = _find_latest_jsonl()
+        if not path:
+            print("tokprof: no recorded JSONL file found in .tokprof/; pass a file path or run `tokprof profile -- <cmd>` first", file=sys.stderr)
+            return 2
+    if watch:
+        return _watch_report(path, gap, prices)
 
     stats = ReadStats()
     records = list(read_jsonl(path, stats))
-    render = {"text": render_text, "md": render_markdown, "json": render_json}[fmt]
-    print(render(records, gap))
-    if prices and records:
-        import json as _json
+    price_map = _load_prices(prices)
+    if fmt == "html":
+        text = render_html(records, gap, prices=price_map)
+    elif fmt == "pretty":
+        text = render_pretty(records, gap, prices=price_map)
+    else:
+        render = {"text": render_text, "md": render_markdown, "json": render_json}[fmt]
+        text = render(records, gap)
+    if out_file:
+        os.makedirs(os.path.dirname(os.path.abspath(out_file)), exist_ok=True)
+        with open(out_file, "w", encoding="utf-8") as fh:
+            fh.write(text + ("\n" if not text.endswith("\n") else ""))
+    else:
+        print(text)
+        if price_map and records and fmt in ("text", "md"):
+            from .report import render_cost
 
-        from .report import render_cost
+            print("\n" + render_cost(records, price_map))
+    if html_arg is not None:
+        _write_html_dashboard(path, html_arg, gap=gap, prices=prices, open_browser=open_browser)
+    elif open_browser and fmt == "html" and out_file:
+        try:
+            import webbrowser
 
-        with open(prices, "r", encoding="utf-8") as fh:
-            print("\n" + render_cost(records, _json.load(fh)))
+            webbrowser.open("file://" + os.path.abspath(out_file))
+        except Exception:
+            pass
     if stats.bad_lines:
         print(f"\n({stats.bad_lines} unreadable line(s) skipped)", file=sys.stderr)
     return 0
@@ -186,16 +360,60 @@ def _report(path: str, fmt: str, gap: float, prices: Optional[str] = None) -> in
 def main(argv: Optional[list] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     pre, cmd_tail = _split_cmd(argv)
+    if not pre and cmd_tail:
+        pre = ["profile"]
     parser = build_parser()
     args = parser.parse_args(pre)
     _apply_detect_args(args)
 
+    if args.cmd == "profile":
+        cmd = cmd_tail or list(getattr(args, "command", None) or [])
+        if cmd and cmd[0] == "--":
+            cmd = cmd[1:]
+        out = args.out or _default_out()
+        if args.pid or args.comm or args.all:
+            if sys.platform.startswith("linux"):
+                from .ebpf import run_ebpf
+
+                code = run_ebpf(
+                    out, pids=args.pid, comms=args.comm, everything=args.all, duration=args.duration,
+                    components=_components(args.component), use_tiktoken=not args.no_tiktoken,
+                )
+            else:
+                from .mitm import run_mitm
+
+                local_spec = ",".join(x for x in (args.pid, args.comm) if x)
+                dur = float(args.duration.rstrip("s")) if (args.duration and args.duration.rstrip("s").replace(".", "", 1).isdigit()) else None
+                code = run_mitm(
+                    out, local=local_spec, components=_components(args.component),
+                    use_tiktoken=not args.no_tiktoken, duration=dur,
+                )
+        else:
+            if not cmd:
+                parser.error("profile needs a command (for example: tokprof profile -- python agent.py) or --pid/--comm")
+            from .runner import run_profiled
+
+            code = run_profiled(
+                cmd, out,
+                components=_components(args.component),
+                extra_maps=args.map,
+                use_tiktoken=not args.no_tiktoken,
+                gateway_env=not args.no_gateway_env,
+                hooks=not args.no_hooks,
+            )
+        _finish_run(out, args, default_report=True, pretty=True)
+        return code
+
     if args.cmd in ("run", "shell"):
         from .runner import default_shell, run_profiled
 
-        if args.cmd == "run" and not cmd_tail:
+        inline_cmd = list(getattr(args, "command", None) or [])
+        if inline_cmd and inline_cmd[0] == "--":
+            inline_cmd = inline_cmd[1:]
+        eff_tail = cmd_tail or inline_cmd
+        if args.cmd == "run" and not eff_tail:
             parser.error("run needs a command after --, for example: tokprof run -- python agent.py")
-        cmd = cmd_tail if args.cmd == "run" else (cmd_tail or default_shell())
+        cmd = eff_tail if args.cmd == "run" else (eff_tail or default_shell())
         out = args.out or _default_out()
         code = run_profiled(
             cmd, out,
@@ -205,11 +423,7 @@ def main(argv: Optional[list] = None) -> int:
             gateway_env=not args.no_gateway_env,
             hooks=not args.no_hooks,
         )
-        if args.report and os.path.exists(out):
-            print()
-            _report(out, "text", 5.0)
-        elif os.path.exists(out):
-            print(f"tokprof: view the breakdown with: tokprof report {out}", file=sys.stderr)
+        _finish_run(out, args)
         return code
     if args.cmd == "ebpf":
         from .ebpf import run_ebpf
@@ -219,11 +433,7 @@ def main(argv: Optional[list] = None) -> int:
             out, pids=args.pid, comms=args.comm, everything=args.all, helper=args.helper, duration=args.duration,
             components=_components(args.component), use_tiktoken=not args.no_tiktoken, use_sudo=not args.no_sudo, plain=not args.no_plain,
         )
-        if args.report and os.path.exists(out):
-            print()
-            _report(out, "text", 5.0)
-        elif os.path.exists(out):
-            print(f"tokprof: view the breakdown with: tokprof report {out}", file=sys.stderr)
+        _finish_run(out, args)
         return code
     if args.cmd == "mitm":
         from .mitm import TRUST_HELP, run_mitm
@@ -236,14 +446,13 @@ def main(argv: Optional[list] = None) -> int:
             out, local=args.local, mode=args.mode, mitmdump=args.mitmdump, components=_components(args.component),
             use_tiktoken=not args.no_tiktoken, extra=cmd_tail, duration=args.duration,
         )
-        if args.report and os.path.exists(out):
-            print()
-            _report(out, "text", 5.0)
-        elif os.path.exists(out):
-            print(f"tokprof: view the breakdown with: tokprof report {out}", file=sys.stderr)
+        _finish_run(out, args)
         return code
     if args.cmd == "report":
-        return _report(args.file, args.format, args.gap, args.prices)
+        return _report(
+            args.file, args.format, args.gap, args.prices,
+            out_file=args.out, html_arg=args.html, open_browser=args.open, watch=args.watch,
+        )
     if args.cmd == "compare":
         import json as _json
 
@@ -280,7 +489,11 @@ def main(argv: Optional[list] = None) -> int:
             return session.status(state)
         if args.cmd == "env":
             return session.env(state, args.shell, args.unset)
-        return session.stop(state, args.force)
+        prev = session._read_state(state)
+        rc = session.stop(state, args.force)
+        if rc == 0 and prev and prev.get("out"):
+            _finish_run(prev["out"], args)
+        return rc
     if args.cmd == "explain":
         import json as _json
 

@@ -81,54 +81,94 @@ def _add(segments: list, kind: str, text: str, *, role=None, name=None, turn=Non
         segments.append(RawSegment(kind=kind, text=text, role=role, name=name, turn=turn, opaque=opaque))
 
 
+def _norm_role(role: Any) -> str:
+    r = str(role or "").lower().strip()
+    if r in ("chatbot", "ai", "model"):
+        return "assistant"
+    if r == "human":
+        return "user"
+    return r
+
+
 def _add_message(segments: list, role: str, content: Any, *, is_current: bool, turn: int) -> None:
+    r = _norm_role(role)
     text, opaque = _content_text(content)
-    if role in ("system", "developer"):
-        _add(segments, "system", text, role=role, turn=turn)
-    elif role == "user":
-        _add(segments, "user_prompt" if is_current else "history_user", text, role=role, turn=turn)
-    elif role == "assistant":
-        _add(segments, "history_assistant", text, role=role, turn=turn)
+    if r in ("system", "developer"):
+        _add(segments, "system", text, role=r, turn=turn)
+    elif r == "user":
+        _add(segments, "user_prompt" if is_current else "history_user", text, role=r, turn=turn)
+    elif r == "assistant":
+        _add(segments, "history_assistant", text, role=r, turn=turn)
     else:
-        _add(segments, "other", text, role=role, turn=turn)
+        _add(segments, "other", text, role=r, turn=turn)
     if opaque:
-        segments.append(RawSegment(kind="attachment", text="", role=role, turn=turn, opaque=True))
+        segments.append(RawSegment(kind="attachment", text="", role=r, turn=turn, opaque=True))
 
 
 def _parse_openai_chat(body: dict) -> ParsedRequest:
     segs: list = []
     msgs = [m for m in (body.get("messages") or []) if isinstance(m, dict)]
-    # Bedrock Converse and Ollama carry the system prompt at the top level instead of as a message.
-    top_system = body.get("system")
-    if isinstance(top_system, (str, list)):
-        _add(segs, "system", _content_text(top_system)[0], role="system")
-    last_user = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=-1)
+    # Bedrock Converse, Ollama and Cohere v1 carry the system prompt at the top level.
+    for sys_key in ("system", "preamble"):
+        top_system = body.get(sys_key)
+        if isinstance(top_system, (str, list)):
+            _add(segs, "system", _content_text(top_system)[0], role="system")
+    if not msgs and isinstance(body.get("chat_history"), list):
+        for h in body["chat_history"]:
+            if isinstance(h, dict):
+                msgs.append({"role": h.get("role"), "content": h.get("message") if "message" in h else h.get("content") or h.get("text")})
+    if isinstance(body.get("message"), str) and body["message"]:
+        msgs.append({"role": "user", "content": body["message"]})
+    last_user = max((i for i, m in enumerate(msgs) if _norm_role(m.get("role")) == "user"), default=-1)
     for i, m in enumerate(msgs):
-        role = m.get("role") or ""
+        role = _norm_role(m.get("role"))
+        content = m.get("content") if "content" in m else m.get("message")
         if role in ("tool", "function"):
-            text, opaque = _content_text(m.get("content"))
+            text, opaque = _content_text(content)
             _add(segs, "tool_result", text, role=role, name=m.get("name") or m.get("tool_call_id"), turn=i, opaque=opaque)
             continue
-        _add_message(segs, role, m.get("content"), is_current=(i == last_user), turn=i)
+        if isinstance(content, list) and any(isinstance(b, dict) and ("toolUse" in b or "toolResult" in b) for b in content):
+            for b in content:
+                if not isinstance(b, dict):
+                    continue
+                if "toolUse" in b and isinstance(b["toolUse"], dict):
+                    tu = b["toolUse"]
+                    _add(segs, "tool_call", f"{tu.get('name', '')}({_dumps(tu.get('input'))})", role="assistant", name=tu.get("name"), turn=i)
+                elif "toolResult" in b and isinstance(b["toolResult"], dict):
+                    tr = b["toolResult"]
+                    t_text, opaque = _content_text(tr.get("content"))
+                    _add(segs, "tool_result", t_text, role="tool", name=tr.get("toolUseId"), turn=i, opaque=opaque)
+                elif isinstance(b.get("text"), str):
+                    _add_message(segs, role, b["text"], is_current=(i == last_user), turn=i)
+        else:
+            _add_message(segs, role, content, is_current=(i == last_user), turn=i)
         if role == "assistant":
             for tc in m.get("tool_calls") or []:
-                fn = (tc or {}).get("function") or {}
-                _add(segs, "tool_call", f"{fn.get('name', '')}({fn.get('arguments', '')})", role="assistant", name=fn.get("name"), turn=i)
+                fn = (tc or {}).get("function") or tc or {}
+                args = fn.get("arguments") if "arguments" in fn else fn.get("parameters")
+                _add(segs, "tool_call", f"{fn.get('name', '')}({args if isinstance(args, str) else _dumps(args)})", role="assistant", name=fn.get("name"), turn=i)
             fc = m.get("function_call")
             if isinstance(fc, dict):
                 _add(segs, "tool_call", f"{fc.get('name', '')}({fc.get('arguments', '')})", role="assistant", name=fc.get("name"), turn=i)
     tools: list = []
     for t in body.get("tools") or []:
-        fn = (t or {}).get("function") or t or {}
+        fn = (t or {}).get("function") or (t or {}).get("toolSpec") or t or {}
         name = fn.get("name") or (t or {}).get("type")
         tools.append(name)
         _add(segs, "tool_def", _dumps(t), name=name)
+    tc_cfg = body.get("toolConfig")
+    if isinstance(tc_cfg, dict):
+        for t in tc_cfg.get("tools") or []:
+            spec = (t or {}).get("toolSpec") or t or {}
+            name = spec.get("name")
+            tools.append(name)
+            _add(segs, "tool_def", _dumps(t), name=name)
     for fn in body.get("functions") or []:
         name = (fn or {}).get("name")
         tools.append(name)
         _add(segs, "tool_def", _dumps(fn), name=name)
     rf = body.get("response_format")
-    if isinstance(rf, dict) and rf.get("type") == "json_schema":
+    if isinstance(rf, dict) and rf.get("type") in ("json_schema", "json_object") and ("json_schema" in rf or "schema" in rf):
         _add(segs, "response_schema", _dumps(rf))
     return ParsedRequest(OPENAI_CHAT, body.get("model"), bool(body.get("stream")), segs, tools)
 
@@ -217,8 +257,11 @@ _TEMPLATES = (
     (re.compile(r"<\|im_start\|>(system|user|assistant|tool)\n"), re.compile(r"<\|im_end\|>")),  # ChatML (Qwen, many fine-tunes)
     (re.compile(r"<\|start_header_id\|>(system|user|assistant|ipython)<\|end_header_id\|>\n\n"), re.compile(r"<\|eot_id\|>")),  # Llama 3
     (re.compile(r"<start_of_turn>(user|model)\n"), re.compile(r"<end_of_turn>")),  # Gemma
+    (re.compile(r"<｜(System|User|Assistant)｜>\s*", re.I), re.compile(r"<｜end[▁_]of[▁_]sentence｜>", re.I)),  # DeepSeek
+    (re.compile(r"<\|(system|user|assistant|tool)\|>\s*\n?", re.I), re.compile(r"<\|(?:end|eot_id|end_of_sentence)\|>", re.I)),  # Phi-3 / Phi-4
+    (re.compile(r"<\|START_OF_TURN_TOKEN\|><\|(SYSTEM|USER|CHATBOT|TOOL)_TOKEN\|>", re.I), re.compile(r"<\|END_OF_TURN_TOKEN\|>", re.I)),  # Cohere Command-R
 )
-_ROLE_ALIASES = {"model": "assistant", "ipython": "tool"}
+_ROLE_ALIASES = {"model": "assistant", "ipython": "tool", "chatbot": "assistant"}
 _LLAMA2_SYS = re.compile(r"<<SYS>>(.*?)<</SYS>>", re.S)
 _INST = re.compile(r"\[INST\](.*?)\[/INST\]", re.S)
 
@@ -238,7 +281,8 @@ def split_chat_template(prompt: str) -> Optional[list]:
             chunk = prompt[h.end():stop]
             m = end.search(chunk)
             chunk = chunk[:m.start()] if m else chunk
-            role = _ROLE_ALIASES.get(h.group(1), h.group(1))
+            raw_role = h.group(1).lower()
+            role = _ROLE_ALIASES.get(raw_role, raw_role)
             if chunk.strip():
                 turns.append((role, chunk.strip("\n")))
         return turns or None

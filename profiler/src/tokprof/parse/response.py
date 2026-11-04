@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import struct
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -24,13 +26,34 @@ def _int(v: Any) -> Optional[int]:
 
 
 def usage_openai_chat(u: dict) -> Usage:
-    d = u.get("prompt_tokens_details") or {}
-    c = u.get("completion_tokens_details") or {}
+    d = u.get("prompt_tokens_details") or u.get("input_tokens_details") or {}
+    c = u.get("completion_tokens_details") or u.get("output_tokens_details") or {}
+    nested = u.get("tokens") if isinstance(u.get("tokens"), dict) else (u.get("billed_units") if isinstance(u.get("billed_units"), dict) else {})
+    in_tok = _int(u.get("prompt_tokens"))
+    if in_tok is None:
+        in_tok = _int(u.get("input_tokens"))
+    if in_tok is None:
+        in_tok = _int(u.get("inputTokens"))
+    if in_tok is None:
+        in_tok = _int(nested.get("input_tokens"))
+    out_tok = _int(u.get("completion_tokens"))
+    if out_tok is None:
+        out_tok = _int(u.get("output_tokens"))
+    if out_tok is None:
+        out_tok = _int(u.get("outputTokens"))
+    if out_tok is None:
+        out_tok = _int(nested.get("output_tokens"))
+    cached = _int(d.get("cached_tokens"))
+    if cached is None:
+        cached = _int(u.get("cacheReadInputTokens") if "cacheReadInputTokens" in u else u.get("cache_read_input_tokens"))
+    cache_write = _int(d.get("cache_write_tokens"))
+    if cache_write is None:
+        cache_write = _int(u.get("cacheWriteInputTokens") if "cacheWriteInputTokens" in u else u.get("cache_creation_input_tokens"))
     return Usage(
-        input_total=_int(u.get("prompt_tokens")),
-        cached=_int(d.get("cached_tokens")),
-        cache_write=_int(d.get("cache_write_tokens")),
-        output=_int(u.get("completion_tokens")),
+        input_total=in_tok,
+        cached=cached,
+        cache_write=cache_write,
+        output=out_tok,
         reasoning=_int(c.get("reasoning_tokens")),
     )
 
@@ -72,7 +95,7 @@ def usage_gemini(u: dict) -> Usage:
 
 
 def native_usage(o: dict) -> Optional[Usage]:
-    """Usage in the formats of self-hosted servers that do not return an OpenAI-style `usage` object."""
+    """Usage in the formats of self-hosted servers, Bedrock, and Cohere."""
     if _int(o.get("prompt_eval_count")) is not None or _int(o.get("eval_count")) is not None:  # Ollama
         return Usage(input_total=_int(o.get("prompt_eval_count")), output=_int(o.get("eval_count")))
     if _int(o.get("tokens_evaluated")) is not None:  # llama.cpp server
@@ -80,6 +103,19 @@ def native_usage(o: dict) -> Optional[Usage]:
     details = o.get("details")
     if isinstance(details, dict) and isinstance(details.get("prefill"), list):  # TGI /generate with details=true
         return Usage(input_total=len(details["prefill"]), output=_int(details.get("generated_tokens")))
+    meta = o.get("meta") or o.get("metadata")
+    if isinstance(meta, dict):
+        if isinstance(meta.get("usage"), dict):  # Bedrock Converse stream metadata
+            return usage_openai_chat(meta["usage"])
+        t = meta.get("tokens") if isinstance(meta.get("tokens"), dict) else meta.get("billed_units")
+        if isinstance(t, dict) and (_int(t.get("input_tokens")) is not None or _int(t.get("output_tokens")) is not None):  # Cohere v1
+            return Usage(input_total=_int(t.get("input_tokens")), output=_int(t.get("output_tokens")))
+    bm = o.get("amazon-bedrock-invocationMetrics")
+    if isinstance(bm, dict) and (_int(bm.get("inputTokenCount")) is not None or _int(bm.get("outputTokenCount")) is not None):
+        return Usage(input_total=_int(bm.get("inputTokenCount")), output=_int(bm.get("outputTokenCount")))
+    delta = o.get("delta")
+    if isinstance(delta, dict) and isinstance((delta.get("message") or {}).get("usage"), dict):  # Cohere v2 SSE message-end
+        return usage_openai_chat(delta["message"]["usage"])
     return None
 
 
@@ -99,9 +135,9 @@ def _apply_extra(provider: str, o: dict, r: ParsedResponse) -> None:
                 if isinstance(fc, dict) and fc.get("name"):
                     r.tool_calls.append(fc["name"])
         return
-    if provider in (COMPLETIONS, OPENAI_CHAT):
-        nu = native_usage(o)  # Ollama and llama.cpp put the counts on the last chunk only
-        if nu is not None:
+    if provider in (COMPLETIONS, OPENAI_CHAT, ANTHROPIC):
+        nu = native_usage(o)  # Ollama, llama.cpp, Bedrock, Cohere
+        if nu is not None and (nu.input_total is not None or nu.output is not None):
             r.usage, r.has_usage = nu, True
         if provider == COMPLETIONS:
             if isinstance(o.get("usage"), dict):
@@ -116,15 +152,45 @@ def _apply_extra(provider: str, o: dict, r: ParsedResponse) -> None:
             tok = o.get("token")  # TGI /generate_stream
             if isinstance(tok, dict) and isinstance(tok.get("text"), str):
                 r.text += tok["text"]
-        else:  # Ollama /api/chat
+        elif provider == OPENAI_CHAT:  # Ollama /api/chat, Cohere v1/v2, Bedrock Converse
             msg = o.get("message")
             if isinstance(msg, dict) and "choices" not in o:
-                if isinstance(msg.get("content"), str):
-                    r.text += msg["content"]
+                c = msg.get("content")
+                if isinstance(c, str):
+                    r.text += c
+                elif isinstance(c, list):
+                    for part in c:
+                        if isinstance(part, dict) and isinstance(part.get("text"), str):
+                            r.text += part["text"]
                 for tc in msg.get("tool_calls") or []:
-                    name = ((tc or {}).get("function") or {}).get("name")
+                    name = ((tc or {}).get("function") or tc or {}).get("name")
                     if name:
                         r.tool_calls.append(name)
+            if isinstance(o.get("text"), str) and "choices" not in o:  # Cohere v1
+                r.text += o["text"]
+            for tc in o.get("tool_calls") or []:
+                if isinstance(tc, dict) and tc.get("name"):
+                    r.tool_calls.append(tc["name"])
+            out_msg = (o.get("output") or {}).get("message") if isinstance(o.get("output"), dict) else None
+            if isinstance(out_msg, dict):  # Bedrock Converse
+                for b in out_msg.get("content") or []:
+                    if isinstance(b, dict):
+                        if isinstance(b.get("text"), str):
+                            r.text += b["text"]
+                        tu = b.get("toolUse")
+                        if isinstance(tu, dict) and tu.get("name"):
+                            r.tool_calls.append(tu["name"])
+            cbd = o.get("contentBlockDelta")
+            if isinstance(cbd, dict) and isinstance((cbd.get("delta") or {}).get("text"), str):  # Bedrock Converse stream
+                r.text += cbd["delta"]["text"]
+            cbs = o.get("contentBlockStart")
+            if isinstance(cbs, dict):
+                tu = ((cbs.get("start") or {}).get("toolUse") or {})
+                if isinstance(tu, dict) and tu.get("name"):
+                    r.tool_calls.append(tu["name"])
+            delta = o.get("delta")
+            if isinstance(delta, dict) and isinstance(((delta.get("message") or {}).get("content") or {}).get("text"), str):  # Cohere v2 SSE
+                r.text += delta["message"]["content"]["text"]
 
 
 def parse_response_json(provider: str, obj: Any) -> ParsedResponse:
@@ -162,7 +228,7 @@ def parse_response_json(provider: str, obj: Any) -> ParsedResponse:
                 r.tool_calls.append(b["name"])
             elif (b or {}).get("type") == "text" and isinstance(b.get("text"), str):
                 r.text += b["text"]
-    if provider in (COMPLETIONS, GEMINI) or (provider == OPENAI_CHAT and "choices" not in obj):
+    if provider in (COMPLETIONS, GEMINI, ANTHROPIC) or (provider == OPENAI_CHAT and "choices" not in obj):
         _apply_extra(provider, obj, r)
     return r
 
@@ -253,12 +319,76 @@ class SSEParser:
             elif t == "message_delta" and isinstance(o.get("usage"), dict):
                 usage_anthropic(o["usage"], r.usage)
                 r.has_usage = True
-        if p in (COMPLETIONS, GEMINI) or (p == OPENAI_CHAT and "choices" not in o):
+        if p in (COMPLETIONS, GEMINI, ANTHROPIC) or (p == OPENAI_CHAT and "choices" not in o):
             _apply_extra(p, o, r)
 
 
-def parse_response_body(provider: str, text: str, sse: bool = False) -> ParsedResponse:
-    """Parse a complete response body of any supported shape: JSON, a JSON array, SSE, or NDJSON."""
+def _unwrap_eventstream_obj(obj: dict) -> list:
+    if isinstance(obj.get("bytes"), str):  # Bedrock invoke-with-response-stream wraps chunks in base64
+        try:
+            decoded = base64.b64decode(obj["bytes"]).decode("utf-8", "replace")
+            inner = json.loads(decoded)
+            if isinstance(inner, dict):
+                return [inner]
+        except Exception:
+            pass
+    return [obj]
+
+
+def extract_eventstream_objects(raw: Any) -> list:
+    """Extract JSON payload objects from an AWS EventStream (`application/vnd.amazon.eventstream`) body.
+
+    Works both on raw binary frames (12-byte prelude + headers + JSON payload + 4-byte CRC) and on text
+    buffers where binary framing bytes were decoded as UTF-8 replacement characters.
+    """
+    out: list = []
+    if isinstance(raw, (bytes, bytearray)):
+        buf = bytes(raw)
+        pos = 0
+        while pos + 16 <= len(buf):
+            total_len, headers_len = struct.unpack(">II", buf[pos:pos + 8])
+            if total_len < 16 or pos + total_len > len(buf) or 12 + headers_len > total_len - 4:
+                break
+            payload = buf[pos + 12 + headers_len:pos + total_len - 4]
+            pos += total_len
+            if payload:
+                try:
+                    obj = json.loads(payload.decode("utf-8", "replace"))
+                    if isinstance(obj, dict):
+                        out.extend(_unwrap_eventstream_obj(obj))
+                except ValueError:
+                    pass
+        if out:
+            return out
+        text = buf.decode("utf-8", "replace")
+    else:
+        text = str(raw or "")
+    decoder = json.JSONDecoder()
+    idx = 0
+    while idx < len(text):
+        brace = text.find("{", idx)
+        if brace < 0:
+            break
+        try:
+            obj, end = decoder.raw_decode(text, brace)
+            idx = end
+            if isinstance(obj, dict):
+                out.extend(_unwrap_eventstream_obj(obj))
+        except ValueError:
+            idx = brace + 1
+    return out
+
+
+def parse_response_body(provider: str, text: Any, sse: bool = False) -> ParsedResponse:
+    """Parse a complete response body of any supported shape: JSON, a JSON array, SSE, NDJSON, or AWS EventStream."""
+    if isinstance(text, (bytes, bytearray)):
+        frames = extract_eventstream_objects(text)
+        if frames:
+            parser = SSEParser(provider)
+            for c in frames:
+                parser._obj(c)
+            return parser.result
+        text = bytes(text).decode("utf-8", "replace")
     raw = (text or "").strip()
     if not raw:
         return ParsedResponse()
@@ -281,7 +411,12 @@ def parse_response_body(provider: str, text: str, sse: bool = False) -> ParsedRe
                 try:
                     chunks.append(json.loads(line))
                 except ValueError:
-                    return ParsedResponse()
+                    chunks = None
+                    break
+    if chunks is None:  # AWS EventStream binary framing with embedded JSON objects
+        chunks = extract_eventstream_objects(raw)
+        if not chunks:
+            return ParsedResponse()
     parser = SSEParser(provider)
     for c in chunks:
         if isinstance(c, dict):

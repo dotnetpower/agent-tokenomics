@@ -47,7 +47,7 @@ EXCLUDED_PATH = re.compile(
     r"|:(embedContent|batchEmbedContents|countTokens)$",
     re.I,
 )
-_PLAUSIBLE_KEYS = re.compile(r'"(?:messages|contents)"\s*:\s*\[|"(?:prompt|input|inputs)"\s*:')
+_PLAUSIBLE_KEYS = re.compile(r'"(?:messages|contents|chat_history)"\s*:\s*\[|"(?:prompt|input|inputs|preamble|message)"\s*:')
 
 
 def normalize_path(path: str) -> str:
@@ -170,7 +170,7 @@ _PATH_HINTS = (
     (re.compile(r"/chat/completions$", re.I), OPENAI_CHAT),
     (re.compile(r"/responses$", re.I), OPENAI_RESPONSES),
     (re.compile(r"/messages$", re.I), ANTHROPIC),
-    (re.compile(r"/api/chat$", re.I), OPENAI_CHAT),  # Ollama
+    (re.compile(r"/(?:api|v\d+)/chat$|/chat$", re.I), OPENAI_CHAT),  # Ollama /api/chat, Cohere /v1/chat & /v2/chat
     (re.compile(r"/(?:v\d+/)?completions?$|/generate(?:_stream)?$|/api/generate$", re.I), COMPLETIONS),
     (re.compile(r":(?:stream)?generateContent$", re.I), GEMINI),
     (re.compile(r"/(?:converse(?:-stream)?|invoke(?:-with-response-stream)?|invocations)$", re.I), "generic"),
@@ -202,12 +202,12 @@ def model_from_path(path: str) -> Optional[str]:
 
 # ---- body shape ---------------------------------------------------------------------------------------------------
 
-_ROLES = frozenset({"system", "user", "assistant", "developer", "tool", "function", "model", "human", "ai"})
+_ROLES = frozenset({"system", "user", "assistant", "developer", "tool", "function", "model", "human", "ai", "chatbot"})
 _RESPONSES_KEYS = ("instructions", "previous_response_id", "max_output_tokens", "reasoning", "store", "include", "truncation", "parallel_tool_calls")
 _SAMPLING_KEYS = frozenset({
     "max_tokens", "temperature", "top_p", "top_k", "stop", "n_predict", "max_new_tokens", "stream", "n", "logprobs",
     "frequency_penalty", "presence_penalty", "repetition_penalty", "min_p", "seed", "sampling_params", "options",
-    "raw", "system", "template", "parameters",
+    "raw", "system", "template", "parameters", "preamble", "connectors",
 })
 _ANTHROPIC_BLOCKS = frozenset({"tool_use", "tool_result", "thinking", "redacted_thinking", "document"})
 
@@ -225,14 +225,26 @@ def classify_body(obj: Any) -> Shape:
     if not isinstance(obj, dict):
         return sh
     msgs = obj.get("messages")
-    if isinstance(msgs, list) and msgs and any(isinstance(m, dict) and m.get("role") in _ROLES for m in msgs):
-        if any(isinstance(m, dict) and ("content" in m or "tool_calls" in m or "parts" in m) for m in msgs):
+    if isinstance(msgs, list) and msgs and any(isinstance(m, dict) and str(m.get("role") or "").lower() in _ROLES for m in msgs):
+        if any(isinstance(m, dict) and ("content" in m or "tool_calls" in m or "parts" in m or "message" in m) for m in msgs):
             sh.strong, sh.points, sh.api = True, 60, OPENAI_CHAT
             sh.reasons.append("body has a messages list of role/content objects")
             if "anthropic_version" in obj or ("system" in obj and "max_tokens" in obj) or _has_anthropic_blocks(msgs):
                 sh.api = ANTHROPIC
                 sh.reasons.append("Anthropic-style (anthropic_version, top-level system or content blocks)")
             return sh
+    if isinstance(obj.get("message"), str) and obj["message"]:
+        ch = obj.get("chat_history")
+        if (isinstance(ch, list) and any(isinstance(m, dict) and str(m.get("role") or "").lower() in _ROLES for m in ch)) or isinstance(obj.get("preamble"), str):
+            sh.strong, sh.points, sh.api = True, 60, OPENAI_CHAT
+            sh.reasons.append("body has Cohere chat_history/preamble and message")
+            return sh
+        sh.api, sh.points = OPENAI_CHAT, 25
+        sh.reasons.append("body has a message field (Cohere chat shape: needs corroboration)")
+        if _SAMPLING_KEYS & set(obj):
+            sh.points += 10
+            sh.reasons.append("with sampling parameters")
+        return sh
     contents = obj.get("contents")
     if isinstance(contents, list) and contents and any(isinstance(c, dict) and isinstance(c.get("parts"), list) for c in contents):
         sh.strong, sh.points, sh.api = True, 60, GEMINI
@@ -273,12 +285,14 @@ def _has_anthropic_blocks(msgs: list) -> bool:
 
 # ---- response corroboration ---------------------------------------------------------------------------------------
 
-_USAGE_KEYS = ("prompt_tokens", "completion_tokens", "input_tokens", "output_tokens", "total_tokens")
+_USAGE_KEYS = ("prompt_tokens", "completion_tokens", "input_tokens", "output_tokens", "total_tokens", "inputTokens", "outputTokens", "totalTokens")
 _OBJECT_TYPES = frozenset({"chat.completion", "chat.completion.chunk", "text_completion", "response"})
-_TYPE_VALUES = frozenset({"message", "message_start", "content_block_delta", "content_block_start", "message_delta"})
+_TYPE_VALUES = frozenset({"message", "message_start", "content_block_delta", "content_block_start", "message_delta", "message-start", "content-delta", "message-end"})
 
 
 def _response_objects(text: str, sse: bool) -> Iterator[dict]:
+    from .parse.response import extract_eventstream_objects
+
     raw = (text or "").strip()
     if not raw:
         return
@@ -311,12 +325,21 @@ def _response_objects(text: str, sse: bool) -> Iterator[dict]:
             if isinstance(x, dict):
                 yield x
         return
+    yielded = False
     for line in raw.splitlines()[:200]:  # NDJSON
+        line = line.strip()
+        if not line:
+            continue
         try:
             x = json.loads(line)
         except ValueError:
-            return
+            yielded = False
+            break
         if isinstance(x, dict):
+            yielded = True
+            yield x
+    if not yielded:
+        for x in extract_eventstream_objects(raw)[:200]:
             yield x
 
 
@@ -324,8 +347,13 @@ def response_evidence(text: str, sse: bool = False) -> Optional[str]:
     """Return what in the response proves it came from a model, or None."""
     for o in _response_objects(text, sse):
         u = o.get("usage")
-        if isinstance(u, dict) and any(k in u for k in _USAGE_KEYS):
+        if isinstance(u, dict) and (any(k in u for k in _USAGE_KEYS) or isinstance(u.get("tokens") or u.get("billed_units"), dict)):
             return "response has token usage"
+        meta = o.get("meta") or o.get("metadata")
+        if isinstance(meta, dict) and isinstance(meta.get("usage") or meta.get("tokens") or meta.get("billed_units"), dict):
+            return "response has token usage"
+        if isinstance(o.get("amazon-bedrock-invocationMetrics"), dict):
+            return "response has Bedrock invocation metrics"
         if isinstance(o.get("usageMetadata"), dict):
             return "response has usageMetadata"
         ch = o.get("choices")
@@ -335,9 +363,13 @@ def response_evidence(text: str, sse: bool = False) -> Optional[str]:
             return "response has candidates"
         if o.get("object") in _OBJECT_TYPES or o.get("type") in _TYPE_VALUES:
             return "response has a model-response type"
+        if isinstance(o.get("contentBlockDelta") or o.get("contentBlockStart"), dict):
+            return "response has Bedrock Converse stream blocks"
         c = o.get("content")
         if isinstance(c, list) and any(isinstance(b, dict) and b.get("type") in ("text", "tool_use", "thinking") for b in c):
             return "response has content blocks"
+        if isinstance(o.get("output"), dict) and isinstance((o["output"].get("message") or {}).get("content"), list):
+            return "response has Bedrock Converse output"
         if isinstance(o.get("output"), list) and any(isinstance(i, dict) and i.get("type") in ("message", "function_call", "reasoning") for i in o["output"]):
             return "response has Responses output items"
         if "prompt_eval_count" in o or "eval_count" in o or "tokens_evaluated" in o or "generated_text" in o:

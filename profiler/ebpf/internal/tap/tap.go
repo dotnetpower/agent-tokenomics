@@ -192,16 +192,17 @@ func (t *Tap) attachFile(pid int, pr inspect.Provider) ([]link.Link, error) {
 			{inspect.GoTLSReadSym, t.objs.GoTlsReadEnter, t.objs.GoTlsReadRet},
 		} {
 			rets := pr.RetOffsets[g.sym]
+			addr := pr.Addresses[g.sym]
 			if len(rets) == 0 {
 				continue
 			}
-			up, err := ex.Uprobe(g.sym, g.enter, opts)
+			up, err := ex.Uprobe(g.sym, g.enter, &link.UprobeOptions{PID: pid, Address: addr})
 			if err != nil {
 				return fail(fmt.Errorf("uprobe %s in %s: %w", g.sym, pr.File, err))
 			}
 			ls = append(ls, up)
 			for _, off := range rets {
-				rp, err := ex.Uprobe(g.sym, g.ret, &link.UprobeOptions{PID: pid, Offset: off})
+				rp, err := ex.Uprobe(g.sym, g.ret, &link.UprobeOptions{PID: pid, Address: addr, Offset: off})
 				if err != nil {
 					return fail(fmt.Errorf("uprobe %s+%#x in %s: %w", g.sym, off, pr.File, err))
 				}

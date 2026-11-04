@@ -22,7 +22,7 @@ _EXCLUDED_PATH = re.compile(
     r"|:(embedContent|batchEmbedContents|countTokens)$",
     re.I,
 )
-_PLAUSIBLE_KEYS = re.compile(r'"(?:messages|contents)"\s*:\s*\[|"(?:prompt|input|inputs)"\s*:')
+_PLAUSIBLE_KEYS = re.compile(r'"(?:messages|contents|chat_history)"\s*:\s*\[|"(?:prompt|input|inputs|preamble|message)"\s*:')
 _CAP = 32 * 1024 * 1024
 
 

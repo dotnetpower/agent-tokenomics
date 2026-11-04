@@ -7,6 +7,7 @@
     {"name": "leading whitespace", "method": "POST", "path": "/x", "body": "  \n{\"prompt\":\"hello world\"}", "expect": true},
     {"name": "gemini contents", "method": "POST", "path": "/v1beta/models/gemini-pro:generateContent", "body": "{\"contents\":[{\"parts\":[{\"text\":\"hi\"}]}]}", "expect": true},
     {"name": "tgi inputs", "method": "POST", "path": "/generate", "body": "{\"inputs\":\"hi there\",\"parameters\":{}}", "expect": true},
+    {"name": "cohere chat", "method": "POST", "path": "/v1/chat", "body": "{\"model\":\"command-r-plus\",\"chat_history\":[],\"message\":\"hi\"}", "expect": true},
     {"name": "responses input", "method": "POST", "path": "/v1/responses", "body": "{\"model\":\"m\",\"input\":\"hello\"}", "expect": true},
     {"name": "lowercase method", "method": "post", "path": "/x", "body": "{\"prompt\":\"hello world\"}", "expect": true},
     {"name": "GET", "method": "GET", "path": "/v1/chat/completions", "body": "{\"messages\":[{\"role\":\"user\"}]}", "expect": false},

@@ -120,3 +120,54 @@ def test_negative_residual_finding_mentions_ollama_kv_cache():
     r = call(1000, 50, segs, quality="poor")  # reported=50, est=850 -> residual=-800
     fs = findings([r])
     assert any("prompt_eval_count" in f["text"] and "KV-cached" in f["text"] for f in fs)
+
+
+def test_failure_loop_cache_busting_and_context_growth_findings():
+    # 1. Repeated identical tool calls + HTTP errors + changing system prompt hashes + 4x history growth
+    recs = []
+    for i in range(4):
+        segs = [
+            seg("system", 600, h=f"dynamic-sys-{i}"),
+            seg("history_user", 500 * (i + 1)),
+            seg("tool_result", 300 * (i + 1)),
+            seg("user_prompt", 40),
+        ]
+        recs.append(
+            call(
+                1000 + i * 1.0,
+                sum(s["tokens"] for s in segs),
+                segs,
+                conv="conv1",
+                tool_calls=["run_bash"],
+                status=500 if i < 2 else 200,
+            )
+        )
+    fs = findings(recs)
+    joined = " | ".join(f["text"] for f in fs)
+    assert "failed with an error or HTTP >= 400" in joined
+    assert "Tool call 'run_bash' was repeated 4 times in a row" in joined
+    assert "busting the prefix cache" in joined
+    assert "Conversation history grew" in joined
+
+
+def test_pretty_and_html_reports_and_profile_cli(tmp_path, monkeypatch):
+    from tokprof.cli import main
+    from tokprof.report import render_html, render_pretty
+
+    recs = pipeline()
+    pretty = render_pretty(recs, color=False, prices={"m": {"input": 2.0, "output": 8.0}})
+    assert "tokprof — LLM Token Profile" in pretty and "Estimated cost:" in pretty and "Call timeline" in pretty
+    html_out = render_html(recs, prices={"m": {"input": 2.0, "output": 8.0}})
+    assert "<!DOCTYPE html>" in html_out and "Input Token Breakdown" in html_out and "Per-Call Timeline" in html_out
+
+    monkeypatch.chdir(tmp_path)
+    tok_dir = tmp_path / ".tokprof"
+    tok_dir.mkdir()
+    jpath = tok_dir / "run-test.jsonl"
+    import json
+
+    jpath.write_text("\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8")
+    # Zero-arg `tokprof report --html` finds the latest file in .tokprof/ automatically
+    assert main(["report", "--format", "pretty", "--html"]) == 0
+    assert (tok_dir / "run-test.html").is_file()
+    assert (tok_dir / "latest.html").is_file()

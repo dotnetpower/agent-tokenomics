@@ -343,7 +343,7 @@ var (
 		`audio/(speech|transcriptions|translations)|images?/(generations|edits|variations)|` +
 		`files|batches|fine_tuning|uploads|vector_stores|assistants|threads|realtime)(/|$)` +
 		`|:(embedContent|batchEmbedContents|countTokens)$`)
-	plausibleKeys = regexp.MustCompile(`"(?:messages|contents)"\s*:\s*\[|"(?:prompt|input|inputs)"\s*:`)
+	plausibleKeys = regexp.MustCompile(`"(?:messages|contents|chat_history)"\s*:\s*\[|"(?:prompt|input|inputs|preamble|message)"\s*:`)
 )
 
 // Plausible reports whether a request body is worth sending to the detector.

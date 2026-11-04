@@ -8,6 +8,7 @@ package inspect
 import (
 	"bufio"
 	"debug/elf"
+	"debug/gosym"
 	"encoding/binary"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ type Provider struct {
 	File       string              `json:"file"`
 	Kind       string              `json:"kind"` // "exported" (dynsym) | "local" (symtab) | "go-tls" (Go crypto/tls)
 	Syms       []string            `json:"symbols"`
+	Addresses  map[string]uint64   `json:"addresses,omitempty"`
 	RetOffsets map[string][]uint64 `json:"ret_offsets,omitempty"`
 }
 
@@ -131,6 +133,9 @@ func scanProcess(procRoot string, pid int, cache map[string]*fileInfo) Process {
 	defer f.Close()
 
 	seen := map[string]bool{}
+	selfMnt, _ := os.Readlink(filepath.Join(procRoot, "self", "ns", "mnt"))
+	procMnt, _ := os.Readlink(filepath.Join(base, "ns", "mnt"))
+	diffMnt := selfMnt != "" && procMnt != "" && selfMnt != procMnt
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for sc.Scan() {
@@ -143,13 +148,16 @@ func scanProcess(procRoot string, pid int, cache map[string]*fileInfo) Process {
 			continue
 		}
 		seen[path] = true
-		fi, ok := cache[path]
+		openPath := resolveProcPath(base, path, diffMnt)
+		fi, ok := cache[openPath]
 		if !ok {
-			fi = inspectFile(path)
-			cache[path] = fi
+			fi = inspectFile(openPath)
+			cache[openPath] = fi
 		}
 		if fi.provider != nil {
-			p.Providers = append(p.Providers, *fi.provider)
+			pr := *fi.provider
+			pr.File = openPath
+			p.Providers = append(p.Providers, pr)
 		}
 		if fi.goTLS {
 			p.GoTLS = true
@@ -162,6 +170,24 @@ func scanProcess(procRoot string, pid int, cache map[string]*fileInfo) Process {
 		p.Attach, p.Note = "go-only", "Go crypto/tls: RET offsets not found (unsupported ABI or architecture)"
 	}
 	return p
+}
+
+// resolveProcPath returns a host-openable path for a file mapped inside pid, falling back to
+// /proc/<pid>/root/<path> when the process runs in another mount namespace (such as a container).
+func resolveProcPath(procBase, path string, diffMnt bool) string {
+	rootPath := filepath.Join(procBase, "root", strings.TrimPrefix(path, "/"))
+	if diffMnt {
+		if _, err := os.Stat(rootPath); err == nil {
+			return rootPath
+		}
+	}
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	if _, err := os.Stat(rootPath); err == nil {
+		return rootPath
+	}
+	return path
 }
 
 func inspectFile(path string) *fileInfo {
@@ -181,8 +207,8 @@ func inspectFile(path string) *fileInfo {
 			}
 		}
 	}
+	var goWrite, goRead *elf.Symbol
 	if sym, err := ef.Symbols(); err == nil {
-		var goWrite, goRead *elf.Symbol
 		for i := range sym {
 			s := &sym[i]
 			if isTLS(s.Name) && s.Section != elf.SHN_UNDEF && elf.ST_TYPE(s.Info) == elf.STT_FUNC {
@@ -198,16 +224,25 @@ func inspectFile(path string) *fileInfo {
 				goRead = s
 			}
 		}
-		if found["SSL_write"] == "" && goWrite != nil && goRead != nil {
-			wRets := findGoRetOffsets(ef, *goWrite)
-			rRets := findGoRetOffsets(ef, *goRead)
-			if len(wRets) > 0 && len(rRets) > 0 {
-				fi.provider = &Provider{
-					File:       path,
-					Kind:       "go-tls",
-					Syms:       []string{GoTLSWriteSym, GoTLSReadSym},
-					RetOffsets: map[string][]uint64{GoTLSWriteSym: wRets, GoTLSReadSym: rRets},
-				}
+	}
+	if goWrite == nil || goRead == nil {
+		if w, r := findGoSymbolsPCLN(ef); w != nil && r != nil {
+			fi.goTLS = true
+			goWrite, goRead = w, r
+		}
+	}
+	if found["SSL_write"] == "" && goWrite != nil && goRead != nil {
+		wRets := findGoRetOffsets(ef, *goWrite)
+		rRets := findGoRetOffsets(ef, *goRead)
+		wAddr := fileOffset(ef, goWrite.Value)
+		rAddr := fileOffset(ef, goRead.Value)
+		if len(wRets) > 0 && len(rRets) > 0 && wAddr > 0 && rAddr > 0 {
+			fi.provider = &Provider{
+				File:       path,
+				Kind:       "go-tls",
+				Syms:       []string{GoTLSWriteSym, GoTLSReadSym},
+				Addresses:  map[string]uint64{GoTLSWriteSym: wAddr, GoTLSReadSym: rAddr},
+				RetOffsets: map[string][]uint64{GoTLSWriteSym: wRets, GoTLSReadSym: rRets},
 			}
 		}
 	}
@@ -224,6 +259,54 @@ func inspectFile(path string) *fileInfo {
 		fi.provider = &Provider{File: path, Kind: kind, Syms: names}
 	}
 	return fi
+}
+
+// findGoSymbolsPCLN recovers crypto/tls.(*Conn).Write and Read from .gopclntab when a Go binary was
+// built with -ldflags="-s -w" (no .symtab).
+func findGoSymbolsPCLN(ef *elf.File) (*elf.Symbol, *elf.Symbol) {
+	textIdx := -1
+	var textSec, pclnSec *elf.Section
+	for i, s := range ef.Sections {
+		switch s.Name {
+		case ".text":
+			textIdx, textSec = i, s
+		case ".gopclntab", ".data.rel.ro.gopclntab":
+			pclnSec = s
+		}
+	}
+	if textSec == nil || pclnSec == nil || pclnSec.Size == 0 || pclnSec.Size > 64<<20 {
+		return nil, nil
+	}
+	pcln, err := pclnSec.Data()
+	if err != nil {
+		return nil, nil
+	}
+	tab, err := gosym.NewTable(nil, gosym.NewLineTable(pcln, textSec.Addr))
+	if err != nil {
+		return nil, nil
+	}
+	sym := func(name string) *elf.Symbol {
+		fn := tab.LookupFunc(name)
+		if fn == nil || fn.End <= fn.Entry {
+			return nil
+		}
+		return &elf.Symbol{
+			Name:    name,
+			Value:   fn.Entry,
+			Size:    fn.End - fn.Entry,
+			Section: elf.SectionIndex(textIdx),
+		}
+	}
+	return sym(GoTLSWriteSym), sym(GoTLSReadSym)
+}
+
+func fileOffset(ef *elf.File, va uint64) uint64 {
+	for _, prog := range ef.Progs {
+		if prog.Type == elf.PT_LOAD && (prog.Flags&elf.PF_X) != 0 && prog.Vaddr <= va && va < prog.Vaddr+prog.Memsz {
+			return va - prog.Vaddr + prog.Off
+		}
+	}
+	return 0
 }
 
 // findGoRetOffsets locates the RET instructions in a Go function so uprobes can be

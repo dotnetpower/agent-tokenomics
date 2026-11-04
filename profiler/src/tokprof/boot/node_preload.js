@@ -15,7 +15,7 @@ const CAP = 32 * 1024 * 1024;
 const origHttpRequest = http.request;
 // Pre-filter only; tokprof's detector decides. Keep identical to tokprof.detect.plausible (tests/vectors/prefilter.json).
 const EXCLUDED_PATH = /\/(embeddings?|moderations?|rerank|tokenize|detokenize|count_tokens|audio\/(speech|transcriptions|translations)|images?\/(generations|edits|variations)|files|batches|fine_tuning|uploads|vector_stores|assistants|threads|realtime)(\/|$)|:(embedContent|batchEmbedContents|countTokens)$/i;
-const PLAUSIBLE_KEYS = /"(?:messages|contents)"\s*:\s*\[|"(?:prompt|input|inputs)"\s*:/;
+const PLAUSIBLE_KEYS = /"(?:messages|contents|chat_history)"\s*:\s*\[|"(?:prompt|input|inputs|preamble|message)"\s*:/;
 
 function plausible(method, path, text) {
   try {

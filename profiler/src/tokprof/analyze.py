@@ -145,6 +145,76 @@ def findings(records: list, min_cacheable: int = 1024, gap_s: float = 5.0) -> li
     if sizes and statistics.median(sizes) >= 4:
         out.append({"severity": "medium", "text": f"Each user request triggers a median of {statistics.median(sizes):g} LLM calls (max {max(sizes)}): look for steps to skip, merge, or run on a smaller model", "see": LINKS["improve"]})
 
+    # Failure loops: repeated identical tool calls in one conversation or repeated HTTP/provider errors.
+    failed = [r for r in records if r.get("error") or ((r.get("status") or 200) >= 400)]
+    if len(failed) >= 2:
+        f_tokens = sum(_in(r) for r in failed)
+        out.append({
+            "severity": "high" if len(failed) >= 3 or f_tokens / total_in >= 0.15 else "medium",
+            "text": f"{len(failed)} call(s) failed with an error or HTTP >= 400 ({f_tokens:,} input tokens): check retry/backoff or failure-loop guards",
+            "see": LINKS["improve"],
+        })
+    by_conv: dict = defaultdict(list)
+    for r in sorted(records, key=lambda x: x.get("ts", 0)):
+        by_conv[r.get("conv") or "_default"].append(r)
+    for conv_recs in by_conv.values():
+        streak_name, streak_len, streak_tokens = None, 0, 0
+        for r in conv_recs:
+            tcs = r.get("tool_calls") or [s.get("name") for s in r.get("segments", []) if s["kind"] == "tool_call" and s.get("name")]
+            sig = ",".join(str(x) for x in tcs if x) if tcs else None
+            if sig and sig == streak_name:
+                streak_len += 1
+                streak_tokens += _in(r)
+            else:
+                if streak_name and streak_len >= 3:
+                    out.append({
+                        "severity": "high",
+                        "text": f"Tool call '{streak_name}' was repeated {streak_len} times in a row ({streak_tokens:,} input tokens): add a loop guard that redirects after identical calls",
+                        "see": LINKS["improve"],
+                    })
+                streak_name, streak_len, streak_tokens = sig, (1 if sig else 0), (_in(r) if sig else 0)
+        if streak_name and streak_len >= 3:
+            out.append({
+                "severity": "high",
+                "text": f"Tool call '{streak_name}' was repeated {streak_len} times in a row ({streak_tokens:,} input tokens): add a loop guard that redirects after identical calls",
+                "see": LINKS["improve"],
+            })
+
+    # Prompt cache-busting: system prompt token count stays nearly constant while its hash changes on almost every call.
+    sys_per_call = []
+    for r in records:
+        sys_segs = [s for s in r.get("segments", []) if s["kind"] == "system"]
+        if sys_segs:
+            sys_per_call.append((sum(s["tokens"] for s in sys_segs), "|".join(s.get("hash", "") for s in sys_segs)))
+    if len(sys_per_call) >= 3:
+        toks = [t for t, _ in sys_per_call]
+        hashes = {h for _, h in sys_per_call if h}
+        med = int(statistics.median(toks))
+        if med >= 200 and len(hashes) >= max(3, int(0.8 * len(sys_per_call))) and (max(toks) - min(toks)) <= max(32, int(0.08 * med)):
+            out.append({
+                "severity": "high",
+                "text": f"System prompt hash changed on {len(hashes)} of {len(sys_per_call)} calls while its size stayed ~{med:,} tokens: a dynamic value (timestamp, UUID, or unsorted keys) is busting the prefix cache",
+                "see": LINKS["improve"],
+            })
+
+    # Context growth curve: history + tool_result tokens growing rapidly across turns of a conversation.
+    for conv_key, conv_recs in by_conv.items():
+        if len(conv_recs) < 4:
+            continue
+        hist_series = [
+            sum(s["tokens"] for s in r.get("segments", []) if s["kind"] in ("history_user", "history_assistant", "tool_result"))
+            for r in conv_recs
+        ]
+        non_zero = [h for h in hist_series if h > 0]
+        if len(non_zero) >= 3 and hist_series[-1] >= 1500 and hist_series[-1] >= 3 * non_zero[0]:
+            ratio = hist_series[-1] / max(1, non_zero[0])
+            out.append({
+                "severity": "high" if hist_series[-1] >= 8000 or ratio >= 6 else "medium",
+                "text": f"Conversation history grew {ratio:.1f}x across {len(conv_recs)} turns (from {non_zero[0]:,} to {hist_series[-1]:,} tokens): compact older turns or isolate sub-tasks in fresh sessions",
+                "see": LINKS["improve"],
+            })
+            break
+
     # Attribution quality.
     q = Counter(r.get("quality") for r in records if r.get("quality"))
     poor = q.get("poor", 0)

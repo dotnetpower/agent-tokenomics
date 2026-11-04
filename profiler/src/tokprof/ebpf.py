@@ -18,13 +18,25 @@ from .store import JsonlWriter
 HELPER_NAME = "tokprof-ebpf"
 
 
-def find_helper(explicit: Optional[str] = None) -> Optional[str]:
+def find_helper(explicit: Optional[str] = None, auto_build: bool = False) -> Optional[str]:
     candidates = [explicit, os.environ.get("TOKPROF_EBPF_HELPER"), shutil.which(HELPER_NAME)]
     here = os.path.dirname(os.path.abspath(__file__))
-    candidates.append(os.path.normpath(os.path.join(here, "..", "..", "ebpf", "bin", HELPER_NAME)))  # source checkout
+    ebpf_dir = os.path.normpath(os.path.join(here, "..", "..", "ebpf"))
+    checkout_bin = os.path.join(ebpf_dir, "bin", HELPER_NAME)
+    candidates.append(checkout_bin)  # source checkout
     for c in candidates:
         if c and os.path.isfile(c) and os.access(c, os.X_OK):
             return os.path.abspath(c)
+    if auto_build and os.path.isfile(os.path.join(ebpf_dir, "go.mod")):
+        go = shutil.which("go") or os.path.expanduser("~/sdk/go/bin/go")
+        if os.path.isfile(go) and os.access(go, os.X_OK):
+            try:
+                os.makedirs(os.path.dirname(checkout_bin), exist_ok=True)
+                subprocess.run([go, "build", "-o", checkout_bin, "./cmd/" + HELPER_NAME], cwd=ebpf_dir, check=True, timeout=60)
+                if os.path.isfile(checkout_bin) and os.access(checkout_bin, os.X_OK):
+                    return os.path.abspath(checkout_bin)
+            except Exception:
+                pass
     return None
 
 
@@ -81,7 +93,7 @@ def run_ebpf(
     if not (pids or comms or everything):
         print("tokprof: choose what to watch: --pid, --comm or --all", file=sys.stderr)
         return 2
-    exe = find_helper(helper)
+    exe = find_helper(helper, auto_build=True)
     if not exe:
         print(f"tokprof: {HELPER_NAME} not found. Build it with: (cd profiler/ebpf && go build -o bin/{HELPER_NAME} ./cmd/{HELPER_NAME}), "
               "or pass --helper PATH.", file=sys.stderr)

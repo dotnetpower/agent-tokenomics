@@ -174,7 +174,7 @@ func main() {
 """
 
 
-def build_go_client(tmp):
+def build_go_client(tmp, stripped=False):
     """A Go client (raw write/read syscalls, no libc) when a Go toolchain is available; '' otherwise."""
     go = shutil.which("go") or os.path.expanduser("~/sdk/go/bin/go")
     if not os.path.exists(go):
@@ -183,8 +183,9 @@ def build_go_client(tmp):
     os.makedirs(src, exist_ok=True)
     open(os.path.join(src, "main.go"), "w").write(GO_CLIENT)
     open(os.path.join(src, "go.mod"), "w").write("module goclient\n\ngo 1.20\n")
-    out = os.path.join(tmp, "goclient.bin")
-    r = subprocess.run([go, "build", "-o", out, "."], cwd=src, capture_output=True, text=True)
+    out = os.path.join(tmp, "goclient-stripped.bin" if stripped else "goclient.bin")
+    cmd = [go, "build"] + (["-ldflags=-s -w"] if stripped else []) + ["-o", out, "."]
+    r = subprocess.run(cmd, cwd=src, capture_output=True, text=True)
     return out if r.returncode == 0 else ""
 
 
@@ -209,7 +210,8 @@ def main():
     helper = os.path.abspath(args.helper)
 
     tmp = tempfile.mkdtemp(prefix="tokprof-e2e-")
-    go_client = build_go_client(tmp)
+    go_client = build_go_client(tmp, stripped=False)
+    go_stripped = build_go_client(tmp, stripped=True)
     os.chmod(tmp, 0o700)
     try:
         key, crt = os.path.join(tmp, "k.pem"), os.path.join(tmp, "c.pem")
@@ -266,7 +268,7 @@ def main():
         if os.path.exists(go_client):
             clients["plain-go"] = subprocess.Popen([go_client, flag, purl, body], **quiet)
             clients["go-tls"] = subprocess.Popen([go_client, flag, url, body], **quiet)
-            clients["go-tls-sse"] = subprocess.Popen([go_client, flag, url, stream], **quiet)
+            clients["go-tls-sse"] = subprocess.Popen([go_stripped or go_client, flag, url, stream], **quiet)
 
         # HTTP/2 can only be followed from the first byte of a connection, so these clients connect after the
         # helper is attached: the Node client waits for the flag file, and curl retries until the server appears.

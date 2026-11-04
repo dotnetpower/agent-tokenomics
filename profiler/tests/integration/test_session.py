@@ -63,3 +63,30 @@ def test_render_env_shells_and_unset():
     assert render_env(st, "cmd") == "set A=x'y"
     assert render_env(st, "fish") == "set -gx A 'x'\"'\"'y'"
     assert render_env(st, "bash", unset=True).splitlines() == ["unset A", "export B='old'"]
+
+
+def test_one_step_profile_and_shorthand_generates_html_and_pretty_report(tmp_path):
+    mock = MockProcess()
+    env = dict(os.environ, OPENAI_BASE_URL=mock.url + "/v1")
+    script = (
+        "import json, os, urllib.request\n"
+        "b = os.environ['OPENAI_BASE_URL']\n"
+        "req = urllib.request.Request(b + '/chat/completions', data=json.dumps({'model':'gpt-4o','messages':[{'role':'system','content':'be terse'},{'role':'user','content':'hi'}]}).encode(), headers={'Content-Type':'application/json'})\n"
+        "urllib.request.urlopen(req, timeout=10).read()\n"
+    )
+    try:
+        r = subprocess.run(
+            [sys.executable, "-m", "tokprof", "--", sys.executable, "-c", script],
+            cwd=str(tmp_path),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert r.returncode == 0, r.stderr + r.stdout
+        assert "tokprof — LLM Token Profile" in r.stdout
+        assert (tmp_path / ".tokprof" / "latest.html").is_file()
+        html_text = (tmp_path / ".tokprof" / "latest.html").read_text(encoding="utf-8")
+        assert "Input Token Breakdown" in html_text and "System prompt" in html_text
+    finally:
+        mock.stop()

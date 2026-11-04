@@ -18,6 +18,7 @@
 
 #define DIR_WRITE 0
 #define DIR_READ 1
+#define DIR_FORK 2
 
 struct call_args {
 	__u64 ssl;
@@ -303,6 +304,10 @@ int go_tls_read_ret(struct pt_regs *ctx) { return go_ret(ctx, DIR_READ); }
 #define NR_RECVFROM 45
 #define NR_SENDMSG 46
 #define NR_RECVMSG 47
+#define NR_CLONE 56
+#define NR_FORK 57
+#define NR_VFORK 58
+#define NR_CLONE3 435
 #elif defined(__TARGET_ARCH_arm64)
 #define NR_READ 63
 #define NR_WRITE 64
@@ -313,6 +318,8 @@ int go_tls_read_ret(struct pt_regs *ctx) { return go_ret(ctx, DIR_READ); }
 #define NR_RECVFROM 207
 #define NR_SENDMSG 211
 #define NR_RECVMSG 212
+#define NR_CLONE 220
+#define NR_CLONE3 435
 #else
 #error "unsupported architecture: add its syscall numbers"
 #endif
@@ -440,6 +447,18 @@ int raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		a.dir = DIR_READ;
 		a.vec = 1;
 		break;
+#if defined(NR_FORK)
+	case NR_FORK:
+	case NR_VFORK:
+#endif
+	case NR_CLONE:
+	case NR_CLONE3:
+		if (!watching(&tgid))
+			return 0;
+		id = bpf_get_current_pid_tgid();
+		a.dir = DIR_FORK;
+		bpf_map_update_elem(&sys_active, &id, &a, BPF_ANY);
+		return 0;
 	case NR_CLOSE: {
 		struct plain_key k = {};
 
@@ -491,6 +510,15 @@ int raw_sys_exit(struct bpf_raw_tracepoint_args *ctx)
 	bump(1);
 	a = *ap;
 	bpf_map_delete_elem(&sys_active, &id);
+	if (a.dir == DIR_FORK) {
+		if (ret > 0 && ret <= 0x7fffffff) {
+			__u32 child = (__u32)ret;
+			__u8 one = 1;
+
+			bpf_map_update_elem(&watched, &child, &one, BPF_ANY);
+		}
+		return 0;
+	}
 	if (ret <= 0 || ret > 0x7fffffff || (!a.vec && (__u64)ret > a.len))
 		return 0;
 	if (!watching(&tgid)) {

@@ -61,8 +61,9 @@ Using GitHub Copilot in VS Code instead? These do not instrument it; use
 
 ```bash
 uv tool install ./profiler            # isolated install, nothing is added to the agent's project
-tokprof run --report -- python my_agent.py      # any command, any language
-tokprof report .tokprof/run-*.jsonl --prices prices.json
+tokprof -- python my_agent.py                   # one-step: run, print visual report, and write .tokprof/latest.html
+tokprof report --format pretty --html           # summarize the latest run and write an HTML dashboard
+tokprof report --watch                          # live-updating terminal view while an agent runs
 tokprof compare before.jsonl after.jsonl        # bootstrap interval, for stages 3 and 5
 ```
 
@@ -78,7 +79,10 @@ tokprof compare before.jsonl after.jsonl        # bootstrap interval, for stages
   Gemini. `tokprof explain <url> --body request.json` shows why a request was or was not recorded; `--llm-host`, `--llm-path` and
   `--exclude-host` override the decision. A private CA is trusted through `SSL_CERT_FILE` or `--upstream-ca`.
 - **What it shows.** Input tokens by system prompt (split by section), history, current prompt, tool definitions, tool
-  calls, and tool results; fixed overhead; per-step token map; calls per request; unused tools; repeated static blocks.
+  calls, and tool results; fixed overhead; per-step token map; calls per request; unused tools; repeated static blocks;
+  failure loops (repeated identical tool calls or HTTP errors); prompt cache-busting (dynamic values changing the system
+  prompt hash); and rapid conversation history growth. Outputs terminal (`text`, `pretty`), Markdown, JSON, and a
+  self-contained interactive HTML dashboard (`--html`).
 - **What it stores.** Counts, salted hashes, lengths, and section and tool names. Not prompt text, headers, or keys.
 - **Accuracy.** Providers report only totals, so segment counts are local estimates and the rest is shown as
   *unattributed*. Install `tiktoken` for OpenAI-family models. Check the residual before trusting a breakdown.
