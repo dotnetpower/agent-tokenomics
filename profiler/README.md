@@ -21,6 +21,8 @@ uv tool install "./profiler[tiktoken]"  # better counting accuracy
 ## Use
 
 ```bash
+tokprof                                # show detailed usage guide & examples (default: English)
+tokprof --lang ko                      # show detailed usage guide & examples in Korean (한국어 상세 설명)
 tokprof start                          # start background profiling (on Linux, auto-attaches eBPF to running processes & Docker)
 tokprof start --comm fdai              # scope background profiling to matching processes, working directories, or Docker containers
 tokprof status                         # check active session and recorded call count
@@ -29,6 +31,8 @@ tokprof -- python my_agent.py          # one-step command: run, print visual rep
 tokprof profile --comm python,node     # attach to already-running processes in the foreground
 tokprof report                         # summarize the latest run in .tokprof/ (no path needed)
 tokprof report --format pretty --html  # rich terminal view + self-contained HTML dashboard (.tokprof/latest.html)
+tokprof report --format csv            # output per-session, per-turn, and per-call CSV to stdout
+tokprof report --csv                   # save CSV report to .tokprof/latest.csv alongside terminal report
 tokprof report --watch                 # live-updating terminal dashboard as calls arrive
 tokprof run -- python my_agent.py      # run a command with LLM base URLs routed through the local gateway
 tokprof shell                          # a shell whose child processes are profiled

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import csv
 import html
+import io
 import json
 import os
 import sys
@@ -286,6 +288,167 @@ def render_markdown(records: list, gap_s: float = 5.0) -> str:
 
 def render_json(records: list, gap_s: float = 5.0) -> str:
     return json.dumps(summarize(records, gap_s), indent=2)
+
+
+CSV_COLUMNS = (
+    "row_type",
+    "session",
+    "turn",
+    "call_index",
+    "call_id",
+    "timestamp",
+    "model",
+    "provider",
+    "step",
+    "step_label",
+    "turns_count",
+    "calls_count",
+    "input_total",
+    "cached_tokens",
+    "output_tokens",
+    "system_tokens",
+    "history_tokens",
+    "history_user_tokens",
+    "history_assistant_tokens",
+    "user_prompt_tokens",
+    "tools_schema_tokens",
+    "tool_def_tokens",
+    "tool_call_tokens",
+    "tool_result_tokens",
+    "response_schema_tokens",
+    "other_tokens",
+    "residual_tokens",
+    "latency_ms",
+    "status",
+    "system_prompt",
+    "conversation_history",
+    "user_prompt",
+    "tools_schema",
+    "assistant_response",
+)
+
+
+def render_csv(records: list, gap_s: float = 5.0) -> str:
+    """Render per-session, per-turn, and per-call breakdowns and prompt contents as CSV."""
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=CSV_COLUMNS, lineterminator="\n")
+    writer.writeheader()
+    if not records:
+        return buf.getvalue().rstrip("\n")
+    s = summarize(records, gap_s)
+    for sess in s.get("sessions", []):
+        writer.writerow({
+            "row_type": "session",
+            "session": sess["session"],
+            "turn": "",
+            "call_index": "",
+            "call_id": "",
+            "timestamp": "",
+            "model": ",".join(sess.get("models") or []),
+            "provider": "",
+            "step": "",
+            "step_label": "",
+            "turns_count": sess["turns_count"],
+            "calls_count": sess["calls_count"],
+            "input_total": sess["input_total"],
+            "cached_tokens": sess["cached_total"],
+            "output_tokens": sess["output_total"],
+            "system_tokens": sess["system"],
+            "history_tokens": sess["history"],
+            "history_user_tokens": "",
+            "history_assistant_tokens": "",
+            "user_prompt_tokens": sess["user_prompt"],
+            "tools_schema_tokens": sess["tools_schema"],
+            "tool_def_tokens": "",
+            "tool_call_tokens": "",
+            "tool_result_tokens": "",
+            "response_schema_tokens": "",
+            "other_tokens": sess["other"],
+            "residual_tokens": sess["residual"],
+            "latency_ms": "",
+            "status": "",
+            "system_prompt": "",
+            "conversation_history": "",
+            "user_prompt": "",
+            "tools_schema": "",
+            "assistant_response": "",
+        })
+    for t in s.get("turns", []):
+        writer.writerow({
+            "row_type": "turn",
+            "session": t["session"],
+            "turn": t["turn"],
+            "call_index": "",
+            "call_id": "",
+            "timestamp": "",
+            "model": ",".join(t.get("models") or []),
+            "provider": "",
+            "step": "",
+            "step_label": "",
+            "turns_count": 1,
+            "calls_count": t["calls_count"],
+            "input_total": t["input_total"],
+            "cached_tokens": t["cached_total"],
+            "output_tokens": t["output_total"],
+            "system_tokens": t["system"],
+            "history_tokens": t["history"],
+            "history_user_tokens": t["history_user"],
+            "history_assistant_tokens": t["history_assistant"],
+            "user_prompt_tokens": t["user_prompt"],
+            "tools_schema_tokens": t["tools_schema"],
+            "tool_def_tokens": "",
+            "tool_call_tokens": "",
+            "tool_result_tokens": "",
+            "response_schema_tokens": "",
+            "other_tokens": t["other"],
+            "residual_tokens": t["residual"],
+            "latency_ms": t["latency_ms"],
+            "status": "",
+            "system_prompt": "",
+            "conversation_history": t.get("history_text") or "",
+            "user_prompt": t.get("user_text") or "",
+            "tools_schema": "",
+            "assistant_response": t.get("response_text") or "",
+        })
+    for cd in s.get("call_details", []):
+        p = cd.get("prompts") or {}
+        writer.writerow({
+            "row_type": "call",
+            "session": cd["session"],
+            "turn": cd["turn"],
+            "call_index": cd["index"],
+            "call_id": cd["id"],
+            "timestamp": cd["ts"],
+            "model": cd["model"],
+            "provider": cd["provider"],
+            "step": cd["step"],
+            "step_label": cd.get("step_label") or "",
+            "turns_count": "",
+            "calls_count": 1,
+            "input_total": cd["input_total"],
+            "cached_tokens": cd["cached"],
+            "output_tokens": cd["output"],
+            "system_tokens": cd["system"],
+            "history_tokens": cd["history"],
+            "history_user_tokens": cd["history_user"],
+            "history_assistant_tokens": cd["history_assistant"],
+            "user_prompt_tokens": cd["user_prompt"],
+            "tools_schema_tokens": cd["tools_schema"],
+            "tool_def_tokens": cd["tool_def"],
+            "tool_call_tokens": cd["tool_call"],
+            "tool_result_tokens": cd["tool_result"],
+            "response_schema_tokens": cd["response_schema"],
+            "other_tokens": cd["other"],
+            "residual_tokens": cd["residual"],
+            "latency_ms": cd["latency_ms"] if cd.get("latency_ms") is not None else "",
+            "status": cd["status"] if cd.get("status") is not None else "",
+            "system_prompt": p.get("system") or "",
+            "conversation_history": p.get("history") or "",
+            "user_prompt": p.get("user_prompt") or "",
+            "tools_schema": p.get("tools_schema") or "",
+            "assistant_response": p.get("response") or "",
+        })
+    return buf.getvalue().rstrip("\n")
 
 
 def render_pretty(

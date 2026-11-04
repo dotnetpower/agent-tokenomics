@@ -62,17 +62,19 @@ VS Code에서 GitHub Copilot을 사용하나요? 위 플랫폼은 Copilot을 계
 
 ```bash
 uv tool install ./profiler            # 격리 설치, 에이전트 프로젝트에는 아무것도 추가되지 않습니다
+tokprof --lang ko                               # 상세 사용 가이드 및 예시 출력 (--lang ko | --lang en)
 tokprof start                                   # 백그라운드 프로파일링 시작 (Linux: 실행 중인 프로세스 및 Docker 자동 수집)
 tokprof stop                                    # 세션 종료 + 시각적 리포트 출력 + .tokprof/latest.html 생성
 tokprof -- python my_agent.py                   # 단일 명령 실행: 프로파일링 + 시각적 터미널 리포트 + .tokprof/latest.html 생성
-tokprof report --format pretty --html           # 가장 최근 실행을 요약하고 단일 파일 HTML 대시보드를 생성합니다
+tokprof report --format pretty --html --csv     # 가장 최근 실행을 요약하고 단일 파일 HTML 대시보드 및 CSV 파일을 생성합니다
+tokprof report --format csv                     # 세션별·턴별·호출별 분해 및 프롬프트 원문을 CSV로 표준 출력합니다
 tokprof report --watch                          # 에이전트 실행 중 실시간으로 터미널 리포트를 갱신합니다
 tokprof compare before.jsonl after.jsonl        # 부트스트랩 구간, 3단계와 5단계용
 ```
 
 - **수집 방식**: `tokprof start`는 백그라운드 세션을 시작하며, Linux에서는 실행 중인 호스트 프로세스와 Docker 컨테이너에 eBPF 프로브를 자동으로 연결합니다(`tokprof start --comm <이름>`으로 프로세스·작업 디렉터리·컨테이너 이름별 필터링 가능). 작업 후 `tokprof stop`을 실행하면 세션을 멈추고 시각적 리포트와 `.tokprof/latest.html`을 바로 생성합니다. `tokprof run`은 `127.0.0.1`에 게이트웨이를 띄우고, **해당 명령에서만** `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `AZURE_OPENAI_ENDPOINT`와 패턴으로 찾은 기본 URL 변수(`VLLM_BASE_URL`, `OLLAMA_HOST` 등)를 그곳으로 향하게 하며, 프로세스 내부 훅(`sitecustomize`를 통한 Python `httpx`, `requests`, `urllib3`, `aiohttp`, `urllib.request`와 `--require`를 통한 Node `fetch`, `http.request`, `https.request`)도 함께 로드합니다.
 - **LLM 호출로 인식하는 기준**: 고정된 URL 목록이 아닙니다. `tokprof`는 요청 본문의 형태(`messages` 목록, Gemini `contents`, Responses 방식의 `input`, `prompt`), 경로, 호스트(사설 DNS, RFC 1918, `.svc.cluster.local`, `privatelink`, `vllm`·`ollama` 같은 이름, 관례적인 포트), 그리고 모호한 본문에 대해서는 응답(사용량 카운터, `choices`, Ollama·llama.cpp·TGI 카운터)을 함께 점수화합니다. 그래서 사설 DNS 엔드포인트, 온프레미스 vLLM, Ollama, TGI, llama.cpp, LiteLLM 방식 게이트웨이, Azure 프라이빗 엔드포인트, Gemini를 모두 인식합니다. `tokprof explain <url> --body request.json`은 요청이 기록되었거나 기록되지 않은 이유를 보여 주고, `--llm-host`, `--llm-path`, `--exclude-host`로 판정을 직접 지정할 수 있습니다. 사설 CA는 `SSL_CERT_FILE` 또는 `--upstream-ca`로 신뢰합니다.
-- **보여 주는 것**: 세션별·턴별·호출별로 구분된 시스템 프롬프트(구간별), 대화 이력(History), 현재 사용자 프롬프트(`utterance`, `context`/`history`, `capabilities`가 담긴 구조화 JSON 페이로드 자동 분해 포함), 도구 정의·호출·결과 및 응답 스키마별 입력 토큰과 실제 프롬프트·응답 원문 내용, 고정 오버헤드, 단계별 토큰 지도, 요청당 호출 수, 사용되지 않는 도구, 반복되는 정적 블록, 실패 루프(동일 도구 호출 반복 및 에러 재시도), 프롬프트 캐시 깨짐(동적 값 삽입으로 시스템 프롬프트 해시가 매번 바뀌는 현상), 대화 이력 급증입니다. 터미널(`pretty`, `text`, `--full-prompts`), Markdown, JSON 및 외부 의존성 없는 단일 파일 HTML 대시보드(`--html`)로 출력합니다.
+- **보여 주는 것**: 세션별·턴별·호출별로 구분된 시스템 프롬프트(구간별), 대화 이력(History), 현재 사용자 프롬프트(`utterance`, `context`/`history`, `capabilities`가 담긴 구조화 JSON 페이로드 자동 분해 포함), 도구 정의·호출·결과 및 응답 스키마별 입력 토큰과 실제 프롬프트·응답 원문 내용, 고정 오버헤드, 단계별 토큰 지도, 요청당 호출 수, 사용되지 않는 도구, 반복되는 정적 블록, 실패 루프(동일 도구 호출 반복 및 에러 재시도), 프롬프트 캐시 깨짐(동적 값 삽입으로 시스템 프롬프트 해시가 매번 바뀌는 현상), 대화 이력 급증입니다. 터미널(`pretty`, `text`, `--full-prompts`), CSV(`--format csv` / `--csv`), Markdown, JSON 및 외부 의존성 없는 단일 파일 HTML 대시보드(`--html`)로 출력합니다. 인자 없이 `tokprof`를 실행하면 상세 설명과 예시를 보여 줍니다(`--lang ko` 또는 `--lang en`).
 - **저장하는 것**: 토큰 수, 솔트 해시, 길이, 구간·도구 이름 및 시크릿이 마스킹된 프롬프트·응답 원문입니다(원문을 제외하려면 `--no-content` 사용). HTTP 헤더나 API 키는 저장하지 않습니다.
 - **정확도**: 제공자는 합계만 알려 주므로 구간별 수치는 로컬 추정치이고 나머지는 *미분류*로 표시됩니다. OpenAI 계열 모델은 `tiktoken`을 설치하세요. 분해 결과를 믿기 전에 잔차를 확인하세요.
 - **이미 실행 중인 프로세스(Linux)**: `tokprof ebpf --pid <PID>`는 프로세스의 TLS 라이브러리(OpenSSL 및 Go `crypto/tls`)와 시스템 콜 트레이스포인트에 eBPF 프로브를 연결해, 재시작이나 변경 없이 LLM 호출을 기록하며, 온프레미스 서버로 가는 평문 `http://` 및 `h2c` 호출도 포함합니다. root 또는 `CAP_BPF` 권한이 필요하며, 관찰을 시작한 뒤 열린 HTTP/1.1과 HTTP/2 연결을 따라갑니다. 자세한 내용은 [profiler README](https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler#linux-ebpf-tap-running-processes-no-restart-no-code-change)를 참고하세요.

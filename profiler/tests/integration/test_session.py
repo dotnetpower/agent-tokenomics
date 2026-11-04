@@ -66,8 +66,12 @@ def test_render_env_shells_and_unset():
 
 
 def test_one_step_profile_and_shorthand_generates_html_and_pretty_report(tmp_path):
+    from pathlib import Path
+    import tokprof
+
+    src_dir = str(Path(tokprof.__file__).resolve().parents[1])
     mock = MockProcess()
-    env = dict(os.environ, OPENAI_BASE_URL=mock.url + "/v1")
+    env = dict(os.environ, OPENAI_BASE_URL=mock.url + "/v1", PYTHONPATH=src_dir)
     script = (
         "import json, os, urllib.request\n"
         "b = os.environ['OPENAI_BASE_URL']\n"

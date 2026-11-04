@@ -61,10 +61,12 @@ Using GitHub Copilot in VS Code instead? These do not instrument it; use
 
 ```bash
 uv tool install ./profiler            # isolated install, nothing is added to the agent's project
+tokprof                                         # show detailed usage guide & examples (--lang en | --lang ko)
 tokprof start                                   # start background profiling (Linux: auto-captures running processes & Docker)
 tokprof stop                                    # stop session, print visual report, and write .tokprof/latest.html
 tokprof -- python my_agent.py                   # one-step command: run, print visual report, and write .tokprof/latest.html
-tokprof report --format pretty --html           # summarize the latest run and write an HTML dashboard
+tokprof report --format pretty --html --csv     # summarize the latest run and write HTML + CSV reports
+tokprof report --format csv                     # output per-session, per-turn, and per-call CSV to stdout
 tokprof report --watch                          # live-updating terminal view while an agent runs
 tokprof compare before.jsonl after.jsonl        # bootstrap interval, for stages 3 and 5
 ```
@@ -83,8 +85,8 @@ tokprof compare before.jsonl after.jsonl        # bootstrap interval, for stages
   and `capabilities`), tool definitions, tool calls, tool results, and response schemas, plus full prompt & response text
   inspection; fixed overhead; per-step token map; calls per request; unused tools; repeated static blocks;
   failure loops (repeated identical tool calls or HTTP errors); prompt cache-busting (dynamic values changing the system
-  prompt hash); and rapid conversation history growth. Outputs terminal (`pretty`, `text`, `--full-prompts`), Markdown, JSON, and a
-  self-contained interactive HTML dashboard (`--html`).
+  prompt hash); and rapid conversation history growth. Outputs terminal (`pretty`, `text`, `--full-prompts`), CSV (`--format csv` / `--csv`), Markdown, JSON, and a
+  self-contained interactive HTML dashboard (`--html`). Running `tokprof` with no arguments prints detailed usage and examples (`--lang en` or `--lang ko`).
 - **What it stores.** Counts, salted hashes, lengths, section/tool names, and secret-redacted prompt/response texts (pass `--no-content` to omit text). Never headers or API keys.
 - **Accuracy.** Providers report only totals, so segment counts are local estimates and the rest is shown as
   *unattributed*. Install `tiktoken` for OpenAI-family models. Check the residual before trusting a breakdown.

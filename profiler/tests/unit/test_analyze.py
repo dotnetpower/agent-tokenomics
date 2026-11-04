@@ -150,24 +150,43 @@ def test_failure_loop_cache_busting_and_context_growth_findings():
     assert "Conversation history grew" in joined
 
 
-def test_pretty_and_html_reports_and_profile_cli(tmp_path, monkeypatch):
+def test_pretty_and_html_reports_and_profile_cli(tmp_path, monkeypatch, capsys):
+    import csv
+    import io
+    import json
     from tokprof.cli import main
-    from tokprof.report import render_html, render_pretty
+    from tokprof.report import render_csv, render_html, render_pretty
 
     recs = pipeline()
     pretty = render_pretty(recs, color=False, prices={"m": {"input": 2.0, "output": 8.0}})
     assert "LLM Token Profile" in pretty and "Estimated cost:" in pretty and "Per-Call breakdown" in pretty and "Per-Session breakdown" in pretty and "Per-Turn breakdown" in pretty
     html_out = render_html(recs, prices={"m": {"input": 2.0, "output": 8.0}})
     assert "<!DOCTYPE html>" in html_out and "Input Token Breakdown" in html_out and "Per-Turn Breakdown" in html_out and "Per-Session Summary" in html_out
+    csv_out = render_csv(recs)
+    rows = list(csv.DictReader(io.StringIO(csv_out)))
+    row_types = [r["row_type"] for r in rows]
+    assert "session" in row_types and "turn" in row_types and "call" in row_types
+    assert any(int(r["input_total"] or 0) == 37320 for r in rows if r["row_type"] == "session")
 
     monkeypatch.chdir(tmp_path)
     tok_dir = tmp_path / ".tokprof"
     tok_dir.mkdir()
     jpath = tok_dir / "run-test.jsonl"
-    import json
-
     jpath.write_text("\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8")
-    # Zero-arg `tokprof report --html` finds the latest file in .tokprof/ automatically
-    assert main(["report", "--format", "pretty", "--html"]) == 0
+    # Zero-arg `tokprof report --html --csv` finds the latest file in .tokprof/ automatically
+    assert main(["report", "--format", "pretty", "--html", "--csv"]) == 0
     assert (tok_dir / "run-test.html").is_file()
     assert (tok_dir / "latest.html").is_file()
+    assert (tok_dir / "run-test.csv").is_file()
+    assert (tok_dir / "latest.csv").is_file()
+    assert main(["report", "--format", "csv"]) == 0
+
+    # `tokprof` with no arguments or `--lang en` / `--lang ko` prints detailed help
+    capsys.readouterr()
+    assert main([]) == 0
+    out_en = capsys.readouterr().out
+    assert "Zero-Code LLM Agent Token Profiler" in out_en and "QUICK START & EXAMPLES" in out_en
+    assert main(["--lang", "ko"]) == 0
+    out_ko = capsys.readouterr().out
+    assert "코드 수정 없는 LLM 에이전트 토큰 프로파일러" in out_ko and "빠른 시작 및 사용 예시" in out_ko
+
