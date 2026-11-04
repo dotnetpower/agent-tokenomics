@@ -114,13 +114,42 @@ def render_compare(result: dict) -> str:
     return "\n".join(lines)
 
 
-def render_text(records: list, gap_s: float = 5.0) -> str:
+def _preview_line(text: str, limit: int = 120) -> str:
+    if not text:
+        return ""
+    clean = " ".join(text.strip().split())
+    return (clean[:limit - 1] + "…") if len(clean) > limit else clean
+
+
+def _indent_block(text: str, prefix: str = "      ", max_lines: int = 12, max_chars: int = 900) -> list:
+    if not text:
+        return []
+    clipped = text.strip()
+    truncated = False
+    if len(clipped) > max_chars:
+        clipped = clipped[:max_chars]
+        truncated = True
+    raw_lines = clipped.splitlines()
+    if len(raw_lines) > max_lines:
+        raw_lines = raw_lines[:max_lines]
+        truncated = True
+    out = [f"{prefix}{ln}" for ln in raw_lines]
+    if truncated:
+        out.append(f"{prefix}... ({len(text):,} chars total; see HTML dashboard or --full-prompts for full text)")
+    return out
+
+
+def render_text(records: list, gap_s: float = 5.0, *, full_prompts: bool = False) -> str:
     if not records:
         return "No LLM calls recorded."
     s = summarize(records, gap_s)
     total = s["input_total"] or 1
+    sessions = s.get("sessions", [])
+    turns = s.get("turns", [])
+    calls = s.get("call_details", [])
     lines = [
-        f"Calls: {s['calls']}   Input tokens: {s['input_total']:,}   Output tokens: {s['output_total']:,}   Cached input: {s['cached_total']:,}",
+        f"Sessions: {len(sessions)}   Turns: {len(turns)}   Calls: {s['calls']}   "
+        f"Input tokens: {s['input_total']:,}   Output tokens: {s['output_total']:,}   Cached input: {s['cached_total']:,}",
         f"First call input (fixed overhead): {s['first_call_input']:,}   Median input per call: {s['median_input']:,}",
     ]
     fo = s["fan_out"]
@@ -132,6 +161,57 @@ def render_text(records: list, gap_s: float = 5.0) -> str:
         if v:
             share = v / total
             lines.append(f"{LABELS.get(kind, kind):<32}{v:>12,}  {100 * share:5.1f}%  {_bar(max(0.0, min(1.0, share)))}")
+
+    if sessions:
+        lines += [
+            "",
+            "Per-session summary",
+            "-------------------",
+            f"{'session':<9}{'turns':>6}{'calls':>7}{'system':>11}{'history':>11}{'user':>11}{'tools/sch':>11}{'input':>12}{'cached':>11}{'output':>9}",
+        ]
+        for sess in sessions:
+            lines.append(
+                f"{sess['session']:<9}{sess['turns_count']:>6}{sess['calls_count']:>7}"
+                f"{sess['system']:>11,}{sess['history']:>11,}{sess['user_prompt']:>11,}{sess['tools_schema']:>11,}"
+                f"{sess['input_total']:>12,}{sess['cached_total']:>11,}{sess['output_total']:>9,}"
+            )
+
+    if turns:
+        lines += [
+            "",
+            "Per-turn breakdown (System / History / User Prompt / Tools & Schema)",
+            "--------------------------------------------------------------------",
+            f"{'turn':<9}{'calls':>6}{'system':>11}{'history':>11}{'user':>11}{'tools/sch':>11}{'input':>12}{'cached':>11}{'output':>9}",
+        ]
+        for t in turns:
+            tag = f"{t['session']}·T{t['turn']}"
+            lines.append(
+                f"{tag:<9}{t['calls_count']:>6}"
+                f"{t['system']:>11,}{t['history']:>11,}{t['user_prompt']:>11,}{t['tools_schema']:>11,}"
+                f"{t['input_total']:>12,}{t['cached_total']:>11,}{t['output_total']:>9,}"
+            )
+            if t.get("user_text"):
+                lines.append(f"    User prompt: {_preview_line(t['user_text'], 100)}")
+            if t.get("history_text"):
+                lines.append(f"    History:     {_preview_line(t['history_text'], 100)}")
+            if t.get("response_text"):
+                lines.append(f"    Assistant:   {_preview_line(t['response_text'], 100)}")
+
+    if calls:
+        lines += [
+            "",
+            "Per-call breakdown",
+            "------------------",
+            f"{'#':<4}{'turn':<8}{'model':<22}{'system':>9}{'history':>9}{'user':>9}{'tools/sch':>10}{'input':>10}{'cached':>9}{'out':>7}",
+        ]
+        for cd in calls[:40]:
+            tag = f"{cd['session']}·T{cd['turn']}"
+            lines.append(
+                f"#{cd['index']:<3}{tag:<8}{cd['model'][:20]:<22}"
+                f"{cd['system']:>9,}{cd['history']:>9,}{cd['user_prompt']:>9,}{cd['tools_schema']:>10,}"
+                f"{cd['input_total']:>10,}{cd['cached']:>9,}{cd['output']:>7,}"
+            )
+
     if len(s["steps"]) > 1 or (s["steps"] and s["steps"][0]["step"] != "(no sy"):
         lines += ["", "Per-step token map (steps identified by system prompt)", "------------------------------------------------------",
                   f"{'step':<8}{'label':<28}{'calls':>6}{'input':>12}{'fixed/call':>12}"]
@@ -141,10 +221,32 @@ def render_text(records: list, gap_s: float = 5.0) -> str:
     eps = s["endpoints"]
     if len(eps) > 1 or (eps and eps[0]["class"] not in ("unknown",)):
         lines += ["", "Endpoints (by detected API and host class)", "------------------------------------------",
-                  f"{'host':<30}{'class':<18}{'api':<18}{'calls':>6}{'input':>12}"]
+                  f"{'host':<26}{'class':<24}{'api':<16}{'calls':>6}{'input':>12}"]
         for e in eps[:12]:
-            who = e["host"] or (f"#{e['id']}" if e["id"] else "-")
-            lines.append(f"{who:<30}{e['class']:<18}{e['api']:<18}{e['calls']:>6}{e['input']:>12,}")
+            who = (e["host"] or (f"#{e['id']}" if e["id"] else "-"))[:24]
+            lines.append(f"{who:<26}{e['class'][:22]:<24}{e['api']:<16}{e['calls']:>6}{e['input']:>12,}")
+
+    has_prompts = any(any(cd["prompts"].values()) for cd in calls)
+    if has_prompts:
+        max_l = 10000 if full_prompts else 10
+        max_c = 100000 if full_prompts else 700
+        lines += ["", "Captured prompt & response contents", "-----------------------------------"]
+        for cd in calls[:20]:
+            p = cd["prompts"]
+            if not any(p.values()):
+                continue
+            lines.append(f"  Call #{cd['index']} ({cd['session']}·T{cd['turn']} | {cd['model']} | step {cd['step']})")
+            for key, title in (
+                ("system", f"System Prompt ({cd['system']:,} tok)"),
+                ("history", f"Conversation History ({cd['history']:,} tok)"),
+                ("user_prompt", f"User Prompt ({cd['user_prompt']:,} tok)"),
+                ("tools_schema", f"Tools & Schema ({cd['tools_schema']:,} tok)"),
+                ("response", f"Assistant Output ({cd['output']:,} tok)"),
+            ):
+                if p.get(key):
+                    lines.append(f"    [{title}]")
+                    lines.extend(_indent_block(p[key], "      ", max_lines=max_l, max_chars=max_c))
+
     if s["findings"]:
         lines += ["", "Findings", "--------"]
         for f in s["findings"]:
@@ -186,8 +288,15 @@ def render_json(records: list, gap_s: float = 5.0) -> str:
     return json.dumps(summarize(records, gap_s), indent=2)
 
 
-def render_pretty(records: list, gap_s: float = 5.0, *, color: Optional[bool] = None, prices: Optional[dict] = None) -> str:
-    """Rich Unicode terminal report with box-drawing cards, smooth bars, and optional ANSI colors."""
+def render_pretty(
+    records: list,
+    gap_s: float = 5.0,
+    *,
+    color: Optional[bool] = None,
+    prices: Optional[dict] = None,
+    full_prompts: bool = False,
+) -> str:
+    """Rich Unicode terminal report with box-drawing cards, smooth bars, per-session/per-turn breakdown, and prompt contents."""
     if not records:
         return "No LLM calls recorded."
     if color is None:
@@ -202,13 +311,18 @@ def render_pretty(records: list, gap_s: float = 5.0, *, color: Optional[bool] = 
     fo = s["fan_out"]
     med_fo = sorted(fo)[len(fo) // 2] if fo else 0
     max_fo = max(fo) if fo else 0
+    sessions = s.get("sessions", [])
+    turns = s.get("turns", [])
+    calls = s.get("call_details", [])
 
     u_ok = _utf8_ok()
-    rule = ("─" if u_ok else "-") * 76
-    top = "╭" + ("─" * 78) + "╮" if u_ok else "+" + ("-" * 78) + "+"
-    mid = "│  tokprof — LLM Token Profile                                                 │" if u_ok else "|  tokprof - LLM Token Profile                                                 |"
-    bot = "╰" + ("─" * 78) + "╯" if u_ok else "+" + ("-" * 78) + "+"
+    rule = ("─" if u_ok else "-") * 92
+    top = "╭" + ("─" * 90) + "╮" if u_ok else "+" + ("-" * 90) + "+"
+    mid = "│  tokprof — LLM Token Profile (Per-Session · Per-Turn · Prompt Inspector)                 │" if u_ok else "|  tokprof - LLM Token Profile (Per-Session / Per-Turn / Prompt Inspector)                 |"
+    bot = "╰" + ("─" * 90) + "╯" if u_ok else "+" + ("-" * 90) + "+"
 
+    sess_str = c("bold", f"{len(sessions):,}")
+    turns_str = c("bold", f"{len(turns):,}")
     calls_str = c("bold", f"{s['calls']:,}")
     in_str = c("bold", f"{s['input_total']:,}")
     out_str = c("bold", f"{s['output_total']:,}")
@@ -217,15 +331,16 @@ def render_pretty(records: list, gap_s: float = 5.0, *, color: Optional[bool] = 
         c("bold", top),
         c("bold", mid),
         c("bold", bot),
-        f"  Calls: {calls_str}   Input: {in_str}   Output: {out_str}   Cached: {cached_str} ({cache_pct:.1f}%)",
+        f"  Sessions: {sess_str}   Turns: {turns_str}   Calls: {calls_str}   "
+        f"Input: {in_str}   Output: {out_str}   Cached: {cached_str} ({cache_pct:.1f}%)",
         f"  First-call overhead: {s['first_call_input']:,} tok   "
         f"Median input/call: {s['median_input']:,} tok   "
-        f"Fan-out: median {med_fo}, max {max_fo} ({len(fo)} req)",
+        f"Fan-out: median {med_fo}, max {max_fo} calls/turn",
     ]
     if prices:
         lines.append("  " + render_cost(records, prices))
 
-    lines += ["", c("bold", "  Input token breakdown"), "  " + rule]
+    lines += ["", c("bold", "  1. Input token breakdown (total)"), "  " + rule]
     for kind in s["kinds_order"]:
         v = s["by_kind"].get(kind, 0)
         if v:
@@ -233,25 +348,67 @@ def render_pretty(records: list, gap_s: float = 5.0, *, color: Optional[bool] = 
             bar = c(kind, _ubo_bar(max(0.0, min(1.0, share)), 26, u_ok))
             lines.append(f"  {LABELS.get(kind, kind):<32}{v:>12,}  {100 * share:5.1f}%  {bar}")
 
-    if len(records) > 1:
-        lines += ["", c("bold", "  Call timeline (input tokens per call)"), "  " + rule]
-        max_call_in = max((r.get("usage") or {}).get("input_total") or r.get("est_input", 0) or 1 for r in records[:20])
-        for idx, r in enumerate(records[:20], 1):
-            u = r.get("usage") or {}
-            inp = u.get("input_total") if u.get("input_total") is not None else r.get("est_input", 0)
-            cached = u.get("cached") or 0
-            model = (r.get("model") or r.get("provider") or "-")[:18]
-            lat = f"{r['latency_ms']}ms" if r.get("latency_ms") is not None else "-"
-            bar = _ubo_bar(inp / max_call_in, 20, u_ok)
-            cache_tag = f" (cached {cached:,})" if cached else ""
-            lines.append(f"  #{idx:<3} {model:<18} {inp:>10,} tok  {bar}  {lat:>7}{cache_tag}")
-        if len(records) > 20:
-            lines.append(f"  ... ({len(records) - 20} more call(s))")
+    if sessions:
+        lines += [
+            "",
+            c("bold", "  2. Per-Session breakdown (System Prompt / Conv History / User Prompt / Tools & Schema)"),
+            "  " + rule,
+            f"  {'session':<9}{'turns':>6}{'calls':>7}{'system':>11}{'history':>11}{'user_prompt':>13}{'tools/schema':>14}{'total_in':>12}{'cached':>10}{'output':>8}",
+        ]
+        for sess in sessions:
+            lines.append(
+                f"  {sess['session']:<9}{sess['turns_count']:>6}{sess['calls_count']:>7}"
+                f"{sess['system']:>11,}{sess['history']:>11,}{sess['user_prompt']:>13,}{sess['tools_schema']:>14,}"
+                f"{sess['input_total']:>12,}{sess['cached_total']:>10,}{sess['output_total']:>8,}"
+            )
+
+    if turns:
+        lines += [
+            "",
+            c("bold", "  3. Per-Turn breakdown (across turns of each session)"),
+            "  " + rule,
+            f"  {'turn':<9}{'calls':>6}{'system':>11}{'history':>11}{'user_prompt':>13}{'tools/schema':>14}{'total_in':>12}{'cached':>10}{'output':>8}  {'lat':>7}",
+        ]
+        for t in turns:
+            tag = f"{t['session']}·T{t['turn']}"
+            lat = f"{t['latency_ms']:,}ms" if t.get("latency_ms") else "-"
+            lines.append(
+                f"  {tag:<9}{t['calls_count']:>6}"
+                f"{t['system']:>11,}{t['history']:>11,}{t['user_prompt']:>13,}{t['tools_schema']:>14,}"
+                f"{t['input_total']:>12,}{t['cached_total']:>10,}{t['output_total']:>8,}  {lat:>7}"
+            )
+            if t.get("user_text"):
+                lines.append(c("user_prompt", f"      User Prompt:  {_preview_line(t['user_text'], 84)}"))
+            if t.get("history_text"):
+                lines.append(c("history_user", f"      Conv History: {_preview_line(t['history_text'], 84)}"))
+            if t.get("response_text"):
+                lines.append(c("dim", f"      Assistant:    {_preview_line(t['response_text'], 84)}"))
+
+    if calls:
+        lines += [
+            "",
+            c("bold", "  4. Per-Call breakdown (every individual LLM request)"),
+            "  " + rule,
+            f"  {'#':<4}{'turn':<8}{'model / step':<24}{'system':>9}{'history':>9}{'user':>9}{'tools/sch':>11}{'input':>10}{'cached':>9}{'out':>7} {'lat':>7}",
+        ]
+        for cd in calls[:30]:
+            tag = f"{cd['session']}·T{cd['turn']}"
+            m_step = cd["step_label"] or cd["model"] or "-"
+            if cd["step_label"] and cd["model"] and cd["step_label"] != cd["model"]:
+                m_step = f"{cd['model'][:12]}:{cd['step_label'][:11]}"
+            lat = f"{cd['latency_ms']}ms" if cd.get("latency_ms") is not None else "-"
+            lines.append(
+                f"  #{cd['index']:<3}{tag:<8}{m_step[:23]:<24}"
+                f"{cd['system']:>9,}{cd['history']:>9,}{cd['user_prompt']:>9,}{cd['tools_schema']:>11,}"
+                f"{cd['input_total']:>10,}{cd['cached']:>9,}{cd['output']:>7,} {lat:>7}"
+            )
+        if len(calls) > 30:
+            lines.append(f"  ... ({len(calls) - 30} more call(s))")
 
     if len(s["steps"]) > 1 or (s["steps"] and s["steps"][0]["step"] != "(no sy"):
         lines += [
             "",
-            c("bold", "  Per-step token map (grouped by system prompt)"),
+            c("bold", "  5. Per-step token map (grouped by system prompt fingerprint)"),
             "  " + rule,
             f"  {'step':<8}{'label/model':<28}{'calls':>6}{'input':>14}{'fixed/call':>14}",
         ]
@@ -265,11 +422,48 @@ def render_pretty(records: list, gap_s: float = 5.0, *, color: Optional[bool] = 
             "",
             c("bold", "  Endpoints (by detected API and host class)"),
             "  " + rule,
-            f"  {'host':<28}{'class':<18}{'api':<16}{'calls':>6}{'input':>12}",
+            f"  {'host':<26}{'class':<24}{'api':<16}{'calls':>6}{'input':>12}",
         ]
         for e in eps[:12]:
-            who = (e["host"] or (f"#{e['id']}" if e["id"] else "-"))[:26]
-            lines.append(f"  {who:<28}{e['class']:<18}{e['api']:<16}{e['calls']:>6}{e['input']:>12,}")
+            who = (e["host"] or (f"#{e['id']}" if e["id"] else "-"))[:24]
+            lines.append(f"  {who:<26}{e['class'][:22]:<24}{e['api']:<16}{e['calls']:>6}{e['input']:>12,}")
+
+    has_prompts = any(any(cd["prompts"].values()) for cd in calls)
+    if has_prompts:
+        max_l = 10000 if full_prompts else 10
+        max_c = 100000 if full_prompts else 700
+        lines += [
+            "",
+            c("bold", "  6. Prompt & Response Contents (System / History / User Prompt / Tools / Output)"),
+            "  " + rule,
+        ]
+        # Show unique system prompts first so long instructions are not repeated on every turn
+        seen_sys: set = set()
+        for cd in calls:
+            sp_text = cd["prompts"].get("system")
+            if sp_text and cd["step"] not in seen_sys:
+                seen_sys.add(cd["step"])
+                lines.append(c("system", f"  [System Prompt · step {cd['step']} · {cd['model']} · {cd['system']:,} tokens]"))
+                lines.extend(_indent_block(sp_text, "    ", max_lines=max_l, max_chars=max_c))
+                lines.append("")
+        # Show each call's History, User Prompt, and Assistant Output
+        for cd in calls[:20]:
+            p = cd["prompts"]
+            if not (p.get("history") or p.get("user_prompt") or p.get("response")):
+                continue
+            lines.append(c("bold", f"  Call #{cd['index']} ({cd['session']}·T{cd['turn']} · {cd['model']} · step {cd['step']})"))
+            if p.get("history"):
+                lines.append(c("history_user", f"    [Conversation History · {cd['history']:,} tokens]"))
+                lines.extend(_indent_block(p["history"], "      ", max_lines=max_l, max_chars=max_c))
+            if p.get("user_prompt"):
+                lines.append(c("user_prompt", f"    [User Prompt · {cd['user_prompt']:,} tokens]"))
+                lines.extend(_indent_block(p["user_prompt"], "      ", max_lines=max_l, max_chars=max_c))
+            if p.get("tools_schema") and full_prompts:
+                lines.append(c("tool_def", f"    [Tools & Schema · {cd['tools_schema']:,} tokens]"))
+                lines.extend(_indent_block(p["tools_schema"], "      ", max_lines=max_l, max_chars=max_c))
+            if p.get("response"):
+                lines.append(c("dim", f"    [Assistant Output · {cd['output']:,} tokens]"))
+                lines.extend(_indent_block(p["response"], "      ", max_lines=max_l, max_chars=max_c))
 
     if s["findings"]:
         lines += ["", c("bold", "  Findings & recommendations"), "  " + rule]
@@ -323,39 +517,121 @@ def render_html(
             f"</tr>"
         )
 
-    # Per-call timeline rows
+    # Per-session & per-turn rows
+    sessions = s.get("sessions", [])
+    turns = s.get("turns", [])
+    calls = s.get("call_details", [])
+
+    session_rows = []
+    for sess in sessions:
+        session_rows.append(
+            f"<tr>"
+            f"<td><strong>{html.escape(sess['session'])}</strong></td>"
+            f'<td class="num">{sess["turns_count"]:,}</td>'
+            f'<td class="num">{sess["calls_count"]:,}</td>'
+            f'<td class="num">{sess["system"]:,}</td>'
+            f'<td class="num">{sess["history"]:,}</td>'
+            f'<td class="num">{sess["user_prompt"]:,}</td>'
+            f'<td class="num">{sess["tools_schema"]:,}</td>'
+            f'<td class="num"><strong>{sess["input_total"]:,}</strong></td>'
+            f'<td class="num">{sess["cached_total"]:,}</td>'
+            f'<td class="num">{sess["output_total"]:,}</td>'
+            f"</tr>"
+        )
+
+    turn_rows = []
+    max_turn_in = max((t["input_total"] or 1) for t in turns) if turns else 1
+    for t in turns:
+        tag = f"{t['session']} · Turn {t['turn']}"
+        t_bars = []
+        for k_name, kv, col in (
+            ("System Prompt", t["system"], COLORS_HEX["system"]),
+            ("Conversation History", t["history"], COLORS_HEX["history_user"]),
+            ("User Prompt", t["user_prompt"], COLORS_HEX["user_prompt"]),
+            ("Tools & Schema", t["tools_schema"], COLORS_HEX["tool_def"]),
+        ):
+            if kv > 0:
+                w = 100.0 * kv / max_turn_in
+                t_bars.append(f'<span style="width:{w:.2f}%;background:{col}" title="{k_name}: {kv:,} tok"></span>')
+        previews = []
+        if t.get("user_text"):
+            previews.append(f'<div><strong>User Prompt:</strong> <code>{html.escape(_preview_line(t["user_text"], 140))}</code></div>')
+        if t.get("history_text"):
+            previews.append(f'<div><strong>Conv History:</strong> <code>{html.escape(_preview_line(t["history_text"], 140))}</code></div>')
+        if t.get("response_text"):
+            previews.append(f'<div><strong>Assistant:</strong> <code>{html.escape(_preview_line(t["response_text"], 140))}</code></div>')
+        preview_html = f'<div class="turn-preview">{"".join(previews)}</div>' if previews else ""
+        turn_rows.append(
+            f"<tr>"
+            f"<td><strong>{html.escape(tag)}</strong></td>"
+            f'<td class="num">{t["calls_count"]:,}</td>'
+            f'<td class="num">{t["system"]:,}</td>'
+            f'<td class="num">{t["history"]:,}</td>'
+            f'<td class="num">{t["user_prompt"]:,}</td>'
+            f'<td class="num">{t["tools_schema"]:,}</td>'
+            f'<td class="num"><strong>{t["input_total"]:,}</strong></td>'
+            f'<td class="num">{t["cached_total"]:,}</td>'
+            f'<td class="num">{t["output_total"]:,}</td>'
+            f'<td><div class="call-bar">{"".join(t_bars)}</div>{preview_html}</td>'
+            f"</tr>"
+        )
+
+    # Per-call timeline & expandable prompt inspector rows
     call_rows = []
-    max_in = max(((r.get("usage") or {}).get("input_total") or r.get("est_input", 0) or 1) for r in records) if records else 1
-    for idx, r in enumerate(records[:100], 1):
-        u = r.get("usage") or {}
-        inp = u.get("input_total") if u.get("input_total") is not None else r.get("est_input", 0)
-        out_tok = u.get("output") or r.get("output_est") or 0
-        cached = u.get("cached") or 0
-        by_k: dict = {}
-        for seg in r.get("segments", []):
-            by_k[seg["kind"]] = by_k.get(seg["kind"], 0) + seg["tokens"]
-        if (r.get("residual") or 0) > 0:
-            by_k["residual"] = r["residual"]
+    max_in = max((cd["input_total"] or 1) for cd in calls) if calls else 1
+    for cd in calls[:150]:
         bars = []
-        for k in s["kinds_order"]:
-            kv = by_k.get(k, 0)
+        for k_name, kv, col in (
+            ("System Prompt", cd["system"], COLORS_HEX["system"]),
+            ("Conversation History", cd["history"], COLORS_HEX["history_user"]),
+            ("User Prompt", cd["user_prompt"], COLORS_HEX["user_prompt"]),
+            ("Tools & Schema", cd["tools_schema"], COLORS_HEX["tool_def"]),
+        ):
             if kv > 0:
                 w = 100.0 * kv / max_in
-                bars.append(
-                    f'<span style="width:{w:.2f}%;background:{COLORS_HEX.get(k, "#94a3b8")}" '
-                    f'title="{html.escape(LABELS.get(k, k))}: {kv:,} tok"></span>'
+                bars.append(f'<span style="width:{w:.2f}%;background:{col}" title="{k_name}: {kv:,} tok"></span>')
+        model_lbl = html.escape(cd["model"])
+        if cd.get("step_label") and cd["step_label"] != cd["model"]:
+            model_lbl += f' <span class="sub">({html.escape(cd["step_label"])})</span>'
+        lat = f"{cd['latency_ms']:,} ms" if cd.get("latency_ms") is not None else "-"
+        p = cd["prompts"]
+        prompt_blocks = []
+        for key, label, tok_cnt, col in (
+            ("system", "System Prompt", cd["system"], COLORS_HEX["system"]),
+            ("history", "Conversation History", cd["history"], COLORS_HEX["history_user"]),
+            ("user_prompt", "Current User Prompt", cd["user_prompt"], COLORS_HEX["user_prompt"]),
+            ("tools_schema", "Tools & Response Schema", cd["tools_schema"], COLORS_HEX["tool_def"]),
+            ("other", "Other Context", cd["other"], COLORS_HEX["other"]),
+            ("response", "Assistant Output", cd["output"], "#10b981"),
+        ):
+            if p.get(key):
+                prompt_blocks.append(
+                    f'<div class="p-sec">'
+                    f'<div class="p-head"><span class="dot" style="background:{col}"></span>'
+                    f"<strong>{label}</strong> <span class=\"sub\">({tok_cnt:,} tokens)</span></div>"
+                    f'<pre class="p-pre">{html.escape(p[key])}</pre>'
+                    f"</div>"
                 )
-        model = html.escape(str(r.get("model") or r.get("provider") or "-"))
-        lat = f"{r['latency_ms']:,} ms" if r.get("latency_ms") is not None else "-"
+        inspector = (
+            f'<details class="p-details"><summary>View prompts &amp; response</summary>'
+            f'<div class="p-box">{"".join(prompt_blocks)}</div></details>'
+            if prompt_blocks
+            else '<span class="sub">no text stored (re-capture to inspect full prompt text)</span>'
+        )
         call_rows.append(
             f"<tr>"
-            f'<td class="num">#{idx}</td>'
-            f"<td><code>{model}</code></td>"
-            f'<td class="num">{inp:,}</td>'
-            f'<td class="num">{cached:,}</td>'
-            f'<td class="num">{out_tok:,}</td>'
+            f'<td class="num">#{cd["index"]}</td>'
+            f'<td><code>{html.escape(cd["session"])}·T{cd["turn"]}</code></td>'
+            f"<td><code>{model_lbl}</code></td>"
+            f'<td class="num">{cd["system"]:,}</td>'
+            f'<td class="num">{cd["history"]:,}</td>'
+            f'<td class="num">{cd["user_prompt"]:,}</td>'
+            f'<td class="num">{cd["tools_schema"]:,}</td>'
+            f'<td class="num"><strong>{cd["input_total"]:,}</strong></td>'
+            f'<td class="num">{cd["cached"]:,}</td>'
+            f'<td class="num">{cd["output"]:,}</td>'
             f'<td class="num">{lat}</td>'
-            f'<td><div class="call-bar">{"".join(bars)}</div></td>'
+            f'<td><div class="call-bar">{"".join(bars)}</div>{inspector}</td>'
             f"</tr>"
         )
 
@@ -434,8 +710,15 @@ td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
 .dot {{ display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 8px; vertical-align: middle; }}
 .mini-track {{ width: 140px; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }}
 .mini-fill {{ height: 100%; border-radius: 4px; }}
-.call-bar {{ display: flex; height: 12px; width: 220px; background: var(--border); border-radius: 4px; overflow: hidden; }}
+.call-bar {{ display: flex; height: 12px; width: 200px; background: var(--border); border-radius: 4px; overflow: hidden; }}
 .call-bar span {{ display: block; height: 100%; }}
+.turn-preview {{ margin-top: 6px; font-size: 0.78rem; color: var(--muted); display: flex; flex-direction: column; gap: 2px; }}
+.p-details {{ margin-top: 6px; font-size: 0.8rem; }}
+.p-details summary {{ cursor: pointer; color: var(--accent); font-weight: 600; user-select: none; }}
+.p-box {{ margin-top: 8px; display: flex; flex-direction: column; gap: 10px; max-width: 640px; }}
+.p-sec {{ border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; background: var(--bg); }}
+.p-head {{ font-size: 0.78rem; margin-bottom: 6px; }}
+.p-pre {{ margin: 0; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow-y: auto; font-size: 0.78rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
 .finding {{ display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 10px; background: var(--panel); }}
 .finding-body {{ font-size: 0.9rem; }}
 .finding-body a {{ color: var(--accent); text-decoration: none; font-size: 0.82rem; font-weight: 500; }}
@@ -459,21 +742,63 @@ footer {{ color: var(--muted); font-size: 0.8rem; margin-top: 24px; text-align: 
   </header>
 
   <div class="cards">
-    <div class="card"><div class="k-label">LLM Calls</div><div class="k-val">{s["calls"]:,}</div><div class="k-sub">{len(fo)} request group(s)</div></div>
+    <div class="card"><div class="k-label">Sessions &amp; Turns</div><div class="k-val">{len(sessions):,} / {len(turns):,}</div><div class="k-sub">{s["calls"]:,} total LLM call(s)</div></div>
     <div class="card"><div class="k-label">Input Tokens</div><div class="k-val">{s["input_total"]:,}</div><div class="k-sub">median {s["median_input"]:,} / call</div></div>
     <div class="card"><div class="k-label">Cached Input</div><div class="k-val">{s["cached_total"]:,}</div><div class="k-sub">{cache_pct:.1f}% cache hit rate</div></div>
     <div class="card"><div class="k-label">Output Tokens</div><div class="k-val">{s["output_total"]:,}</div><div class="k-sub">generated</div></div>
     <div class="card"><div class="k-label">Fixed Overhead</div><div class="k-val">{s["first_call_input"]:,}</div><div class="k-sub">first call input</div></div>
-    <div class="card"><div class="k-label">Fan-out</div><div class="k-val">{med_fo}</div><div class="k-sub">median calls/req (max {max_fo})</div></div>
+    <div class="card"><div class="k-label">Fan-out</div><div class="k-val">{med_fo}</div><div class="k-sub">median calls/turn (max {max_fo})</div></div>
     {cost_card}
   </div>
 
   <div class="panel">
-    <h2>Input Token Breakdown</h2>
+    <h2>1. Input Token Breakdown (Total)</h2>
     <div class="stack-bar">{"".join(stack_divs)}</div>
     <table>
       <thead><tr><th>Component</th><th class="num">Tokens</th><th class="num">Share</th><th>Distribution</th></tr></thead>
       <tbody>{"".join(breakdown_rows)}</tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>2. Per-Session Summary</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Session</th><th class="num">Turns</th><th class="num">Calls</th>
+          <th class="num">System Prompt</th><th class="num">Conv History</th><th class="num">User Prompt</th><th class="num">Tools &amp; Schema</th>
+          <th class="num">Total Input</th><th class="num">Cached</th><th class="num">Output</th>
+        </tr>
+      </thead>
+      <tbody>{"".join(session_rows) or '<tr><td colspan="10" class="sub">No sessions recorded</td></tr>'}</tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>3. Per-Turn Breakdown (System Prompt vs. Conversation History vs. User Prompt)</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Session &middot; Turn</th><th class="num">Calls</th>
+          <th class="num">System Prompt</th><th class="num">Conv History</th><th class="num">User Prompt</th><th class="num">Tools &amp; Schema</th>
+          <th class="num">Total Input</th><th class="num">Cached</th><th class="num">Output</th><th>Composition &amp; Prompt Preview</th>
+        </tr>
+      </thead>
+      <tbody>{"".join(turn_rows) or '<tr><td colspan="10" class="sub">No turns recorded</td></tr>'}</tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>4. Per-Call Timeline &amp; Full Prompt Inspector ({min(len(calls), 150)} of {len(calls)} call(s))</h2>
+    <table>
+      <thead>
+        <tr>
+          <th class="num">#</th><th>Turn</th><th>Model / Step</th>
+          <th class="num">System</th><th class="num">History</th><th class="num">User</th><th class="num">Tools/Schema</th>
+          <th class="num">Input</th><th class="num">Cached</th><th class="num">Output</th><th class="num">Latency</th><th>Prompts &amp; Response</th>
+        </tr>
+      </thead>
+      <tbody>{"".join(call_rows) or '<tr><td colspan="12" class="sub">No calls recorded</td></tr>'}</tbody>
     </table>
   </div>
 
@@ -499,15 +824,7 @@ footer {{ color: var(--muted); font-size: 0.8rem; margin-top: 24px; text-align: 
     </div>
   </div>
 
-  <div class="panel">
-    <h2>Per-Call Timeline ({min(len(records), 100)} of {len(records)} call(s))</h2>
-    <table>
-      <thead><tr><th class="num">#</th><th>Model</th><th class="num">Input</th><th class="num">Cached</th><th class="num">Output</th><th class="num">Latency</th><th>Composition</th></tr></thead>
-      <tbody>{"".join(call_rows) or '<tr><td colspan="7" class="sub">No calls recorded</td></tr>'}</tbody>
-    </table>
-  </div>
-
-  <footer>Generated by <strong>tokprof</strong> &middot; Segment counts are local estimates; Unattributed is provider-reported input minus counted segments. Providers/prompts/keys are never stored.</footer>
+  <footer>Generated by <strong>tokprof</strong> &middot; Segment counts are local estimates; Unattributed is provider-reported input minus counted segments. Secrets are automatically redacted.</footer>
 </div>
 </body>
 </html>

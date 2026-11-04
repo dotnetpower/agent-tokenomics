@@ -40,6 +40,25 @@ sidebar:
 
 커뮤니티의 "caveman" 스타일 스킬은 *관사와 군더더기 생략, 단편적 문장 허용, 코드는 그대로 유지*와 같은 짧은 규칙으로 입력과 출력을 모두 압축합니다. [caveman](https://github.com/JuliusBrussee/caveman)과 [측정 평가](https://github.com/danielle34/cavewoman)를 참고하세요. 압축 수준이 높을수록 토큰은 줄지만 명확성이 떨어집니다. 복잡한 지시가 모호해질 수 있으므로, 고객 대상 문서나 온보딩 문서에는 가볍게만 적용합니다.
 
+<a id="4-bpe-aligned-formula-notation"></a>
+### 4. BPE 친화적 수식 표기법
+
+도구 분기 조건이나 다단계 워크플로를 적을 때 **BPE 친화적 ASCII 수식**을 쓰면 줄글보다 짧고 모호성도 줄어듭니다. 다만 **유니코드 수학 기호(`∀`, `∈`, `∪`, `≻`, `∘`)는 오히려 함정**입니다. `o200k_base`와 `cl100k_base`에서 이러한 다중 바이트 기호는 2~3토큰으로 쪼개질 뿐 아니라, 뒤에 오는 영단어의 선행 공백 병합까지 깨뜨려 바이트가 절반으로 줄어도 토큰 수는 거의 줄지 않습니다. 반면 공백을 둔 ASCII 연산자(` ->`, ` =>`, ` >`, ` <=`, ` >=`, ` &`, ` |`)는 선행 공백을 포함해 각각 **단일 1토큰**으로 병합됩니다.
+
+[`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py)로 측정한 결과입니다(`tiktoken` 0.14.0, 2026-11-04 확인).
+
+| 표현 방식 | 텍스트 | 바이트 | `o200k_base` | 줄글 대비 | `cl100k_base` |
+|-------|------|------:|-------------:|----------:|--------------:|
+| 줄글 (백틱 포함) | ``When you need to find a symbol or literal and read its surrounding lines, use `code_context` in one call instead of searching first and reading later.`` | 150 | 31 | 0.0% | 31 |
+| 유니코드 수학 수식 (붙여쓰기) | `∀x∈Sym∪Lit: need(x+ctx) ⇒ code_context(x) ≻ (grep(x) ∘ read(x))` | 75 | 30 | -3.2% | 31 |
+| ASCII 수식 (붙여쓰기) | `δ(symbol\|literal+surrounding_lines)=>code_context(root,pattern,radius<=20)` | 75 | 20 | -35.5% | 20 |
+| **BPE 정렬 수식 (띄어쓰기)** | `symbol + context => code_context (1 call > grep + read)` | **55** | **14** | **-54.8%** | **14** |
+
+BPE 정렬 수식 작성 원칙은 다음과 같습니다.
+- 유니코드 수학 기호(`∀`, `∈`, `≻`, `∘`) 대신 **앞에 공백을 둔 ASCII 연산자**(` ->`, ` =>`, ` >=`, ` <=`, ` !=`, ` &`, ` |`)를 사용합니다.
+- 모든 식별자를 인라인 백틱(`` `name` ``)으로 감싸지 않습니다(식별자마다 양쪽 백틱에 2토큰씩 추가 소모됩니다).
+- 연산자 앞뒤에 공백을 두어 `" 단어"`가 하나의 BPE 토큰으로 묶이게 합니다.
+
 ## 확인 방법
 
 가정하지 말고 측정합니다. `o200k_base` 인코딩으로 [토큰 카운터](../07-language-and-tokenization/)를 실행하면, 예시 프롬프트 하나가 38토큰에서 11토큰으로 줄어듭니다.
@@ -73,4 +92,5 @@ Refactor function. Fix auth handling. Make efficient.                           
 
 - Token Efficiency and Context Engineering — 개발자 발표 자료(2026년 6월), 프롬프트 압축 및 출력 제어 부분(수치는 보고된 그대로이며 독립적으로 검증하지 않음)
 - [Optimize AI credit usage in VS Code](https://code.visualstudio.com/docs/agents/guides/optimize-usage)
+- [`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py) — 재현 가능한 BPE 수식 토큰 측정 및 프롬프트 변환 스크립트
 - [caveman](https://github.com/JuliusBrussee/caveman), [cavewoman](https://github.com/danielle34/cavewoman)

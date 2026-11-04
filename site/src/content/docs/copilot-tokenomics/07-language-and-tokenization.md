@@ -43,11 +43,27 @@ Two lessons:
   multiplier there matters most.
 - **Do not translate a prompt just to save tokens** unless you measured it: translation can cost more than it saves
   and may change meaning.
+- **For non-English workflows (e.g. Korean), keep native domain nouns and replace grammatical endings with BPE formula operators.**
+  In agglutinative languages such as Korean, polite verb endings, auxiliary verbs, and particles (`~을 완료할수 있도록`, `~에 대한 계획을 세워서`, `~한 다음`) account for a large share of tokens. Keeping the core Korean domain nouns and action stems intact while replacing connectors with spaced ASCII formula operators (` ->`, ` =>`, ` >=`, ` <=`, ` &`) and a `[ko]` reply-language tag cuts input tokens by **22–39% on `o200k_base`** (**31–49% on `cl100k_base`**) without losing domain precision or Korean replies.
 - Keep **code, identifiers, comments, and commit messages in English** regardless of the language you chat in.
 - Non-Latin text can sometimes be transliterated to Latin script for fewer tokens, but this hurts readability;
   measure before adopting it.
 - Ask the model to *reply* in the language you read best only when needed; replies are output tokens, which are
   priced higher.
+
+### Hybrid Korean + BPE formula benchmark
+
+Measured with [`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py) (`tiktoken` 0.14.0, verified 2026-11-04):
+
+| Workflow pattern | Korean prose (`o200k` / `cl100k`) | Hybrid Korean + BPE formula (`[ko] :: ...`) | `o200k_base` delta | `cl100k_base` delta |
+|------------------|----------------------------------:|---------------------------------------------|-------------------:|--------------------:|
+| Issue completion pipeline | 44 / 72 | `[ko] :: #1945 남은작업 계획수립 -> 모두조치 -> push & merge -> 이슈닫기` | **27 (-38.6%)** | **37 (-48.6%)** |
+| Bulk gap discovery & loop | 46 / 74 | `[ko] :: 보강점 >=100 발굴 -> 모두조치 -> loop 10x -> 수치표 보고 -> commit & push & merge` | **31 (-32.6%)** | **38 (-48.6%)** |
+| Bounded hardening loop | 54 / 91 | `[ko] :: 모두적용 -> loop(비평 >=10 하드닝, until 심각도 <= Low) -> 개선점 >=100 발굴 -> 모두보강 -> push & merge -> 보고` | **42 (-22.2%)** | **57 (-37.4%)** |
+| Optimization audit & list | 31 / 51 | `[ko] :: 절감액 기반 최적화 >=30 발굴 -> 계획수립 -> 목록 보고` | **22 (-29.0%)** | **35 (-31.4%)** |
+| **Total (4 prompts)** | **175 / 288** | — | **122 (-30.3%)** | **167 (-42.0%)** |
+
+Why keep core Korean nouns instead of replacing everything with English shorthand? In an evaluation across 8 real Korean Copilot requests (47 constraint checkpoints), naive English keyword replacement (for example turning `"보강점 100개 이상 찾아서"` into `gaps >=100`) caused the model to misread imperative commands ("find at least 100 gaps") as conditional guards ("if gaps are at least 100"), dropping constraint accuracy to **81.5% (44/54)**. Keeping the Korean action noun (`보강점 >=100 발굴`) with BPE operators achieved **100.0% (47/47)** constraint accuracy and **100% Korean replies**.
 
 ## Trade-offs
 
@@ -66,6 +82,7 @@ Ordered by venue tier, then citations. Findings are hypotheses to verify on your
 ## Sources
 
 - [`examples/count_tokens.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/count_tokens.py) — reproducible measurement
+- [`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py) — reproducible Korean + BPE formula measurement and converter
 - [tiktoken](https://github.com/openai/tiktoken)
 - Token Efficiency and Context Engineering — developer talk deck (June 2026): reports the same direction (non-English
   text costs more tokens) with a different tokenizer; our table is our own measurement.

@@ -49,6 +49,7 @@ class Segment:
     turn: Optional[int] = None
     method: str = "heuristic"
     opaque: bool = False
+    text: Optional[str] = None
 
 
 @dataclass
@@ -90,6 +91,7 @@ class CallRecord:
     tools_defined: list = field(default_factory=list)
     tool_calls: list = field(default_factory=list)
     output_est: Optional[int] = None
+    response_text: Optional[str] = None
     error: Optional[str] = None
 
     def to_dict(self) -> dict:

@@ -26,6 +26,8 @@ class ParsedRequest:
     stream: bool
     segments: list = field(default_factory=list)
     tools: list = field(default_factory=list)
+    conv_hint: Optional[str] = None
+    step_hint: Optional[str] = None
 
 
 def detect_provider(path: str, body: Any) -> Optional[str]:
@@ -90,19 +92,169 @@ def _norm_role(role: Any) -> str:
     return r
 
 
-def _add_message(segments: list, role: str, content: Any, *, is_current: bool, turn: int) -> None:
+_WRAPPER_KEYS = ("untrusted_input", "payload", "input", "request", "data", "review_input")
+_CONV_ID_KEYS = ("conversation_id", "session_id", "thread_id", "chat_id", "dialog_id")
+_USER_PROMPT_KEYS = frozenset({
+    "utterance", "user_utterance", "question", "user_question", "query", "user_query",
+    "user_prompt", "prompt", "message", "user_message", "current_turn", "current_input",
+    "task", "problem_statement", "goal",
+})
+_HISTORY_KEYS = frozenset({
+    "context", "history", "conversation_history", "chat_history", "prior_turns",
+    "previous_turns", "recent_turns", "turns", "dialogue", "messages", "memory",
+    "conversation", "transcript", "previous_response", "recovery_context", "schema_repair",
+})
+_TOOL_DEF_KEYS = frozenset({
+    "capabilities", "descriptors", "tools", "functions", "available_tools",
+    "tool_definitions", "catalog", "metric_concepts",
+})
+_TOOL_RESULT_KEYS = frozenset({
+    "tool_results", "observations", "evidence", "evidence_refs", "search_results",
+    "retrieved_context", "documents", "chunks", "candidates", "frame",
+    "semantic_judgment", "execution_result", "staged_projection", "draft", "proposal",
+})
+_SCHEMA_KEYS = frozenset({"output_schema", "response_schema", "json_schema", "schema"})
+_SYSTEM_KEYS = frozenset({"instructions", "system_prompt"})
+_ASST_PREFIX = re.compile(r"^\s*(?:assistant|ai|bot|model|agent)\s*:\s*", re.I)
+_USER_PREFIX = re.compile(r"^\s*(?:user|human|customer|operator)\s*:\s*", re.I)
+
+
+def _emit_history_value(segments: list, key: str, val: Any, turn: int) -> None:
+    if val is None or val == "" or val == [] or val == {}:
+        return
+    if isinstance(val, list):
+        u_lines: list = []
+        a_lines: list = []
+        for idx, item in enumerate(val):
+            if isinstance(item, dict):
+                if "role" in item:
+                    r = _norm_role(item.get("role"))
+                    txt, _ = _content_text(item.get("content") if "content" in item else item.get("message") or item.get("text"))
+                    if txt:
+                        (a_lines if r == "assistant" else u_lines).append(txt)
+                    continue
+                if "user" in item or "assistant" in item:
+                    if item.get("user"):
+                        u_lines.append(str(item["user"]))
+                    if item.get("assistant"):
+                        a_lines.append(str(item["assistant"]))
+                    continue
+                u_lines.append(_dumps(item))
+            elif isinstance(item, str):
+                s = item.strip()
+                if not s:
+                    continue
+                if _ASST_PREFIX.match(s):
+                    a_lines.append(_ASST_PREFIX.sub("", s, count=1))
+                elif _USER_PREFIX.match(s):
+                    u_lines.append(_USER_PREFIX.sub("", s, count=1))
+                else:
+                    u_lines.append(s)
+            else:
+                u_lines.append(_dumps(item))
+        if u_lines:
+            _add(segments, "history_user", "\n".join(u_lines), role="user", name=key, turn=turn)
+        if a_lines:
+            _add(segments, "history_assistant", "\n".join(a_lines), role="assistant", name=key, turn=turn)
+        return
+    txt = val if isinstance(val, str) else _dumps(val)
+    if txt.strip():
+        _add(segments, "history_user", txt, role="user", name=key, turn=turn)
+
+
+def _try_decompose_structured_user(
+    segments: list,
+    text: str,
+    *,
+    is_current: bool,
+    turn: int,
+) -> tuple[bool, Optional[str]]:
+    """If a user message is a JSON object encoding utterance + context/history + tools, split it into segments."""
+    s = (text or "").strip()
+    if len(s) < 4 or s[0] != "{" or s[-1] != "}":
+        return False, None
+    try:
+        obj = json.loads(s)
+    except ValueError:
+        return False, None
+    if not isinstance(obj, dict) or not obj:
+        return False, None
+
+    # Unwrap common single-envelope wrappers such as {"untrusted_input": {...}, "output_schema": {...}}
+    flat: list[tuple[str, Any]] = []
+    for k, v in obj.items():
+        if k in _WRAPPER_KEYS and isinstance(v, dict):
+            for ik, iv in v.items():
+                flat.append((ik, iv))
+        else:
+            flat.append((k, v))
+
+    keys_lower = {k.lower() for k, _ in flat}
+    recognized = keys_lower & (_USER_PROMPT_KEYS | _HISTORY_KEYS | _TOOL_DEF_KEYS | _TOOL_RESULT_KEYS | _SCHEMA_KEYS)
+    if not recognized:
+        return False, None
+
+    conv_hint: Optional[str] = None
+    for k, v in flat:
+        if k.lower() in _CONV_ID_KEYS and isinstance(v, (str, int)) and str(v).strip():
+            conv_hint = str(v).strip()
+            break
+
+    added_user = False
+    rest: dict = {}
+    for k, v in flat:
+        kl = k.lower()
+        if v is None or v == "" or v == [] or v == {}:
+            continue
+        if kl in _HISTORY_KEYS:
+            _emit_history_value(segments, k, v, turn)
+        elif kl in _USER_PROMPT_KEYS:
+            val_text = v if isinstance(v, str) else _dumps(v)
+            kind = "user_prompt" if is_current else "history_user"
+            _add(segments, kind, val_text, role="user", name=k, turn=turn)
+            added_user = True
+        elif kl in _TOOL_DEF_KEYS:
+            _add(segments, "tool_def", v if isinstance(v, str) else _dumps(v), role="user", name=k, turn=turn)
+        elif kl in _TOOL_RESULT_KEYS:
+            if isinstance(v, dict) and not added_user:
+                for sub_k in ("utterance", "question", "query", "user_query", "goal"):
+                    if isinstance(v.get(sub_k), str) and v[sub_k].strip():
+                        _add(segments, "user_prompt" if is_current else "history_user", v[sub_k], role="user", name=f"{k}.{sub_k}", turn=turn)
+                        added_user = True
+                        break
+            _add(segments, "tool_result", v if isinstance(v, str) else _dumps(v), role="tool", name=k, turn=turn)
+        elif kl in _SCHEMA_KEYS:
+            _add(segments, "response_schema", v if isinstance(v, str) else _dumps(v), name=k, turn=turn)
+        elif kl in _SYSTEM_KEYS:
+            _add(segments, "system", v if isinstance(v, str) else _dumps(v), role="system", name=k, turn=turn)
+        else:
+            rest[k] = v
+
+    if rest:
+        if not added_user:
+            _add(segments, "user_prompt" if is_current else "history_user", _dumps(rest), role="user", name="payload", turn=turn)
+        else:
+            _add(segments, "other", _dumps(rest), role="user", name="request_metadata", turn=turn)
+    return True, conv_hint
+
+
+def _add_message(segments: list, role: str, content: Any, *, is_current: bool, turn: int) -> Optional[str]:
     r = _norm_role(role)
     text, opaque = _content_text(content)
+    conv_hint = None
     if r in ("system", "developer"):
         _add(segments, "system", text, role=r, turn=turn)
     elif r == "user":
-        _add(segments, "user_prompt" if is_current else "history_user", text, role=r, turn=turn)
+        decomposed, conv_hint = _try_decompose_structured_user(segments, text, is_current=is_current, turn=turn)
+        if not decomposed:
+            _add(segments, "user_prompt" if is_current else "history_user", text, role=r, turn=turn)
     elif r == "assistant":
         _add(segments, "history_assistant", text, role=r, turn=turn)
     else:
         _add(segments, "other", text, role=r, turn=turn)
     if opaque:
         segments.append(RawSegment(kind="attachment", text="", role=r, turn=turn, opaque=True))
+    return conv_hint
 
 
 def _parse_openai_chat(body: dict) -> ParsedRequest:
@@ -119,6 +271,11 @@ def _parse_openai_chat(body: dict) -> ParsedRequest:
                 msgs.append({"role": h.get("role"), "content": h.get("message") if "message" in h else h.get("content") or h.get("text")})
     if isinstance(body.get("message"), str) and body["message"]:
         msgs.append({"role": "user", "content": body["message"]})
+    conv_hint: Optional[str] = None
+    for k in _CONV_ID_KEYS:
+        if isinstance(body.get(k), (str, int)) and str(body[k]).strip():
+            conv_hint = str(body[k]).strip()
+            break
     last_user = max((i for i, m in enumerate(msgs) if _norm_role(m.get("role")) == "user"), default=-1)
     for i, m in enumerate(msgs):
         role = _norm_role(m.get("role"))
@@ -139,9 +296,11 @@ def _parse_openai_chat(body: dict) -> ParsedRequest:
                     t_text, opaque = _content_text(tr.get("content"))
                     _add(segs, "tool_result", t_text, role="tool", name=tr.get("toolUseId"), turn=i, opaque=opaque)
                 elif isinstance(b.get("text"), str):
-                    _add_message(segs, role, b["text"], is_current=(i == last_user), turn=i)
+                    ch = _add_message(segs, role, b["text"], is_current=(i == last_user), turn=i)
+                    conv_hint = conv_hint or ch
         else:
-            _add_message(segs, role, content, is_current=(i == last_user), turn=i)
+            ch = _add_message(segs, role, content, is_current=(i == last_user), turn=i)
+            conv_hint = conv_hint or ch
         if role == "assistant":
             for tc in m.get("tool_calls") or []:
                 fn = (tc or {}).get("function") or tc or {}
@@ -167,10 +326,14 @@ def _parse_openai_chat(body: dict) -> ParsedRequest:
         name = (fn or {}).get("name")
         tools.append(name)
         _add(segs, "tool_def", _dumps(fn), name=name)
+    step_hint: Optional[str] = None
     rf = body.get("response_format")
     if isinstance(rf, dict) and rf.get("type") in ("json_schema", "json_object") and ("json_schema" in rf or "schema" in rf):
-        _add(segs, "response_schema", _dumps(rf))
-    return ParsedRequest(OPENAI_CHAT, body.get("model"), bool(body.get("stream")), segs, tools)
+        js = rf.get("json_schema") if isinstance(rf.get("json_schema"), dict) else {}
+        schema_name = js.get("name") if isinstance(js.get("name"), str) else None
+        step_hint = schema_name
+        _add(segs, "response_schema", _dumps(rf), name=schema_name)
+    return ParsedRequest(OPENAI_CHAT, body.get("model"), bool(body.get("stream")), segs, tools, conv_hint=conv_hint, step_hint=step_hint)
 
 
 def _parse_openai_responses(body: dict) -> ParsedRequest:

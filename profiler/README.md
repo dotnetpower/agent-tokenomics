@@ -45,8 +45,10 @@ Use `--map ENV_VAR=UPSTREAM_URL` for other base-URL variables.
 
 ## What is recorded
 
-Token counts, salted hashes, text lengths, section and tool names, usage reported by the provider, timings.
-**Not recorded:** prompt or response text, headers, API keys. Files are created with mode `0600`.
+Token counts, salted hashes, text lengths, section and tool names, usage reported by the provider, timings, and
+secret-redacted prompt/response segment texts (so you can inspect the exact system prompt, conversation history,
+current user prompt, tools/schema, and model output per session and per turn; pass `--no-content` to store only
+counts and hashes). **Never recorded:** HTTP headers or API keys. Files are created with mode `0600`.
 
 ## How the breakdown is computed
 

@@ -56,8 +56,40 @@ def test_record_residual_and_quality():
     assert rec.est_input == est and rec.residual == 8 and rec.quality == "good"
     d = rec.to_dict()
     assert json.dumps(d)  # serializable
-    assert "s" * 50 not in json.dumps(d)  # no prompt text is stored
+    assert "s" * 50 in json.dumps(d) and rec.response_text == "hello"  # prompt and response text stored by default
+    no_txt = build_record(parsed=parsed, response=resp, counter=C, salt=SALT, run="r1", include_text=False).to_dict()
+    assert "s" * 50 not in json.dumps(no_txt) and no_txt["response_text"] is None
     assert rec.tool_calls == ["f"] and rec.conv and rec.sysfp
+
+
+def test_structured_json_user_message_decomposition():
+    payload = {
+        "untrusted_input": {
+            "utterance": "현재 프로덕션 DB 백업 상태 확인해줘",
+            "context": ["user: 안녕하세요", "assistant: 반갑습니다! 무엇을 도와드릴까요?"],
+            "capabilities": [{"kind": "function_type", "name": "query.resource_current_state"}],
+            "locale": "ko",
+        }
+    }
+    body = {
+        "model": "narrator-gpt-5-4-mini",
+        "messages": [
+            {"role": "system", "content": "You are an operational assistant."},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ],
+        "response_format": {"type": "json_schema", "json_schema": {"name": "semantic-judgment", "schema": {"type": "object"}}},
+    }
+    parsed = parse_request(OPENAI_CHAT, body)
+    kinds = [s.kind for s in parsed.segments]
+    assert "system" in kinds
+    assert "history_user" in kinds and "history_assistant" in kinds
+    assert "user_prompt" in kinds and "tool_def" in kinds and "response_schema" in kinds
+    rec = build_record(parsed=parsed, response=ParsedResponse(text='{"intent":"db"}'), counter=C, salt=SALT)
+    assert rec.sys_label == "semantic-judgment"
+    by_kind = {s["kind"]: s for s in rec.segments}
+    assert by_kind["user_prompt"]["text"] == "현재 프로덕션 DB 백업 상태 확인해줘"
+    assert "안녕하세요" in by_kind["history_user"]["text"]
+    assert "반갑습니다" in by_kind["history_assistant"]["text"]
 
 
 def test_record_without_reported_usage_has_no_residual():

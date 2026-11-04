@@ -52,6 +52,24 @@ filler, fragments OK, code unchanged*. See [caveman](https://github.com/JuliusBr
 heavier compression can make complex instructions ambiguous, so keep it light for customer-facing or
 onboarding text.
 
+### 4. BPE-aligned formula notation
+
+When expressing routing rules, preconditions, or multi-step workflows, a **BPE-aligned ASCII formula** is shorter and less ambiguous than prose — but **Unicode math symbols (`∀`, `∈`, `∪`, `≻`, `∘`) are a trap**. In `o200k_base` and `cl100k_base`, multi-byte math symbols split into 2–3 tokens and prevent adjacent English words from merging with a leading space. Spaced ASCII operators (` ->`, ` =>`, ` >`, ` <=`, ` >=`, ` &`, ` |`) each encode as **1 token** including their leading space.
+
+Reproduced with [`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py) (`tiktoken` 0.14.0, verified 2026-11-04):
+
+| Style | Text | Bytes | `o200k_base` | vs. Prose | `cl100k_base` |
+|-------|------|------:|-------------:|----------:|--------------:|
+| Prose (with backticks) | ``When you need to find a symbol or literal and read its surrounding lines, use `code_context` in one call instead of searching first and reading later.`` | 150 | 31 | 0.0% | 31 |
+| Unicode math (unspaced) | `∀x∈Sym∪Lit: need(x+ctx) ⇒ code_context(x) ≻ (grep(x) ∘ read(x))` | 75 | 30 | -3.2% | 31 |
+| ASCII formula (unspaced) | `δ(symbol\|literal+surrounding_lines)=>code_context(root,pattern,radius<=20)` | 75 | 20 | -35.5% | 20 |
+| **BPE-aligned formula (spaced)** | `symbol + context => code_context (1 call > grep + read)` | **55** | **14** | **-54.8%** | **14** |
+
+Rules for BPE-aligned formulas:
+- Use **spaced ASCII operators** (` ->`, ` =>`, ` >=`, ` <=`, ` !=`, ` &`, ` |`), not Unicode math (`∀`, `∈`, `≻`, `∘`).
+- Avoid wrapping every identifier in inline backticks (`` `name` `` adds 2 extra tokens per identifier).
+- Keep spaces around `+`, `|`, and `=>` so BPE tokenizers merge `" word"` into a single token instead of splitting after punctuation.
+
 ## How to verify
 
 Measure, do not assume. With the [token counter](../07-language-and-tokenization/) on the `o200k_base`
@@ -90,4 +108,5 @@ Ordered by venue tier, then citations. Findings are hypotheses to verify on your
 - Token Efficiency and Context Engineering — developer talk deck (June 2026), prompt-compression and
   output-control sections (figures as reported, not independently verified)
 - [Optimize AI credit usage in VS Code](https://code.visualstudio.com/docs/agents/guides/optimize-usage)
+- [`examples/formula_prompt.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/formula_prompt.py) — reproducible BPE formula measurement and prompt converter
 - [caveman](https://github.com/JuliusBrussee/caveman), [cavewoman](https://github.com/danielle34/cavewoman)

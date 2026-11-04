@@ -63,6 +63,7 @@ Read the license and data-handling notes, and review before using them with priv
 
 | Project | What it does |
 |---------|--------------|
+| [dotnetpower/code-context](https://github.com/dotnetpower/code-context) | VS Code native Language Model Tools + shared local Rust trigram index (`cctx`) with inline-budgeted reads and BPE-formula agent instructions. |
 | [Graphify-Labs/graphify](https://github.com/Graphify-Labs/graphify) | Turns a folder (code, docs, PDFs, images) into a queryable knowledge graph. |
 | [jgravelle/jcodemunch-mcp](https://github.com/jgravelle/jcodemunch-mcp) | Symbol-level retrieval: fetch the function you need, not the whole file. |
 | [redhat-et/ripwire](https://github.com/redhat-et/ripwire) | CLI + MCP server to find relevant code without reading the repo. |

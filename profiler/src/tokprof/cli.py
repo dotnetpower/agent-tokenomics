@@ -66,6 +66,7 @@ def _add_detect_args(sp) -> None:
     g.add_argument("--insecure-upstream", action="store_true", help="do NOT verify upstream TLS certificates (last resort for private endpoints; prints a warning)")
     g.add_argument("--no-auto-env", action="store_true", help="do not redirect LLM base-URL variables other than OPENAI/ANTHROPIC/AZURE (for example VLLM_BASE_URL, OLLAMA_HOST)")
     g.add_argument("--record-hosts", action="store_true", help="store host names in the JSONL file (by default only a salted hash and a class such as private-dns)")
+    g.add_argument("--no-content", action="store_true", help="do not store prompt or response text in the JSONL file (store only token counts and hashes)")
     g.add_argument("--tokenizer", metavar="SPEC", help="tokenizer for local segment counting: o200k_base, cl100k_base, a path to tokenizer.json, or a HuggingFace repo ID")
 
 
@@ -85,6 +86,8 @@ def _apply_detect_args(args) -> None:
         os.environ["TOKPROF_NO_AUTO_ENV"] = "1"
     if getattr(args, "record_hosts", False):
         os.environ["TOKPROF_RECORD_HOSTS"] = "1"
+    if getattr(args, "no_content", False):
+        os.environ["TOKPROF_NO_CONTENT"] = "1"
     if getattr(args, "tokenizer", None):
         os.environ["TOKPROF_TOKENIZER"] = args.tokenizer
 
@@ -181,11 +184,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     rep = sub.add_parser("report", help="summarize a recorded JSONL file (defaults to the latest run in .tokprof/)")
     rep.add_argument("file", nargs="?", help="JSONL file to summarize (default: most recent .tokprof/run-*.jsonl)")
-    rep.add_argument("--format", choices=["text", "pretty", "md", "json", "html"], default="text")
+    rep.add_argument("--format", choices=["text", "pretty", "md", "json", "html"], default="pretty")
     rep.add_argument("--out", help="write the formatted report to this file instead of stdout")
     rep.add_argument("--html", nargs="?", const="", metavar="FILE", help="also write a self-contained HTML dashboard (default: <file>.html)")
     rep.add_argument("--open", action="store_true", help="open the HTML dashboard in a browser")
     rep.add_argument("--watch", action="store_true", help="refresh the report in the terminal as new calls arrive")
+    rep.add_argument("--full-prompts", action="store_true", help="print full prompt and response texts without truncation in terminal output")
     rep.add_argument("--gap", type=float, default=5.0, help="seconds of quiet that separate user requests")
     rep.add_argument("--prices", help="JSON price file: {model: {input, cached, output}} per 1M tokens")
 
@@ -317,6 +321,7 @@ def _report(
     html_arg: Optional[str] = None,
     open_browser: bool = False,
     watch: bool = False,
+    full_prompts: bool = False,
 ) -> int:
     from .report import render_html, render_json, render_markdown, render_pretty, render_text
     from .store import ReadStats, read_jsonl
@@ -335,9 +340,11 @@ def _report(
     if fmt == "html":
         text = render_html(records, gap, prices=price_map)
     elif fmt == "pretty":
-        text = render_pretty(records, gap, prices=price_map)
+        text = render_pretty(records, gap, prices=price_map, full_prompts=full_prompts)
+    elif fmt == "text":
+        text = render_text(records, gap, full_prompts=full_prompts)
     else:
-        render = {"text": render_text, "md": render_markdown, "json": render_json}[fmt]
+        render = {"md": render_markdown, "json": render_json}[fmt]
         text = render(records, gap)
     if out_file:
         os.makedirs(os.path.dirname(os.path.abspath(out_file)), exist_ok=True)
@@ -457,7 +464,7 @@ def main(argv: Optional[list] = None) -> int:
     if args.cmd == "report":
         return _report(
             args.file, args.format, args.gap, args.prices,
-            out_file=args.out, html_arg=args.html, open_browser=args.open, watch=args.watch,
+            out_file=args.out, html_arg=args.html, open_browser=args.open, watch=args.watch, full_prompts=args.full_prompts,
         )
     if args.cmd == "compare":
         import json as _json

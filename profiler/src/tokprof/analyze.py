@@ -23,26 +23,79 @@ def _in(rec: dict) -> int:
 
 
 def group_requests(records: list, gap_s: float = 5.0) -> list:
-    """Group calls into user requests: a new group starts after a quiet gap (fan-out estimate)."""
+    """Group calls into user turns: a new turn starts after a quiet gap or when an entry step repeats with a new input."""
     groups: list = []
     last_end: Optional[float] = None
+    seen_step: dict = {}
     for r in sorted(records, key=lambda r: r.get("ts", 0)):
         start = r.get("ts", 0)
         end = start + (r.get("latency_ms") or 0) / 1000.0
+        step_key = (r.get("sysfp"), r.get("model"))
+        conv = r.get("conv")
+        new_turn = False
         if last_end is None or start - last_end > gap_s:
+            new_turn = True
+        elif r.get("sysfp") and step_key in seen_step and seen_step[step_key] != conv and (start - last_end) >= 1.0:
+            new_turn = True
+        if new_turn:
             groups.append([])
+            seen_step = {}
         groups[-1].append(r)
+        if r.get("sysfp"):
+            seen_step[step_key] = conv
         last_end = max(last_end or 0, end)
     return groups
 
 
-def kind_breakdown(records: list) -> dict:
+def _infer_history_deltas(turns: list) -> dict:
+    """For legacy records where a JSON user payload was not yet split, infer per-call history tokens from cross-turn deltas."""
+    has_explicit_history = any(
+        s.get("kind") in ("history_user", "history_assistant") and s.get("tokens", 0) > 0
+        for g in turns for r in g for s in r.get("segments", [])
+    )
+    if has_explicit_history or len(turns) < 2:
+        return {}
+    base_user: dict = {}
+    for r in turns[0]:
+        sk = (r.get("sysfp"), r.get("model"))
+        if r.get("sysfp") and sk not in base_user:
+            u_tok = sum(s.get("tokens", 0) for s in r.get("segments", []) if s.get("kind") in ("user_prompt", "raw_prompt"))
+            base_user[sk] = u_tok
+    if not base_user:
+        return {}
+    inferred: dict = {}
+    for g in turns[1:]:
+        deltas = []
+        call_deltas = []
+        for r in g:
+            sk = (r.get("sysfp"), r.get("model"))
+            u_tok = sum(s.get("tokens", 0) for s in r.get("segments", []) if s.get("kind") in ("user_prompt", "raw_prompt"))
+            if sk in base_user and u_tok > base_user[sk]:
+                d = u_tok - base_user[sk]
+                call_deltas.append((id(r), d, u_tok))
+                if d >= 10:
+                    deltas.append(d)
+        if deltas:
+            common = int(statistics.median(deltas))
+            for rec_id, d, u_tok in call_deltas:
+                if d >= 10:
+                    inferred[rec_id] = min(d, max(common, int(d * 0.85)), u_tok - 1)
+    return inferred
+
+
+def kind_breakdown(records: list, gap_s: float = 5.0) -> dict:
     """Sum input tokens by segment kind plus the unattributed residual."""
     totals: Counter = Counter()
     reported_total = 0
+    turns = group_requests(records, gap_s)
+    inferred = _infer_history_deltas(turns)
     for r in records:
         for s in r.get("segments", []):
             totals[s["kind"]] += s["tokens"]
+        inf = inferred.get(id(r), 0)
+        if inf > 0 and totals["user_prompt"] >= inf:
+            totals["user_prompt"] -= inf
+            totals["history_user"] += inf
         if r.get("residual") is not None:
             totals["residual"] += r["residual"]
         reported_total += _in(r)
@@ -90,8 +143,9 @@ def findings(records: list, min_cacheable: int = 1024, gap_s: float = 5.0) -> li
     called = _called_tools(records)
     unused: Counter = Counter()
     for r in records:
+        defined = set(r["tools_defined"]) if "tools_defined" in r else None
         for s in r.get("segments", []):
-            if s["kind"] == "tool_def" and s.get("name") and s["name"] not in called:
+            if s["kind"] == "tool_def" and s.get("name") and (defined is None or s["name"] in defined) and s["name"] not in called:
                 unused[s["name"]] += s["tokens"]
     if unused:
         paid = sum(unused.values())
@@ -248,10 +302,193 @@ def endpoint_map(records: list) -> list:
     return sorted(out, key=lambda g: -g["input"])
 
 
+def _call_detail(rec: dict, call_index: int, session_id: str, turn_index: int, inferred_hist: int = 0) -> dict:
+    segs = rec.get("segments", [])
+    by_k: Counter = Counter()
+    texts: dict = defaultdict(list)
+    for s in segs:
+        k = s.get("kind", "other")
+        by_k[k] += s.get("tokens", 0)
+        txt = s.get("text")
+        if txt:
+            label = f"[{s['name']}]\n{txt}" if s.get("name") else txt
+            if k == "system":
+                texts["system"].append(label)
+            elif k in ("history_user", "history_assistant"):
+                role_tag = "Assistant" if k == "history_assistant" else "User/Context"
+                texts["history"].append(f"({role_tag}) {label}")
+            elif k in ("user_prompt", "raw_prompt"):
+                texts["user_prompt"].append(label)
+            elif k in ("tool_def", "tool_call", "tool_result", "response_schema"):
+                texts["tools_schema"].append(f"({k}) {label}")
+            else:
+                texts["other"].append(label)
+
+    sys_tok = by_k["system"]
+    hist_u = by_k["history_user"]
+    hist_a = by_k["history_assistant"]
+    user_tok = by_k["user_prompt"] + by_k["raw_prompt"]
+    if inferred_hist > 0 and hist_u + hist_a == 0 and user_tok > inferred_hist:
+        hist_u = inferred_hist
+        user_tok -= inferred_hist
+    hist_tok = hist_u + hist_a
+    tools_tok = by_k["tool_def"] + by_k["tool_call"] + by_k["tool_result"] + by_k["response_schema"]
+    other_tok = by_k["other"] + by_k["attachment"]
+    u = rec.get("usage") or {}
+    in_total = _in(rec)
+    cached = u.get("cached") or 0
+    out_tok = u.get("output") if u.get("output") is not None else (rec.get("output_est") or 0)
+    resp_text = rec.get("response_text") or ""
+
+    return {
+        "index": call_index,
+        "id": rec.get("id") or f"c{call_index}",
+        "session": session_id,
+        "turn": turn_index,
+        "ts": rec.get("ts", 0.0),
+        "model": rec.get("model") or rec.get("provider") or "-",
+        "provider": rec.get("provider") or "-",
+        "step": (rec.get("sysfp") or "")[:6] or "-",
+        "step_label": rec.get("sys_label") or None,
+        "system": sys_tok,
+        "history": hist_tok,
+        "history_user": hist_u,
+        "history_assistant": hist_a,
+        "user_prompt": user_tok,
+        "tools_schema": tools_tok,
+        "tool_def": by_k["tool_def"],
+        "tool_call": by_k["tool_call"],
+        "tool_result": by_k["tool_result"],
+        "response_schema": by_k["response_schema"],
+        "other": other_tok,
+        "residual": rec.get("residual") or 0,
+        "input_total": in_total,
+        "cached": cached,
+        "output": out_tok,
+        "latency_ms": rec.get("latency_ms"),
+        "status": rec.get("status"),
+        "inferred_history": inferred_hist > 0,
+        "prompts": {
+            "system": "\n\n".join(texts["system"]),
+            "history": "\n\n".join(texts["history"]),
+            "user_prompt": "\n\n".join(texts["user_prompt"]),
+            "tools_schema": "\n\n".join(texts["tools_schema"]),
+            "other": "\n\n".join(texts["other"]),
+            "response": resp_text,
+        },
+    }
+
+
+def session_turn_breakdown(records: list, gap_s: float = 5.0) -> dict:
+    """Organize calls into Sessions -> Turns -> Calls with System / History / User Prompt / Tools breakdown and texts."""
+    if not records:
+        return {"sessions": [], "turns": [], "calls": []}
+    raw_turns = group_requests(records, gap_s)
+    inferred = _infer_history_deltas(raw_turns)
+
+    # Group turns into sessions: turns belong to the same session when they share a conversation hash,
+    # share pipeline steps with growing/continuing history, or run within the same continuous agent run.
+    session_groups: list = []
+    prev_sysfps: set = set()
+    prev_convs: set = set()
+    prev_had_history = False
+    for g in raw_turns:
+        cur_sysfps = {r.get("sysfp") for r in g if r.get("sysfp")}
+        cur_convs = {r.get("conv") for r in g if r.get("conv")}
+        cur_hist = sum(
+            sum(s.get("tokens", 0) for s in r.get("segments", []) if s.get("kind") in ("history_user", "history_assistant"))
+            + inferred.get(id(r), 0)
+            for r in g
+        )
+        if not session_groups:
+            session_groups.append([g])
+        else:
+            same_conv = bool(cur_convs & prev_convs)
+            shared_pipeline = bool(cur_sysfps & prev_sysfps)
+            # If history reset to 0 after having history on the same pipeline, a new conversation started.
+            history_reset = prev_had_history and cur_hist == 0 and not same_conv
+            if (same_conv or shared_pipeline) and not history_reset:
+                session_groups[-1].append(g)
+            else:
+                session_groups.append([g])
+                prev_sysfps = set()
+                prev_convs = set()
+                prev_had_history = False
+        prev_sysfps |= cur_sysfps
+        prev_convs |= cur_convs
+        if cur_hist > 0:
+            prev_had_history = True
+
+    sessions_out: list = []
+    turns_out: list = []
+    calls_out: list = []
+    call_idx = 0
+
+    for si, s_turns in enumerate(session_groups, 1):
+        sid = f"S{si}"
+        s_calls: list = []
+        s_turn_objs: list = []
+        for ti, g in enumerate(s_turns, 1):
+            t_calls: list = []
+            for r in g:
+                call_idx += 1
+                cd = _call_detail(r, call_idx, sid, ti, inferred.get(id(r), 0))
+                t_calls.append(cd)
+                s_calls.append(cd)
+                calls_out.append(cd)
+            user_preview = next((c["prompts"]["user_prompt"] for c in t_calls if c["prompts"]["user_prompt"]), "")
+            hist_preview = next((c["prompts"]["history"] for c in t_calls if c["prompts"]["history"]), "")
+            resp_preview = next((c["prompts"]["response"] for c in reversed(t_calls) if c["prompts"]["response"]), "")
+            t_obj = {
+                "session": sid,
+                "turn": ti,
+                "calls_count": len(t_calls),
+                "models": sorted({c["model"] for c in t_calls}),
+                "system": sum(c["system"] for c in t_calls),
+                "history": sum(c["history"] for c in t_calls),
+                "history_user": sum(c["history_user"] for c in t_calls),
+                "history_assistant": sum(c["history_assistant"] for c in t_calls),
+                "user_prompt": sum(c["user_prompt"] for c in t_calls),
+                "tools_schema": sum(c["tools_schema"] for c in t_calls),
+                "other": sum(c["other"] for c in t_calls),
+                "residual": sum(c["residual"] for c in t_calls),
+                "input_total": sum(c["input_total"] for c in t_calls),
+                "cached_total": sum(c["cached"] for c in t_calls),
+                "output_total": sum(c["output"] for c in t_calls),
+                "latency_ms": sum(c["latency_ms"] or 0 for c in t_calls),
+                "user_text": user_preview,
+                "history_text": hist_preview,
+                "response_text": resp_preview,
+                "calls": t_calls,
+            }
+            s_turn_objs.append(t_obj)
+            turns_out.append(t_obj)
+
+        sessions_out.append({
+            "session": sid,
+            "turns_count": len(s_turn_objs),
+            "calls_count": len(s_calls),
+            "models": sorted({c["model"] for c in s_calls}),
+            "system": sum(c["system"] for c in s_calls),
+            "history": sum(c["history"] for c in s_calls),
+            "user_prompt": sum(c["user_prompt"] for c in s_calls),
+            "tools_schema": sum(c["tools_schema"] for c in s_calls),
+            "other": sum(c["other"] for c in s_calls),
+            "residual": sum(c["residual"] for c in s_calls),
+            "input_total": sum(c["input_total"] for c in s_calls),
+            "cached_total": sum(c["cached"] for c in s_calls),
+            "output_total": sum(c["output"] for c in s_calls),
+            "turns": s_turn_objs,
+        })
+
+    return {"sessions": sessions_out, "turns": turns_out, "calls": calls_out}
+
+
 def summarize(records: list, gap_s: float = 5.0) -> dict:
-    bd = kind_breakdown(records)
+    bd = kind_breakdown(records, gap_s=gap_s)
     inputs = [_in(r) for r in records]
     first = records[0] if records else {}
+    stb = session_turn_breakdown(records, gap_s=gap_s)
     return {
         "calls": len(records),
         "input_total": bd["input_total"],
@@ -260,6 +497,9 @@ def summarize(records: list, gap_s: float = 5.0) -> dict:
         "by_kind": bd["totals"],
         "steps": step_map(records),
         "endpoints": endpoint_map(records),
+        "sessions": stb["sessions"],
+        "turns": stb["turns"],
+        "call_details": stb["calls"],
         "fan_out": [len(g) for g in group_requests(records, gap_s)],
         "first_call_input": _in(first) if first else 0,
         "median_input": int(statistics.median(inputs)) if inputs else 0,

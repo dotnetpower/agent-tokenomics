@@ -156,9 +156,9 @@ def test_pretty_and_html_reports_and_profile_cli(tmp_path, monkeypatch):
 
     recs = pipeline()
     pretty = render_pretty(recs, color=False, prices={"m": {"input": 2.0, "output": 8.0}})
-    assert "LLM Token Profile" in pretty and "Estimated cost:" in pretty and "Call timeline" in pretty
+    assert "LLM Token Profile" in pretty and "Estimated cost:" in pretty and "Per-Call breakdown" in pretty and "Per-Session breakdown" in pretty and "Per-Turn breakdown" in pretty
     html_out = render_html(recs, prices={"m": {"input": 2.0, "output": 8.0}})
-    assert "<!DOCTYPE html>" in html_out and "Input Token Breakdown" in html_out and "Per-Call Timeline" in html_out
+    assert "<!DOCTYPE html>" in html_out and "Input Token Breakdown" in html_out and "Per-Turn Breakdown" in html_out and "Per-Session Summary" in html_out
 
     monkeypatch.chdir(tmp_path)
     tok_dir = tmp_path / ".tokprof"

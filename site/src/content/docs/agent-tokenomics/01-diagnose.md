@@ -78,12 +78,14 @@ tokprof compare before.jsonl after.jsonl        # bootstrap interval, for stages
   counters). That covers private DNS endpoints, on-prem vLLM, Ollama, TGI, llama.cpp, LiteLLM-style gateways, Azure private endpoints, and
   Gemini. `tokprof explain <url> --body request.json` shows why a request was or was not recorded; `--llm-host`, `--llm-path` and
   `--exclude-host` override the decision. A private CA is trusted through `SSL_CERT_FILE` or `--upstream-ca`.
-- **What it shows.** Input tokens by system prompt (split by section), history, current prompt, tool definitions, tool
-  calls, and tool results; fixed overhead; per-step token map; calls per request; unused tools; repeated static blocks;
+- **What it shows.** Per-session, per-turn, and per-call breakdowns of input tokens by system prompt (split by section),
+  conversation history, current user prompt (including structured JSON user payloads with `utterance`, `context`/`history`,
+  and `capabilities`), tool definitions, tool calls, tool results, and response schemas, plus full prompt & response text
+  inspection; fixed overhead; per-step token map; calls per request; unused tools; repeated static blocks;
   failure loops (repeated identical tool calls or HTTP errors); prompt cache-busting (dynamic values changing the system
-  prompt hash); and rapid conversation history growth. Outputs terminal (`text`, `pretty`), Markdown, JSON, and a
+  prompt hash); and rapid conversation history growth. Outputs terminal (`pretty`, `text`, `--full-prompts`), Markdown, JSON, and a
   self-contained interactive HTML dashboard (`--html`).
-- **What it stores.** Counts, salted hashes, lengths, and section and tool names. Not prompt text, headers, or keys.
+- **What it stores.** Counts, salted hashes, lengths, section/tool names, and secret-redacted prompt/response texts (pass `--no-content` to omit text). Never headers or API keys.
 - **Accuracy.** Providers report only totals, so segment counts are local estimates and the rest is shown as
   *unattributed*. Install `tiktoken` for OpenAI-family models. Check the residual before trusting a breakdown.
 - **Already-running processes (Linux).** `tokprof ebpf --pid <PID>` attaches eBPF probes to the process's TLS library (OpenSSL and Go

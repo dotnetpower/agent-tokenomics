@@ -63,6 +63,7 @@ sidebar:
 
 | 프로젝트 | 기능 |
 |---------|--------------|
+| [dotnetpower/code-context](https://github.com/dotnetpower/code-context) | VS Code 전용 네이티브 Language Model Tools + 공유 로컬 Rust 트라이그램 인덱스(`cctx`)로, 인라인 예산 내 코드 읽기와 BPE 수식 기반 에이전트 지침(`cctx prompt`)을 제공합니다. |
 | [Graphify-Labs/graphify](https://github.com/Graphify-Labs/graphify) | 폴더(코드, 문서, PDF, 이미지)를 질의할 수 있는 지식 그래프로 변환합니다. |
 | [jgravelle/jcodemunch-mcp](https://github.com/jgravelle/jcodemunch-mcp) | 심볼 단위로 검색합니다. 파일 전체가 아니라 필요한 함수만 가져옵니다. |
 | [redhat-et/ripwire](https://github.com/redhat-et/ripwire) | 리포지토리를 읽지 않고도 관련 코드를 찾는 CLI + MCP 서버입니다. |

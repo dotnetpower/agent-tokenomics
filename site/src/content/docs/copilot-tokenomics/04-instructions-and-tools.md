@@ -25,6 +25,7 @@ tool (including each MCP server's tools). Unused or bloated items are a fixed ta
 - Facts stated once in instructions save the agent from rediscovering them in every session.
 - Merge duplicates across `AGENTS.md` and `copilot-instructions.md`; duplicated text is billed twice.
 - Write the rules tersely (declarative rules, no filler); the file is re-sent on every request.
+- For tool-routing and fallback instructions, consider a **BPE-aligned formula layout** (`need => tool`, `condition -> action`, `>` priority chains; see [Prompt and output style](../06-prompt-and-output-style/#4-bpe-aligned-formula-notation)). As a VS Code reference case, converting the auto-loaded `.instructions.md` in [dotnetpower/code-context](https://github.com/dotnetpower/code-context) from 106-line prose (9,127 bytes, 2,048 `o200k_base` tokens) to a 26-line BPE-aligned formula specification (2,688 bytes, 718 tokens) cut per-turn instruction tokens by **64.9%** while retaining **100% (31/31)** rule-recognition accuracy across 12 edge-case scenarios.
 
 **Do not auto-generate and forget.** An ETH Zurich study of repository context files (arXiv 2602.11988) found
 that context files do not generally improve task success while increasing inference cost by over 20% on

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import re
 import time
 import uuid
@@ -14,8 +15,22 @@ from .parse.request import ParsedRequest
 from .parse.response import ParsedResponse
 
 _BOUNDARY = re.compile(r"^(?:#{1,3}[ \t]+(?P<h>.+?)|<(?P<t>[A-Za-z_][\w:-]*)>[ \t]*)$", re.MULTILINE)
+_SECRET_RE = re.compile(
+    r"(?:Bearer\s+[A-Za-z0-9._\-]{16,}|sk-(?:proj-|ant-)?[A-Za-z0-9_\-]{20,}|gh[pousr]_[A-Za-z0-9]{20,})",
+    re.I,
+)
 
 MIN_SECTION_CHARS = 200
+MAX_SEGMENT_TEXT_CHARS = 32_768
+
+
+def redact_secrets(text: str) -> str:
+    if not text:
+        return ""
+    s = _SECRET_RE.sub("***REDACTED***", text)
+    if len(s) > MAX_SEGMENT_TEXT_CHARS:
+        return s[:MAX_SEGMENT_TEXT_CHARS] + f"\n... [truncated, {len(s):,} chars total]"
+    return s
 
 
 def hash_text(text: str, salt: bytes) -> str:
@@ -76,7 +91,10 @@ def build_segments(
     salt: bytes,
     components: Optional[dict] = None,
     split_system: bool = True,
+    include_text: Optional[bool] = None,
 ) -> list:
+    if include_text is None:
+        include_text = os.environ.get("TOKPROF_NO_CONTENT") != "1"
     out: list = []
     for r in raw:
         pieces = _split_components(r, components or {})
@@ -100,6 +118,7 @@ def build_segments(
                     turn=p.turn,
                     method=counter.method,
                     opaque=p.opaque,
+                    text=redact_secrets(p.text) if (include_text and p.text) else None,
                 )
             )
     return out
@@ -127,20 +146,33 @@ def build_record(
     run: Optional[str] = None,
     error: Optional[str] = None,
     ts: Optional[float] = None,
+    include_text: Optional[bool] = None,
 ) -> CallRecord:
-    segments = build_segments(parsed.segments, counter, salt, components)
+    if include_text is None:
+        include_text = os.environ.get("TOKPROF_NO_CONTENT") != "1"
+    segments = build_segments(parsed.segments, counter, salt, components, include_text=include_text)
     est = sum(s.tokens for s in segments)
     usage = response.usage if response and response.has_usage else Usage()
     reported = usage.input_total
     residual = (reported - est) if reported is not None else None
 
     system_text = "\n".join(s.text for s in parsed.segments if s.kind == "system")
-    first_non_system = next((s for s in parsed.segments if s.kind in ("user_prompt", "history_user")), None)
-    sys_label = next((s.name for s in segments if s.kind == "system" and s.name), None)
+    first_non_system = next((s for s in parsed.segments if s.kind in ("history_user", "user_prompt")), None)
+    sys_label = next((s.name for s in segments if s.kind == "system" and s.name), None) or parsed.step_hint
+    if parsed.conv_hint:
+        conv_id = hash_text(parsed.conv_hint, salt)
+    elif first_non_system:
+        first_line = first_non_system.text.splitlines()[0] if first_non_system.text else ""
+        conv_id = hash_text(first_line or first_non_system.text, salt)
+    else:
+        conv_id = None
 
     output_est = None
+    resp_text = None
     if response is not None and response.text:
         output_est = counter.count(response.text)
+        if include_text:
+            resp_text = redact_secrets(response.text)
 
     return CallRecord(
         id=uuid.uuid4().hex[:12],
@@ -153,7 +185,7 @@ def build_record(
         status=status,
         latency_ms=latency_ms,
         ttfb_ms=ttfb_ms,
-        conv=hash_text(first_non_system.text, salt) if first_non_system else None,
+        conv=conv_id,
         sysfp=hash_text(system_text, salt) if system_text else None,
         sys_label=sys_label,
         usage={k: v for k, v in vars(usage).items() if v is not None},
@@ -164,5 +196,6 @@ def build_record(
         tools_defined=[t for t in parsed.tools if t],
         tool_calls=list(response.tool_calls) if response else [],
         output_est=output_est,
+        response_text=resp_text,
         error=error or (response.error if response else None),
     )
