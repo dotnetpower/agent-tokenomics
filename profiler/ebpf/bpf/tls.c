@@ -356,8 +356,10 @@ static __always_inline int sys_exit(struct sys_exit_ctx *c)
 				return 0;
 			first = v.base;
 		}
-		if (bpf_probe_read_user(head, sizeof(head), (void *)first))
+		if (bpf_probe_read_user(head, sizeof(head), (void *)first)) {
+			bump(7); // the buffer could not be read after the syscall returned
 			return 0;
+		}
 		if (head[0] != 'P' || head[1] != 'O' || head[2] != 'S' || head[3] != 'T' || head[4] != ' ') {
 			bump(4); // a write on a watched process that does not start an HTTP POST (usual: logs, files, other protocols)
 			if (debug_unmatched) {
