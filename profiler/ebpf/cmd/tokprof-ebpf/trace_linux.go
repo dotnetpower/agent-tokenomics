@@ -309,7 +309,9 @@ func firstNonEmpty(a, b string) string {
 	return b
 }
 
-func logf(format string, a ...any) { fmt.Fprintf(os.Stderr, "tokprof-ebpf: "+format+"\n", a...) }
+func logf(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, "tokprof-ebpf %s: "+format+"\n", append([]any{time.Now().Format("15:04:05.000")}, a...)...)
+}
 
 func fatal(format string, a ...any) {
 	logf(format, a...)

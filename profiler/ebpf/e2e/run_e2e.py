@@ -154,6 +154,7 @@ func main() {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	fmt.Println("sending", time.Now().Format("15:04:05.000"))
 	req, _ := http.NewRequest("POST", url, bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer SECRET-TOKEN")
@@ -309,6 +310,7 @@ def main():
         h2srv = subprocess.Popen(["node", h2srv_js, str(h2port), key, crt], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(0.5)
         open(large_p, "w").write(json.dumps(REQ_LARGE))
+        print("flag set at", time.strftime("%H:%M:%S"), f"{time.time() % 1:.3f}"[1:])
         open(flag, "w").close()
         curl.stdin.write(body)
         curl.stdin.close()
@@ -365,7 +367,7 @@ def main():
             leaked = "SECRET-TOKEN" in blob
             if not (ok and not leaked) and not got:
                 try:
-                    detail += f" client rc={p.returncode} stdout={(p.stdout.read() or '')[:120]!r}"
+                    detail += f" client rc={p.returncode} stdout={(p.stdout.read() or '')[:200]!r}"
                 except Exception:
                     pass
             print(f"{'PASS' if ok and not leaked else 'FAIL'}  {name:18} exchanges={len(got)} {detail}{' LEAK' if leaked else ''}")
