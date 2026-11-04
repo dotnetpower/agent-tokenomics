@@ -50,17 +50,8 @@ const (
 	tlsMapPlainConns       = "plain_conns"
 	tlsMapSysActive        = "sys_active"
 	tlsMapWatched          = "watched"
-	tlsProgScEnterClose    = "sc_enter_close"
-	tlsProgScEnterRead     = "sc_enter_read"
-	tlsProgScEnterRecvfrom = "sc_enter_recvfrom"
-	tlsProgScEnterSendto   = "sc_enter_sendto"
-	tlsProgScEnterWrite    = "sc_enter_write"
-	tlsProgScEnterWritev   = "sc_enter_writev"
-	tlsProgScExitRead      = "sc_exit_read"
-	tlsProgScExitRecvfrom  = "sc_exit_recvfrom"
-	tlsProgScExitSendto    = "sc_exit_sendto"
-	tlsProgScExitWrite     = "sc_exit_write"
-	tlsProgScExitWritev    = "sc_exit_writev"
+	tlsProgRawSysEnter     = "raw_sys_enter"
+	tlsProgRawSysExit      = "raw_sys_exit"
 	tlsProgSslLeave        = "ssl_leave"
 	tlsProgSslReadEnter    = "ssl_read_enter"
 	tlsProgSslReadExEnter  = "ssl_read_ex_enter"
@@ -115,17 +106,8 @@ type tlsSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tlsProgramSpecs struct {
-	ScEnterClose    *ebpf.ProgramSpec `ebpf:"sc_enter_close"`
-	ScEnterRead     *ebpf.ProgramSpec `ebpf:"sc_enter_read"`
-	ScEnterRecvfrom *ebpf.ProgramSpec `ebpf:"sc_enter_recvfrom"`
-	ScEnterSendto   *ebpf.ProgramSpec `ebpf:"sc_enter_sendto"`
-	ScEnterWrite    *ebpf.ProgramSpec `ebpf:"sc_enter_write"`
-	ScEnterWritev   *ebpf.ProgramSpec `ebpf:"sc_enter_writev"`
-	ScExitRead      *ebpf.ProgramSpec `ebpf:"sc_exit_read"`
-	ScExitRecvfrom  *ebpf.ProgramSpec `ebpf:"sc_exit_recvfrom"`
-	ScExitSendto    *ebpf.ProgramSpec `ebpf:"sc_exit_sendto"`
-	ScExitWrite     *ebpf.ProgramSpec `ebpf:"sc_exit_write"`
-	ScExitWritev    *ebpf.ProgramSpec `ebpf:"sc_exit_writev"`
+	RawSysEnter     *ebpf.ProgramSpec `ebpf:"raw_sys_enter"`
+	RawSysExit      *ebpf.ProgramSpec `ebpf:"raw_sys_exit"`
 	SslLeave        *ebpf.ProgramSpec `ebpf:"ssl_leave"`
 	SslReadEnter    *ebpf.ProgramSpec `ebpf:"ssl_read_enter"`
 	SslReadExEnter  *ebpf.ProgramSpec `ebpf:"ssl_read_ex_enter"`
@@ -213,17 +195,8 @@ type tlsVariables struct {
 //
 // It can be passed to loadTlsObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tlsPrograms struct {
-	ScEnterClose    *ebpf.Program `ebpf:"sc_enter_close"`
-	ScEnterRead     *ebpf.Program `ebpf:"sc_enter_read"`
-	ScEnterRecvfrom *ebpf.Program `ebpf:"sc_enter_recvfrom"`
-	ScEnterSendto   *ebpf.Program `ebpf:"sc_enter_sendto"`
-	ScEnterWrite    *ebpf.Program `ebpf:"sc_enter_write"`
-	ScEnterWritev   *ebpf.Program `ebpf:"sc_enter_writev"`
-	ScExitRead      *ebpf.Program `ebpf:"sc_exit_read"`
-	ScExitRecvfrom  *ebpf.Program `ebpf:"sc_exit_recvfrom"`
-	ScExitSendto    *ebpf.Program `ebpf:"sc_exit_sendto"`
-	ScExitWrite     *ebpf.Program `ebpf:"sc_exit_write"`
-	ScExitWritev    *ebpf.Program `ebpf:"sc_exit_writev"`
+	RawSysEnter     *ebpf.Program `ebpf:"raw_sys_enter"`
+	RawSysExit      *ebpf.Program `ebpf:"raw_sys_exit"`
 	SslLeave        *ebpf.Program `ebpf:"ssl_leave"`
 	SslReadEnter    *ebpf.Program `ebpf:"ssl_read_enter"`
 	SslReadExEnter  *ebpf.Program `ebpf:"ssl_read_ex_enter"`
@@ -233,17 +206,8 @@ type tlsPrograms struct {
 
 func (p *tlsPrograms) Close() error {
 	return _TlsClose(
-		p.ScEnterClose,
-		p.ScEnterRead,
-		p.ScEnterRecvfrom,
-		p.ScEnterSendto,
-		p.ScEnterWrite,
-		p.ScEnterWritev,
-		p.ScExitRead,
-		p.ScExitRecvfrom,
-		p.ScExitSendto,
-		p.ScExitWrite,
-		p.ScExitWritev,
+		p.RawSysEnter,
+		p.RawSysExit,
 		p.SslLeave,
 		p.SslReadEnter,
 		p.SslReadExEnter,

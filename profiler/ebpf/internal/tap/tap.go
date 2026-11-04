@@ -111,21 +111,13 @@ func New(opts Options) (*Tap, error) {
 }
 
 func (t *Tap) attachSyscalls() error {
-	pairs := []struct {
+	for _, rt := range []struct {
 		name string
 		prog *ebpf.Program
-	}{
-		{"sys_enter_write", t.objs.ScEnterWrite}, {"sys_exit_write", t.objs.ScExitWrite},
-		{"sys_enter_writev", t.objs.ScEnterWritev}, {"sys_exit_writev", t.objs.ScExitWritev},
-		{"sys_enter_sendto", t.objs.ScEnterSendto}, {"sys_exit_sendto", t.objs.ScExitSendto},
-		{"sys_enter_read", t.objs.ScEnterRead}, {"sys_exit_read", t.objs.ScExitRead},
-		{"sys_enter_recvfrom", t.objs.ScEnterRecvfrom}, {"sys_exit_recvfrom", t.objs.ScExitRecvfrom},
-		{"sys_enter_close", t.objs.ScEnterClose},
-	}
-	for _, p := range pairs {
-		l, err := link.Tracepoint("syscalls", p.name, p.prog, nil)
+	}{{"sys_enter", t.objs.RawSysEnter}, {"sys_exit", t.objs.RawSysExit}} {
+		l, err := link.AttachRawTracepoint(link.RawTracepointOptions{Name: rt.name, Program: rt.prog})
 		if err != nil {
-			return fmt.Errorf("attach tracepoint %s: %w", p.name, err)
+			return fmt.Errorf("attach raw tracepoint %s: %w", rt.name, err)
 		}
 		t.tps = append(t.tps, l)
 	}
@@ -353,7 +345,7 @@ func LoadedPrograms() (int, error) {
 		}
 		info, err := p.Info()
 		p.Close()
-		if err == nil && (strings.HasPrefix(info.Name, "ssl_") || strings.HasPrefix(info.Name, "sc_")) {
+		if err == nil && (strings.HasPrefix(info.Name, "ssl_") || strings.HasPrefix(info.Name, "raw_sys_")) {
 			n++
 		}
 	}

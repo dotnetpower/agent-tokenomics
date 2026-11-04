@@ -211,22 +211,32 @@ int ssl_leave(struct pt_regs *ctx)
 // never passes through a TLS library, so the write/read syscalls are observed instead. To keep the cost near zero,
 // only processes the collector asked for are looked at, and a socket is copied only after a write that starts with
 // "POST " has marked it; the collector unmarks it when the exchange is complete, and close() unmarks it too.
+//
+// These are *raw* tracepoints. Programs attached to the per-syscall perf tracepoints are skipped, silently, whenever
+// another BPF program is running on the same CPU (a per-CPU re-entrancy guard), which on a busy machine lost
+// individual writes at random. Raw tracepoints only guard against recursion of the same program.
+
+#if defined(__TARGET_ARCH_x86)
+#define NR_READ 0
+#define NR_WRITE 1
+#define NR_CLOSE 3
+#define NR_WRITEV 20
+#define NR_SENDTO 44
+#define NR_RECVFROM 45
+#elif defined(__TARGET_ARCH_arm64)
+#define NR_READ 63
+#define NR_WRITE 64
+#define NR_CLOSE 57
+#define NR_WRITEV 66
+#define NR_SENDTO 206
+#define NR_RECVFROM 207
+#else
+#error "unsupported architecture: add its syscall numbers"
+#endif
 
 const volatile __u32 self_tgid;
 const volatile __u32 watch_all;
 const volatile __u32 debug_unmatched; // testing only: report the first bytes of writes that did not start an HTTP POST
-
-struct sys_enter_ctx {
-	__u64 pad;
-	__s64 id;
-	__u64 args[6];
-};
-
-struct sys_exit_ctx {
-	__u64 pad;
-	__s64 id;
-	__s64 ret;
-};
 
 struct plain_key {
 	__u32 pid;
@@ -301,52 +311,66 @@ static __always_inline int watching(__u32 *tgid)
 	return watch_all || bpf_map_lookup_elem(&watched, tgid);
 }
 
-static __always_inline int sys_enter(struct sys_enter_ctx *c, __u32 dir, __u32 vec)
+// The first three syscall arguments, read from the user registers saved at syscall entry.
+static __always_inline int syscall_args(struct pt_regs *regs, __u64 *a0, __u64 *a1, __u64 *a2)
 {
-	__u64 id = bpf_get_current_pid_tgid();
+	if (bpf_probe_read_kernel(a0, sizeof(*a0), (const void *)&PT_REGS_PARM1(regs)) ||
+	    bpf_probe_read_kernel(a1, sizeof(*a1), (const void *)&PT_REGS_PARM2(regs)) ||
+	    bpf_probe_read_kernel(a2, sizeof(*a2), (const void *)&PT_REGS_PARM3(regs)))
+		return -1;
+	return 0;
+}
+
+SEC("raw_tp/sys_enter")
+int raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
+{
+	struct pt_regs *regs = (struct pt_regs *)ctx->args[0];
+	long nr = ctx->args[1];
+	__u64 id, a0, a1, a2;
 	struct sys_args a = {};
 	__u32 tgid;
 
-	if (debug_unmatched && dir == DIR_WRITE) {
-		char comm[8] = {};
+	switch (nr) {
+	case NR_WRITE:
+	case NR_SENDTO:
+		a.dir = DIR_WRITE;
+		break;
+	case NR_WRITEV:
+		a.dir = DIR_WRITE;
+		a.vec = 1;
+		break;
+	case NR_READ:
+	case NR_RECVFROM:
+		a.dir = DIR_READ;
+		break;
+	case NR_CLOSE: {
+		struct plain_key k = {};
 
-		bpf_get_current_comm(comm, sizeof(comm));
-		if (comm[0] == 'g' && comm[1] == 'o' && comm[2] == 'c' && comm[3] == 'l') {
-			bump(10); // the tracepoint fired for the Go client, before any filtering
-			if (!watching(&tgid))
-				bump(11); // ... and the process was not considered watched
-		}
+		if (!watching(&k.pid) || syscall_args(regs, &a0, &a1, &a2))
+			return 0;
+		k.fd = (__u32)a0;
+		bpf_map_delete_elem(&plain_conns, &k);
+		return 0;
 	}
+	default:
+		return 0; // every other syscall: as little work as possible
+	}
+
 	if (!watching(&tgid))
 		return 0;
 	bump(0);
-	if (debug_unmatched) {
-		char comm[8] = {};
-
-		bpf_get_current_comm(comm, sizeof(comm));
-		if (comm[0] == 'g' && comm[1] == 'o' && comm[2] == 'c' && comm[3] == 'l') { // testing only: follow the Go e2e client
-			struct call_args da = {};
-
-			if (dir == DIR_WRITE)
-				bump(8); // a write-type syscall entered by the Go client, before anything is read from user memory
-
-			da.ssl = (1ULL << 61) | ((__u64)(c->id & 0xffff) << 32) | (__u32)c->args[0];
-			da.buf = vec ? 0 : c->args[1];
-			da.dir = dir;
-			if (!vec && c->args[2] > 0)
-				emit_all(&da, id, c->args[2] > 32 ? 32 : (__u32)c->args[2]);
-		}
-	}
-	a.fd = (__u32)c->args[0];
-	a.buf = c->args[1];
-	a.len = c->args[2];
-	a.dir = dir;
-	a.vec = vec;
+	if (syscall_args(regs, &a0, &a1, &a2))
+		return 0;
+	id = bpf_get_current_pid_tgid();
+	a.fd = (__u32)a0;
+	a.buf = a1;
+	a.len = a2;
 	bpf_map_update_elem(&sys_active, &id, &a, BPF_ANY);
 	return 0;
 }
 
-static __always_inline int sys_exit(struct sys_exit_ctx *c)
+SEC("raw_tp/sys_exit")
+int raw_sys_exit(struct bpf_raw_tracepoint_args *ctx)
 {
 	__u64 id = bpf_get_current_pid_tgid();
 	struct sys_args *ap = bpf_map_lookup_elem(&sys_active, &id);
@@ -355,10 +379,10 @@ static __always_inline int sys_exit(struct sys_exit_ctx *c)
 	struct call_args ca = {};
 	__u8 *marked;
 	__u32 tgid;
-	long ret = c->ret;
+	long ret = ctx->args[1];
 
 	if (!ap)
-		return 0; // the entry was filtered out (not a watched process): by far the common case
+		return 0; // the entry was filtered out: by far the common case
 	bump(1);
 	a = *ap;
 	bpf_map_delete_elem(&sys_active, &id);
@@ -370,13 +394,6 @@ static __always_inline int sys_exit(struct sys_exit_ctx *c)
 	}
 	k.pid = tgid;
 	k.fd = a.fd;
-	if (debug_unmatched && a.dir == DIR_WRITE) {
-		char comm[8] = {};
-
-		bpf_get_current_comm(comm, sizeof(comm));
-		if (comm[0] == 'g' && comm[1] == 'o' && comm[2] == 'c' && comm[3] == 'l')
-			bump(9); // the matching exit
-	}
 	marked = bpf_map_lookup_elem(&plain_conns, &k);
 	if (a.dir == DIR_WRITE && !marked) {
 		char head[5];
@@ -436,48 +453,6 @@ static __always_inline int sys_exit(struct sys_exit_ctx *c)
 		emit_all(&ca, id, (__u32)n);
 		ret -= n;
 	}
-	return 0;
-}
-
-SEC("tracepoint/syscalls/sys_enter_write")
-int sc_enter_write(struct sys_enter_ctx *c) { return sys_enter(c, DIR_WRITE, 0); }
-
-SEC("tracepoint/syscalls/sys_enter_sendto")
-int sc_enter_sendto(struct sys_enter_ctx *c) { return sys_enter(c, DIR_WRITE, 0); }
-
-SEC("tracepoint/syscalls/sys_enter_writev")
-int sc_enter_writev(struct sys_enter_ctx *c) { return sys_enter(c, DIR_WRITE, 1); }
-
-SEC("tracepoint/syscalls/sys_exit_writev")
-int sc_exit_writev(struct sys_exit_ctx *c) { return sys_exit(c); }
-
-SEC("tracepoint/syscalls/sys_enter_read")
-int sc_enter_read(struct sys_enter_ctx *c) { return sys_enter(c, DIR_READ, 0); }
-
-SEC("tracepoint/syscalls/sys_enter_recvfrom")
-int sc_enter_recvfrom(struct sys_enter_ctx *c) { return sys_enter(c, DIR_READ, 0); }
-
-SEC("tracepoint/syscalls/sys_exit_write")
-int sc_exit_write(struct sys_exit_ctx *c) { return sys_exit(c); }
-
-SEC("tracepoint/syscalls/sys_exit_sendto")
-int sc_exit_sendto(struct sys_exit_ctx *c) { return sys_exit(c); }
-
-SEC("tracepoint/syscalls/sys_exit_read")
-int sc_exit_read(struct sys_exit_ctx *c) { return sys_exit(c); }
-
-SEC("tracepoint/syscalls/sys_exit_recvfrom")
-int sc_exit_recvfrom(struct sys_exit_ctx *c) { return sys_exit(c); }
-
-SEC("tracepoint/syscalls/sys_enter_close")
-int sc_enter_close(struct sys_enter_ctx *c)
-{
-	struct plain_key k = {};
-
-	if (!watching(&k.pid))
-		return 0;
-	k.fd = (__u32)c->args[0];
-	bpf_map_delete_elem(&plain_conns, &k);
 	return 0;
 }
 

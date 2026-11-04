@@ -164,8 +164,9 @@ tokprof ebpf --comm node,python --out run.jsonl                   # by name; new
   helper attaches (it rescans every second; use `tokprof run` for those).
 - **Overhead (measured, WSL2):** 3 × 3,000 keep-alive HTTPS POSTs with 4 KiB bodies: mean 0.378 ms without the tap, 0.373 ms with
   it, 100% of calls captured, no kernel drops (`python3 ebpf/e2e/bench.py --helper ebpf/bin/tokprof-ebpf --sudo`). The plain-HTTP syscall probes run on
-  every `read`/`write` of every process while the helper is attached: a 64-byte `write` to `/dev/null` went from 120 ns to 173 ns in a process that is not
-  watched, and to about 325 ns with `--all` (`--no-plain` removes this cost).
+  every `read`/`write` of every process while the helper is attached: a 64-byte `write` to `/dev/null` went from 119 ns to 146 ns in a process that is not
+  watched, and to about 256 ns with `--all` (`--no-plain` removes this cost). The probes are raw tracepoints: per-syscall perf tracepoints were
+  skipped at random on a busy machine (a per-CPU re-entrancy guard), which lost individual writes.
 - **Killed helper:** `python3 ebpf/e2e/crash_cleanup.py --helper ebpf/bin/tokprof-ebpf --sudo` kills the helper with SIGKILL and checks with
   `tokprof-ebpf status` that the kernel holds no tokprof programs afterwards (measured: 16 while running, 0 after).
 - **Verify:** `python3 ebpf/e2e/run_e2e.py --helper ebpf/bin/tokprof-ebpf --sudo` starts a local HTTPS server and clients (system Python,
