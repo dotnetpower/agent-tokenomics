@@ -30,14 +30,21 @@ class ParsedRequest:
     step_hint: Optional[str] = None
 
 
+_DEFAULT_DETECTOR = None
+
+
 def detect_provider(path: str, body: Any) -> Optional[str]:
     """Identify the API of one request from its path and JSON shape (see tokprof.detect for the full scoring)."""
+    global _DEFAULT_DETECTOR
     from ..detect import EXCLUDED_PATH, Detector, normalize_path, path_hint
 
-    hint = path_hint(path)
-    if hint in (OPENAI_CHAT, OPENAI_RESPONSES, ANTHROPIC) and not EXCLUDED_PATH.search(normalize_path(path)):
+    npath = normalize_path(path)
+    hint = path_hint(npath)
+    if hint in (OPENAI_CHAT, OPENAI_RESPONSES, ANTHROPIC) and not EXCLUDED_PATH.search(npath):
         return hint  # a well-known path decides even when the body is empty or unusual
-    return Detector().inspect(method="POST", host="", port=0, path=path, body=body).api
+    if _DEFAULT_DETECTOR is None:
+        _DEFAULT_DETECTOR = Detector()
+    return _DEFAULT_DETECTOR.inspect(method="POST", host="", port=0, path=npath, body=body).api
 
 
 def _looks_anthropic(body: dict) -> bool:
@@ -51,8 +58,11 @@ def _looks_anthropic(body: dict) -> bool:
     return False
 
 
-def _dumps(obj: Any) -> str:
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+def _dumps(obj: Any, *, sort: bool = True) -> str:
+    try:
+        return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=sort)
+    except (TypeError, ValueError, RecursionError):
+        return str(obj)
 
 
 def _content_text(content: Any) -> tuple[str, bool]:
@@ -162,6 +172,19 @@ def _emit_history_value(segments: list, key: str, val: Any, turn: int) -> None:
         _add(segments, "history_user", txt, role="user", name=key, turn=turn)
 
 
+_STRUCTURED_FAST_HINTS = (
+    '"utterance"', '"user_utterance"', '"question"', '"user_question"', '"query"', '"user_query"',
+    '"user_prompt"', '"prompt"', '"message"', '"user_message"', '"current_turn"', '"current_input"',
+    '"task"', '"problem_statement"', '"goal"', '"context"', '"history"', '"conversation_history"',
+    '"chat_history"', '"prior_turns"', '"previous_turns"', '"recent_turns"', '"turns"', '"dialogue"',
+    '"messages"', '"memory"', '"conversation"', '"transcript"', '"capabilities"', '"descriptors"',
+    '"tools"', '"functions"', '"available_tools"', '"tool_definitions"', '"catalog"', '"metric_concepts"',
+    '"tool_results"', '"observations"', '"evidence"', '"search_results"', '"retrieved_context"',
+    '"documents"', '"chunks"', '"candidates"', '"frame"', '"output_schema"', '"response_schema"',
+    '"json_schema"', '"schema"', '"untrusted_input"', '"payload"', '"review_input"',
+)
+
+
 def _try_decompose_structured_user(
     segments: list,
     text: str,
@@ -170,12 +193,17 @@ def _try_decompose_structured_user(
     turn: int,
 ) -> tuple[bool, Optional[str]]:
     """If a user message is a JSON object encoding utterance + context/history + tools, split it into segments."""
-    s = (text or "").strip()
+    if not text or len(text) < 4 or len(text) > 2_000_000:
+        return False, None
+    s = text.strip()
     if len(s) < 4 or s[0] != "{" or s[-1] != "}":
+        return False, None
+    head_sample = s[:16384].lower() if len(s) > 16384 else s.lower()
+    if not any(h in head_sample for h in _STRUCTURED_FAST_HINTS) and (len(s) <= 16384 or not any(h in s.lower() for h in _STRUCTURED_FAST_HINTS)):
         return False, None
     try:
         obj = json.loads(s)
-    except ValueError:
+    except (ValueError, RecursionError, TypeError):
         return False, None
     if not isinstance(obj, dict) or not obj:
         return False, None
@@ -405,6 +433,12 @@ def _parse_anthropic(body: dict) -> ParsedRequest:
                 _add(segs, "tool_result", text, name=b.get("tool_use_id"), turn=i, opaque=opaque)
             elif t in ("thinking", "redacted_thinking"):
                 _add(segs, "other", b.get("thinking") or "", role="assistant", name="thinking", turn=i)
+            elif t == "document":
+                src = b.get("source") if isinstance(b.get("source"), dict) else {}
+                if src.get("type") == "text" and isinstance(src.get("data"), str):
+                    _add_message(segs, role, src["data"], is_current=(i == last_user and role == "user"), turn=i)
+                else:
+                    segs.append(RawSegment(kind="attachment", text="", role=role, turn=i, opaque=True))
             elif t in _OPAQUE_PARTS:
                 segs.append(RawSegment(kind="attachment", text="", role=role, turn=i, opaque=True))
     tools: list = []
@@ -434,6 +468,13 @@ def split_chat_template(prompt: str) -> Optional[list]:
 
     Returns None when no known template is recognized, so the caller reports one raw prompt instead of guessing.
     """
+    if not prompt:
+        return None
+    if "<" not in prompt:
+        if "[INST]" not in prompt:
+            return None
+    elif "<|" not in prompt and "<start_of_turn>" not in prompt and "<｜" not in prompt and "[INST]" not in prompt:
+        return None
     for header, end in _TEMPLATES:
         heads = list(header.finditer(prompt))
         if not heads:

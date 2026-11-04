@@ -49,14 +49,31 @@ def _warn(msg):
 
 def _worker():
     global _inflight
+    conn = None
+    port_num = int(_PORT) if _PORT.isdigit() else 0
     while True:
         payload = _q.get()
         try:
-            conn = http.client.HTTPConnection("127.0.0.1", int(_PORT), timeout=5)
-            conn.request("POST", "/__tokprof/ingest", body=json.dumps(payload).encode("utf-8"),
-                         headers={"Content-Type": "application/json", "X-Tokprof-Token": _TOKEN})
-            conn.getresponse().read()
-            conn.close()
+            body_bytes = json.dumps(payload).encode("utf-8")
+            headers = {"Content-Type": "application/json", "X-Tokprof-Token": _TOKEN, "Connection": "keep-alive"}
+            delivered = False
+            for _attempt in range(2):
+                try:
+                    if conn is None:
+                        conn = http.client.HTTPConnection("127.0.0.1", port_num, timeout=5)
+                    conn.request("POST", "/__tokprof/ingest", body=body_bytes, headers=headers)
+                    conn.getresponse().read()
+                    delivered = True
+                    break
+                except Exception:
+                    try:
+                        if conn is not None:
+                            conn.close()
+                    except Exception:
+                        pass
+                    conn = None
+            if not delivered:
+                _warn("could not deliver a captured call after retry")
         except Exception as exc:  # the profiler must never disturb the application
             _warn("could not deliver a captured call: %r" % (exc,))
         finally:
@@ -64,12 +81,29 @@ def _worker():
                 _inflight -= 1
 
 
+def _reset_after_fork():
+    global _q, _started, _inflight, _lock
+    _q = queue.Queue(maxsize=2000)
+    _started = False
+    _inflight = 0
+    _lock = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    try:
+        os.register_at_fork(after_in_child=_reset_after_fork)
+    except Exception:
+        pass
+
+
 def _send(payload):
     global _started, _inflight
     if not _started:
-        _started = True
-        threading.Thread(target=_worker, name="tokprof-hook", daemon=True).start()
-        atexit.register(_flush)
+        with _lock:
+            if not _started:
+                _started = True
+                threading.Thread(target=_worker, name="tokprof-hook", daemon=True).start()
+                atexit.register(_flush)
     try:
         with _lock:
             _inflight += 1
@@ -86,7 +120,7 @@ def _flush(timeout=3.0):
         with _lock:
             if _inflight <= 0:
                 return
-        time.sleep(0.01)
+        time.sleep(0.005)
 
 
 def _decode(data, encoding):
@@ -95,16 +129,18 @@ def _decode(data, encoding):
         return data.decode("utf-8", "replace")
     try:
         if "gzip" in enc:
-            return gzip.decompress(data).decode("utf-8", "replace")
+            d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            return d.decompress(data, _CAP).decode("utf-8", "replace")
         if "deflate" in enc:
             try:
-                return zlib.decompress(data).decode("utf-8", "replace")
+                return zlib.decompressobj().decompress(data, _CAP).decode("utf-8", "replace")
             except zlib.error:
-                return zlib.decompress(data, -zlib.MAX_WBITS).decode("utf-8", "replace")
+                return zlib.decompressobj(-zlib.MAX_WBITS).decompress(data, _CAP).decode("utf-8", "replace")
         if "br" in enc:
             for mod_name in ("brotli", "brotlicffi"):
                 try:
-                    return __import__(mod_name).decompress(data).decode("utf-8", "replace")
+                    raw = __import__(mod_name).decompress(data)
+                    return raw[:_CAP].decode("utf-8", "replace")
                 except Exception:
                     pass
             return ""
@@ -112,7 +148,7 @@ def _decode(data, encoding):
             try:
                 from compression import zstd as _zstd
 
-                return _zstd.decompress(data).decode("utf-8", "replace")
+                return _zstd.decompress(data)[:_CAP].decode("utf-8", "replace")
             except Exception:
                 try:
                     import zstandard
@@ -212,13 +248,15 @@ def _plausible(method, path, text):
     try:
         if (method or "").upper() != "POST" or not text:
             return False
-        head = text.lstrip()
+        head = text[:512].lstrip() if len(text) > 512 else text.lstrip()
         if len(head) < 8 or head[0] != "{":
             return False
         p = (path or "").split("?", 1)[0].split("#", 1)[0].rstrip("/") or "/"
         if _EXCLUDED_PATH.search(p):
             return False
-        return _PLAUSIBLE_KEYS.search(text) is not None
+        if len(text) <= 81920:
+            return _PLAUSIBLE_KEYS.search(text) is not None
+        return _PLAUSIBLE_KEYS.search(text[:65536]) is not None or _PLAUSIBLE_KEYS.search(text[-16384:]) is not None
     except Exception:
         return False
 
@@ -231,9 +269,15 @@ def _is_candidate(method, host, port, path, text):
 
 def _wanted(request):
     try:
+        if (request.method or "").upper() != "POST":
+            return False
         url = request.url
+        if url.host in ("127.0.0.1", "localhost") and str(url.port) == _PORT:
+            return False
         content = request.content if isinstance(request.content, (bytes, bytearray)) else b""
-        return _is_candidate(request.method, url.host, url.port, url.path, bytes(content).decode("utf-8", "replace"))
+        if len(content) < 8 or not content[:256].lstrip().startswith(b"{"):
+            return False
+        return _plausible(request.method, url.path, bytes(content).decode("utf-8", "replace"))
     except Exception:
         return False
 
@@ -327,17 +371,22 @@ def _patch_requests(requests):
                     lambda: (resp.status_code, None, resp.headers.get("content-type", ""), True),
                     parts.hostname or "", parts.port or (443 if parts.scheme == "https" else 80),
                 )
-                orig_iter = resp.iter_content
+                preloaded = getattr(resp, "_content", False)
+                if isinstance(preloaded, (bytes, bytearray)):
+                    cap.add(preloaded)
+                    cap.finish()
+                else:
+                    orig_iter = resp.iter_content
 
-                def iter_content(chunk_size=1, decode_unicode=False):
-                    try:
-                        for chunk in orig_iter(chunk_size, decode_unicode):
-                            cap.add(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
-                            yield chunk
-                    finally:
-                        cap.finish()
+                    def iter_content(chunk_size=1, decode_unicode=False):
+                        try:
+                            for chunk in orig_iter(chunk_size, decode_unicode):
+                                cap.add(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
+                                yield chunk
+                        finally:
+                            cap.finish()
 
-                resp.iter_content = iter_content
+                    resp.iter_content = iter_content
         except Exception as exc:
             _warn("hook error: %r" % (exc,))
         return resp

@@ -46,14 +46,27 @@ def proxy_for(host: str, env: Optional[dict] = None) -> Optional[tuple]:
     raw = env.get("HTTPS_PROXY") or env.get("https_proxy") or env.get("ALL_PROXY") or env.get("all_proxy")
     if not raw:
         return None
-    if host in ALWAYS_DIRECT:
+    h_clean = (host or "").strip("[]").lower()
+    if h_clean in ALWAYS_DIRECT:
         return None
     no_proxy = env.get("NO_PROXY") or env.get("no_proxy") or ""
     for item in (x.strip().lower() for x in no_proxy.split(",") if x.strip()):
+        if ":" in item and "/" not in item and not item.startswith("["):
+            item = item.rsplit(":", 1)[0]
+        if "/" in item:
+            try:
+                import ipaddress
+
+                if ipaddress.ip_address(h_clean) in ipaddress.ip_network(item, strict=False):
+                    return None
+            except ValueError:
+                pass
+            continue
         item = item.lstrip("*")
         if item == "" or item == ".":
             return None
-        if host.lower() == item.lstrip(".") or host.lower().endswith("." + item.lstrip(".")):
+        bare = item.lstrip(".")
+        if h_clean == bare or h_clean.endswith("." + bare):
             return None
     if "://" not in raw:
         raw = "http://" + raw
@@ -77,15 +90,16 @@ def connect_via_proxy(proxy_host: str, proxy_port: int, host: str, port: int, au
         if auth:
             lines.append(f"Proxy-Authorization: {auth}")
         sock.sendall(("\r\n".join(lines) + "\r\n\r\n").encode("latin-1"))
-        buf = b""
-        while b"\r\n\r\n" not in buf:  # read byte by byte so no tunneled data is consumed
-            chunk = sock.recv(1)
+        buf = bytearray()
+        while b"\r\n\r\n" not in buf:
+            # The client has not sent its TLS ClientHello yet, so the proxy can only send its HTTP CONNECT header block.
+            chunk = sock.recv(4096)
             if not chunk:
                 raise ConnectionError("proxy closed the connection during CONNECT")
-            buf += chunk
+            buf.extend(chunk)
             if len(buf) > 65536:
                 raise ConnectionError("proxy response too large")
-        status_line = buf.split(b"\r\n", 1)[0].decode("latin-1")
+        status_line = bytes(buf).split(b"\r\n", 1)[0].decode("latin-1")
         parts = status_line.split(" ", 2)
         if len(parts) < 2 or parts[1] != "200":
             raise ConnectionError(f"proxy refused CONNECT: {status_line}")

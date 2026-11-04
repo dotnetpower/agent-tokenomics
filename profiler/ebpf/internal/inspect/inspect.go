@@ -7,6 +7,7 @@ package inspect
 
 import (
 	"bufio"
+	"context"
 	"debug/elf"
 	"debug/gosym"
 	"encoding/binary"
@@ -19,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var (
@@ -84,12 +86,21 @@ func Scan(procRoot string) ([]Process, error) {
 // long-running collector can look at new PIDs cheaply.
 type Scanner struct {
 	procRoot   string
+	selfMnt    string
+	scanBuf    []byte
 	cache      map[string]*fileInfo
 	containers map[string]string
 }
 
 func NewScanner(procRoot string) *Scanner {
-	return &Scanner{procRoot: procRoot, cache: map[string]*fileInfo{}, containers: map[string]string{}}
+	selfMnt, _ := os.Readlink(filepath.Join(procRoot, "self", "ns", "mnt"))
+	return &Scanner{
+		procRoot:   procRoot,
+		selfMnt:    selfMnt,
+		scanBuf:    make([]byte, 256*1024),
+		cache:      map[string]*fileInfo{},
+		containers: map[string]string{},
+	}
 }
 
 // PIDs lists the numeric entries under the proc root.
@@ -118,10 +129,10 @@ func (s *Scanner) Signature(pid int) string {
 
 // Process inspects one PID.
 func (s *Scanner) Process(pid int) Process {
-	return scanProcess(s.procRoot, pid, s.cache, s.containers)
+	return scanProcess(s.procRoot, pid, s.selfMnt, s.scanBuf, s.cache, s.containers)
 }
 
-func scanProcess(procRoot string, pid int, cache map[string]*fileInfo, containers map[string]string) Process {
+func scanProcess(procRoot string, pid int, selfMnt string, scanBuf []byte, cache map[string]*fileInfo, containers map[string]string) Process {
 	base := filepath.Join(procRoot, strconv.Itoa(pid))
 	p := Process{PID: pid, Attach: "no"}
 	if b, err := os.ReadFile(filepath.Join(base, "comm")); err == nil {
@@ -146,18 +157,25 @@ func scanProcess(procRoot string, pid int, cache map[string]*fileInfo, container
 	defer f.Close()
 
 	seen := map[string]bool{}
-	selfMnt, _ := os.Readlink(filepath.Join(procRoot, "self", "ns", "mnt"))
 	procMnt, _ := os.Readlink(filepath.Join(base, "ns", "mnt"))
 	diffMnt := selfMnt != "" && procMnt != "" && selfMnt != procMnt
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	if len(scanBuf) > 0 {
+		sc.Buffer(scanBuf, 1<<20)
+	} else {
+		sc.Buffer(make([]byte, 256*1024), 1<<20)
+	}
 	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
+		line := sc.Text()
+		if strings.IndexByte(line, '/') < 0 || strings.HasSuffix(line, "(deleted)") {
+			continue
+		}
+		fields := strings.Fields(line)
 		if len(fields) < 6 || !strings.Contains(fields[1], "x") {
 			continue
 		}
 		path := strings.Join(fields[5:], " ")
-		if !strings.HasPrefix(path, "/") || strings.HasSuffix(path, "(deleted)") || seen[path] || isNonHTTPTLSLib(path) {
+		if !strings.HasPrefix(path, "/") || seen[path] || isNonHTTPTLSLib(path) {
 			continue
 		}
 		seen[path] = true
@@ -240,9 +258,14 @@ func detectContainer(procBase, cmdline string, cache map[string]string) (string,
 		if json.Unmarshal(b, &cfg) == nil && cfg.Name != "" {
 			name = strings.TrimPrefix(cfg.Name, "/") + " (" + cid[:12] + ")"
 		}
-	} else if out, err := exec.Command("docker", "inspect", "--format", "{{.Name}}", cid).Output(); err == nil {
-		if s := strings.TrimSpace(strings.TrimPrefix(string(out), "/")); s != "" {
-			name = s + " (" + cid[:12] + ")"
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		out, err := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{.Name}}", cid).Output()
+		cancel()
+		if err == nil {
+			if s := strings.TrimSpace(strings.TrimPrefix(string(out), "/")); s != "" {
+				name = s + " (" + cid[:12] + ")"
+			}
 		}
 	}
 	cache[cid] = name

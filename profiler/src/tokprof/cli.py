@@ -28,6 +28,35 @@ def _default_out() -> str:
     return os.path.join(".tokprof", time.strftime("run-%Y%m%d-%H%M%S.jsonl"))
 
 
+def _safe_mtime(path: str) -> float:
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0.0
+
+
+def _atomic_write_text(dest: str, content: str) -> None:
+    parent = os.path.dirname(os.path.abspath(dest))
+    os.makedirs(parent, exist_ok=True)
+    tmp = f"{dest}.{os.getpid()}.tmp"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        os.replace(tmp, dest)
+    except OSError:
+        try:
+            with open(dest, "w", encoding="utf-8") as fh:
+                fh.write(content)
+        except OSError:
+            pass
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+
+
 def _find_latest_jsonl(directory: str = ".tokprof") -> Optional[str]:
     candidates = []
     if os.path.isdir(directory):
@@ -37,7 +66,7 @@ def _find_latest_jsonl(directory: str = ".tokprof") -> Optional[str]:
                 if os.path.isfile(p):
                     candidates.append(p)
     if candidates:
-        candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        candidates.sort(key=_safe_mtime, reverse=True)
         return candidates[0]
     try:
         from . import session
@@ -276,29 +305,28 @@ def _write_html_dashboard(
     gap: float = 5.0,
     prices: Optional[str] = None,
     open_browser: bool = False,
+    _records: Optional[list] = None,
+    _summary: Optional[dict] = None,
+    _price_map: Optional[dict] = None,
 ) -> Optional[str]:
     from .report import render_html
     from .store import read_jsonl
 
-    if not os.path.exists(jsonl_path):
-        return None
-    records = list(read_jsonl(jsonl_path))
+    records = _records
+    if records is None:
+        if not os.path.exists(jsonl_path):
+            return None
+        records = list(read_jsonl(jsonl_path))
     if not records:
         return None
     stem = jsonl_path[:-6] if jsonl_path.endswith(".jsonl") else jsonl_path
     dest = html_arg if html_arg else (stem + ".html")
-    parent = os.path.dirname(os.path.abspath(dest))
-    os.makedirs(parent, exist_ok=True)
-    content = render_html(records, gap, prices=_load_prices(prices))
-    with open(dest, "w", encoding="utf-8") as fh:
-        fh.write(content)
+    pmap = _price_map if _price_map is not None else _load_prices(prices)
+    content = render_html(records, gap, prices=pmap, _summary=_summary)
+    _atomic_write_text(dest, content)
     if not html_arg and os.path.basename(os.path.dirname(os.path.abspath(jsonl_path))) == ".tokprof":
         latest = os.path.join(os.path.dirname(os.path.abspath(jsonl_path)), "latest.html")
-        try:
-            with open(latest, "w", encoding="utf-8") as fh:
-                fh.write(content)
-        except OSError:
-            pass
+        _atomic_write_text(latest, content)
     print(f"tokprof: HTML dashboard written to {dest}", file=sys.stderr)
     if open_browser:
         try:
@@ -315,29 +343,26 @@ def _write_csv_report(
     csv_arg: Optional[str] = "",
     *,
     gap: float = 5.0,
+    _records: Optional[list] = None,
+    _summary: Optional[dict] = None,
 ) -> Optional[str]:
     from .report import render_csv
     from .store import read_jsonl
 
-    if not os.path.exists(jsonl_path):
-        return None
-    records = list(read_jsonl(jsonl_path))
+    records = _records
+    if records is None:
+        if not os.path.exists(jsonl_path):
+            return None
+        records = list(read_jsonl(jsonl_path))
     if not records:
         return None
     stem = jsonl_path[:-6] if jsonl_path.endswith(".jsonl") else jsonl_path
     dest = csv_arg if csv_arg else (stem + ".csv")
-    parent = os.path.dirname(os.path.abspath(dest))
-    os.makedirs(parent, exist_ok=True)
-    content = render_csv(records, gap) + "\n"
-    with open(dest, "w", encoding="utf-8") as fh:
-        fh.write(content)
+    content = render_csv(records, gap, _summary=_summary) + "\n"
+    _atomic_write_text(dest, content)
     if not csv_arg and os.path.basename(os.path.dirname(os.path.abspath(jsonl_path))) == ".tokprof":
         latest = os.path.join(os.path.dirname(os.path.abspath(jsonl_path)), "latest.csv")
-        try:
-            with open(latest, "w", encoding="utf-8") as fh:
-                fh.write(content)
-        except OSError:
-            pass
+        _atomic_write_text(latest, content)
     print(f"tokprof: CSV report written to {dest}", file=sys.stderr)
     return dest
 
@@ -352,20 +377,41 @@ def _finish_run(out: str, args, *, default_report: bool = False, pretty: bool = 
     want_csv = (csv_arg is not None) and not getattr(args, "no_csv", False)
     if want_report:
         print()
-        _report(out, "pretty" if pretty else "text", 5.0, getattr(args, "prices", None))
-    if want_html:
-        _write_html_dashboard(out, html_arg, prices=getattr(args, "prices", None), open_browser=getattr(args, "open", False))
-    if want_csv:
-        _write_csv_report(out, csv_arg)
-    if not want_report and not want_html and not want_csv:
-        print(f"tokprof: view the breakdown with: tokprof report   (or: tokprof report --html --csv)", file=sys.stderr)
+        _report(
+            out,
+            "pretty" if pretty else "text",
+            5.0,
+            getattr(args, "prices", None),
+            html_arg=html_arg if want_html else None,
+            csv_arg=csv_arg if want_csv else None,
+            open_browser=getattr(args, "open", False),
+        )
+        return
+    if want_html or want_csv:
+        from .analyze import summarize
+        from .store import read_jsonl
+
+        records = list(read_jsonl(out))
+        summary = summarize(records, 5.0) if records else None
+        if want_html:
+            _write_html_dashboard(
+                out, html_arg, prices=getattr(args, "prices", None),
+                open_browser=getattr(args, "open", False), _records=records, _summary=summary,
+            )
+        if want_csv:
+            _write_csv_report(out, csv_arg, _records=records, _summary=summary)
+        return
+    print("tokprof: view the breakdown with: tokprof report   (or: tokprof report --html --csv)", file=sys.stderr)
 
 
 def _watch_report(path: str, gap: float, prices: Optional[str] = None) -> int:
     try:
         while True:
             sys.stdout.write("\033[2J\033[H")
-            _report(path, "pretty", gap, prices)
+            if os.path.exists(path):
+                _report(path, "pretty", gap, prices)
+            else:
+                print("Waiting for first LLM call...")
             print(f"\nWatching {path} (Ctrl+C to stop)...", file=sys.stderr)
             time.sleep(1.0)
     except KeyboardInterrupt:
@@ -385,6 +431,7 @@ def _report(
     watch: bool = False,
     full_prompts: bool = False,
 ) -> int:
+    from .analyze import summarize
     from .report import render_csv, render_html, render_json, render_markdown, render_pretty, render_text
     from .store import ReadStats, read_jsonl
 
@@ -399,21 +446,20 @@ def _report(
     stats = ReadStats()
     records = list(read_jsonl(path, stats))
     price_map = _load_prices(prices)
+    summary = summarize(records, gap) if records else None
     if fmt == "html":
-        text = render_html(records, gap, prices=price_map)
+        text = render_html(records, gap, prices=price_map, _summary=summary)
     elif fmt == "csv":
-        text = render_csv(records, gap)
+        text = render_csv(records, gap, _summary=summary)
     elif fmt == "pretty":
-        text = render_pretty(records, gap, prices=price_map, full_prompts=full_prompts)
+        text = render_pretty(records, gap, prices=price_map, full_prompts=full_prompts, _summary=summary)
     elif fmt == "text":
-        text = render_text(records, gap, full_prompts=full_prompts)
+        text = render_text(records, gap, full_prompts=full_prompts, _summary=summary)
     else:
         render = {"md": render_markdown, "json": render_json}[fmt]
-        text = render(records, gap)
+        text = render(records, gap, _summary=summary)
     if out_file:
-        os.makedirs(os.path.dirname(os.path.abspath(out_file)), exist_ok=True)
-        with open(out_file, "w", encoding="utf-8") as fh:
-            fh.write(text + ("\n" if not text.endswith("\n") else ""))
+        _atomic_write_text(out_file, text + ("\n" if not text.endswith("\n") else ""))
     else:
         print(text)
         if price_map and records and fmt in ("text", "md"):
@@ -421,7 +467,7 @@ def _report(
 
             print("\n" + render_cost(records, price_map))
     if html_arg is not None:
-        _write_html_dashboard(path, html_arg, gap=gap, prices=prices, open_browser=open_browser)
+        _write_html_dashboard(path, html_arg, gap=gap, prices=prices, open_browser=open_browser, _records=records, _summary=summary, _price_map=price_map)
     elif open_browser and fmt == "html" and out_file:
         try:
             import webbrowser
@@ -430,7 +476,7 @@ def _report(
         except Exception:
             pass
     if csv_arg is not None:
-        _write_csv_report(path, csv_arg, gap=gap)
+        _write_csv_report(path, csv_arg, gap=gap, _records=records, _summary=summary)
     if stats.bad_lines:
         print(f"\n({stats.bad_lines} unreadable line(s) skipped)", file=sys.stderr)
     return 0

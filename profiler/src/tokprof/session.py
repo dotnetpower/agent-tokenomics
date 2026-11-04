@@ -153,7 +153,16 @@ def serve(
             except OSError:
                 pass
             if ebpf_thread is not None:
-                ebpf_thread.join(timeout=3.0)
+                ebpf_thread.join(timeout=2.0)
+            if ebpf_proc.poll() is None:
+                try:
+                    ebpf_proc.terminate()
+                    ebpf_proc.wait(timeout=1.0)
+                except Exception:
+                    try:
+                        ebpf_proc.kill()
+                    except Exception:
+                        pass
         thread.stop()
         writer.close()
         try:
@@ -175,8 +184,13 @@ def start(
 ) -> int:
     existing = _read_state(state_file)
     if existing and _alive(existing["pid"]):
-        print(f"tokprof: a session is already running (pid {existing['pid']}, port {existing['port']}); use `tokprof status`", file=sys.stderr)
-        return 1
+        if _health(existing.get("port", 0)):
+            print(f"tokprof: a session is already running (pid {existing['pid']}, port {existing['port']}); use `tokprof status`", file=sys.stderr)
+            return 1
+        try:
+            os.remove(state_file)
+        except OSError:
+            pass
     if use_ebpf is None:
         use_ebpf = sys.platform.startswith("linux")
     if use_ebpf:
@@ -203,6 +217,7 @@ def start(
         kwargs["start_new_session"] = True
     subprocess.Popen(cmd, **kwargs)
     deadline = time.time() + 15
+    sleep_s = 0.01
     while time.time() < deadline:
         st = _read_state(state_file)
         if st and _health(st["port"]):
@@ -216,7 +231,8 @@ def start(
                 print('  Route NEW processes through it in this shell with:  eval "$(tokprof env)"')
                 print("  Stop and view report with: tokprof stop")
             return 0
-        time.sleep(0.1)
+        time.sleep(sleep_s)
+        sleep_s = min(0.08, sleep_s * 1.5)
     print("tokprof: the session did not start in time; run `tokprof serve` in the foreground to see errors", file=sys.stderr)
     return 1
 
@@ -300,6 +316,7 @@ def stop(state_file: str, force: bool) -> int:
             pass
     deadline = time.time() + 15
     killed = False
+    sleep_s = 0.01
     while time.time() < deadline and _alive(st["pid"]):
         if not killed and (not st.get("token") or time.time() + 10 >= deadline):
             killed = True
@@ -307,7 +324,8 @@ def stop(state_file: str, force: bool) -> int:
                 os.kill(st["pid"], signal.SIGTERM)
             except OSError:
                 break
-        time.sleep(0.1)
+        time.sleep(sleep_s)
+        sleep_s = min(0.08, sleep_s * 1.5)
     try:
         os.remove(state_file)
     except OSError:

@@ -28,15 +28,17 @@ def find_helper(explicit: Optional[str] = None, auto_build: bool = False) -> Opt
         if c and os.path.isfile(c) and os.access(c, os.X_OK):
             return os.path.abspath(c)
     if auto_build and os.path.isfile(os.path.join(ebpf_dir, "go.mod")):
-        go = shutil.which("go") or os.path.expanduser("~/sdk/go/bin/go")
-        if os.path.isfile(go) and os.access(go, os.X_OK):
-            try:
-                os.makedirs(os.path.dirname(checkout_bin), exist_ok=True)
-                subprocess.run([go, "build", "-o", checkout_bin, "./cmd/" + HELPER_NAME], cwd=ebpf_dir, check=True, timeout=60)
-                if os.path.isfile(checkout_bin) and os.access(checkout_bin, os.X_OK):
-                    return os.path.abspath(checkout_bin)
-            except Exception:
-                pass
+        sdk_go = os.path.expanduser("~/sdk/go/bin/go")
+        go_candidates = [sdk_go, "/usr/local/go/bin/go", shutil.which("go")]
+        for go in go_candidates:
+            if go and os.path.isfile(go) and os.access(go, os.X_OK):
+                try:
+                    os.makedirs(os.path.dirname(checkout_bin), exist_ok=True)
+                    subprocess.run([go, "build", "-o", checkout_bin, "./cmd/" + HELPER_NAME], cwd=ebpf_dir, check=True, timeout=60)
+                    if os.path.isfile(checkout_bin) and os.access(checkout_bin, os.X_OK):
+                        return os.path.abspath(checkout_bin)
+                except Exception:
+                    continue
     return None
 
 

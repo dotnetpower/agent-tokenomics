@@ -169,3 +169,39 @@ func TestBrotliAndZstdResponses(t *testing.T) {
 		}
 	}
 }
+
+func BenchmarkChunkedSSE(b *testing.B) {
+	reqBytes := []byte(request("/v1/chat/completions", reqBody))
+	respHead := []byte("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n")
+	chunkUnit := []byte("40\r\n" + strings.Repeat("x", 64) + "\r\n")
+	endChunk := []byte("0\r\n\r\n")
+	now := time.Now()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		a := New(func(Exchange) {}, time.Second)
+		a.Feed(1, "bench", 1, DirWrite, reqBytes, now)
+		a.Feed(1, "bench", 1, DirRead, respHead, now)
+		for j := 0; j < 200; j++ {
+			a.Feed(1, "bench", 1, DirRead, chunkUnit, now)
+		}
+		a.Feed(1, "bench", 1, DirRead, endChunk, now)
+	}
+}
+
+func BenchmarkZstdExchange(b *testing.B) {
+	reqBytes := []byte(request("/v1/chat/completions", reqBody))
+	body := `{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":100,"completion_tokens":20}}`
+	var zsBuf bytes.Buffer
+	zw, _ := zstd.NewWriter(&zsBuf)
+	_, _ = zw.Write([]byte(body))
+	_ = zw.Close()
+	rawResp := []byte(fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Encoding: zstd\r\nContent-Length: %d\r\n\r\n%s", zsBuf.Len(), zsBuf.String()))
+	now := time.Now()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		a := New(func(Exchange) {}, time.Second)
+		a.Feed(1, "bench", 1, DirWrite, reqBytes, now)
+		a.Feed(1, "bench", 1, DirRead, rawResp, now)
+	}
+}
+

@@ -25,6 +25,7 @@ const (
 
 	maxBuf      = 8 << 20
 	maxDecoded  = 16 << 20
+	maxConns    = 4096
 	connStaleAt = 5 * time.Minute
 )
 
@@ -49,18 +50,24 @@ type key struct {
 }
 
 type conn struct {
-	comm      string
-	wbuf      []byte
-	rbuf      []byte
-	reading   bool
-	bad       bool
-	h2        *h2conn
-	wDamaged  bool // request bytes were truncated by the capture limit
-	rDamaged  bool
-	reqAt     time.Time
-	firstResp time.Time
-	lastRead  time.Time
-	lastAt    time.Time
+	comm        string
+	wbuf        []byte
+	rbuf        []byte
+	reading     bool
+	bad         bool
+	h2          *h2conn
+	wDamaged    bool // request bytes were truncated by the capture limit
+	rDamaged    bool
+	rHeadParsed bool
+	rHeadEnd    int
+	rNoBody     bool
+	rChunked    bool
+	rChunkPos   int
+	rContentLen int
+	reqAt       time.Time
+	firstResp   time.Time
+	lastRead    time.Time
+	lastAt      time.Time
 }
 
 // Stats counts what the assembler did with the traffic it saw.
@@ -95,6 +102,15 @@ func (a *Assembler) Feed(pid uint32, comm string, ssl uint64, dir int, data []by
 	k := key{pid, ssl}
 	c := a.conns[k]
 	if c == nil {
+		if len(a.conns) >= maxConns {
+			a.Sweep(now)
+			if len(a.conns) >= maxConns {
+				for ok := range a.conns {
+					delete(a.conns, ok)
+					break
+				}
+			}
+		}
 		c = &conn{comm: comm}
 		a.conns[k] = c
 	}
@@ -163,7 +179,7 @@ func (a *Assembler) Feed(pid uint32, comm string, ssl uint64, dir int, data []by
 		return
 	}
 	c.rbuf = append(c.rbuf, data...)
-	if responseComplete(c.rbuf) {
+	if connResponseComplete(c) {
 		a.flush(k, c)
 	}
 }
@@ -219,6 +235,7 @@ func (a *Assembler) flush(k key, c *conn) {
 	wDamaged, rDamaged := c.wDamaged, c.rDamaged
 	c.wbuf, c.rbuf, c.reading = nil, nil, false
 	c.wDamaged, c.rDamaged = false, false
+	c.rHeadParsed, c.rHeadEnd, c.rNoBody, c.rChunked, c.rChunkPos, c.rContentLen = false, 0, false, false, 0, -1
 	if a.OnDone != nil {
 		defer a.OnDone(k.pid, k.ssl)
 	}
@@ -279,26 +296,49 @@ type header struct {
 
 func (h header) get(name string) string { return h.fields[name] }
 
-// splitMessage separates the head from the (possibly partial) body.
+var crlfcrlf = []byte("\r\n\r\n")
+var crlfBytes = []byte("\r\n")
+
+// splitMessage separates the head from the (possibly partial) body without allocating a slice of lines.
 func splitMessage(b []byte) (header, []byte, bool) {
-	i := bytes.Index(b, []byte("\r\n\r\n"))
+	i := bytes.Index(b, crlfcrlf)
 	if i < 0 {
 		return header{}, nil, false
 	}
-	lines := strings.Split(string(b[:i]), "\r\n")
-	h := header{start: lines[0], fields: map[string]string{}}
-	for _, ln := range lines[1:] {
-		j := strings.IndexByte(ln, ':')
+	head := b[:i]
+	firstEnd := bytes.Index(head, crlfBytes)
+	var startLine string
+	var rest []byte
+	if firstEnd < 0 {
+		startLine = string(head)
+	} else {
+		startLine = string(head[:firstEnd])
+		rest = head[firstEnd+2:]
+	}
+	h := header{start: startLine, fields: make(map[string]string, 4)}
+	for len(rest) > 0 {
+		var ln []byte
+		if next := bytes.Index(rest, crlfBytes); next >= 0 {
+			ln = rest[:next]
+			rest = rest[next+2:]
+		} else {
+			ln = rest
+			rest = nil
+		}
+		j := bytes.IndexByte(ln, ':')
 		if j <= 0 {
 			continue
 		}
-		name := strings.ToLower(strings.TrimSpace(ln[:j]))
-		val := strings.TrimSpace(ln[j+1:])
+		rawName := bytes.TrimSpace(ln[:j])
+		if len(rawName) != 4 && len(rawName) != 12 && len(rawName) != 14 && len(rawName) != 16 && len(rawName) != 17 {
+			continue
+		}
+		name := strings.ToLower(string(rawName))
 		switch name {
 		case "host":
-			h.fields[name] = val
+			h.fields[name] = string(bytes.TrimSpace(ln[j+1:]))
 		case "content-length", "transfer-encoding", "content-encoding", "content-type":
-			h.fields[name] = strings.ToLower(val)
+			h.fields[name] = strings.ToLower(string(bytes.TrimSpace(ln[j+1:])))
 		}
 	}
 	return h, b[i+4:], true
@@ -351,7 +391,11 @@ func Plausible(method, path string, body []byte) bool {
 	if !strings.EqualFold(method, "POST") {
 		return false
 	}
-	head := bytes.TrimLeft(body, " \t\r\n")
+	sample := body
+	if len(sample) > 512 {
+		sample = sample[:512]
+	}
+	head := bytes.TrimLeft(sample, " \t\r\n")
 	if len(head) < 8 || head[0] != '{' {
 		return false
 	}
@@ -365,7 +409,74 @@ func Plausible(method, path string, body []byte) bool {
 	if excludedPath.MatchString(p) {
 		return false
 	}
-	return plausibleKeys.Match(body)
+	if len(body) <= 81920 {
+		return plausibleKeys.Match(body)
+	}
+	return plausibleKeys.Match(body[:65536]) || plausibleKeys.Match(body[len(body)-16384:])
+}
+
+func connResponseComplete(c *conn) bool {
+	if !c.rHeadParsed {
+		h, body, ok := splitMessage(c.rbuf)
+		if !ok {
+			return false
+		}
+		c.rHeadParsed = true
+		c.rHeadEnd = len(c.rbuf) - len(body)
+		code := statusCode(h.start)
+		if code == 204 || code == 304 || (code >= 100 && code < 200) {
+			c.rNoBody = true
+			return true
+		}
+		if strings.Contains(h.get("transfer-encoding"), "chunked") {
+			c.rChunked = true
+		} else if cl := h.get("content-length"); cl != "" {
+			if n, err := strconv.Atoi(cl); err == nil && n >= 0 {
+				c.rContentLen = n
+			} else {
+				c.rContentLen = -1
+			}
+		} else {
+			c.rContentLen = -1
+		}
+	}
+	if c.rNoBody {
+		return true
+	}
+	body := c.rbuf[c.rHeadEnd:]
+	if c.rChunked {
+		for {
+			rem := body[c.rChunkPos:]
+			i := bytes.Index(rem, crlfBytes)
+			if i < 0 {
+				return false
+			}
+			sizeSlice := rem[:i]
+			if j := bytes.IndexByte(sizeSlice, ';'); j >= 0 {
+				sizeSlice = sizeSlice[:j]
+			}
+			n, err := strconv.ParseInt(string(bytes.TrimSpace(sizeSlice)), 16, 64)
+			if err != nil || n < 0 {
+				return false
+			}
+			if n == 0 {
+				afterZero := rem[i+2:]
+				if bytes.HasPrefix(afterZero, crlfBytes) {
+					return true
+				}
+				return bytes.Index(afterZero, crlfcrlf) >= 0
+			}
+			need := int64(i) + 2 + n + 2
+			if int64(len(rem)) < need {
+				return false
+			}
+			c.rChunkPos += int(need)
+		}
+	}
+	if c.rContentLen >= 0 {
+		return len(body) >= c.rContentLen
+	}
+	return false
 }
 
 // responseComplete reports whether the buffered bytes hold one full message.
@@ -387,6 +498,8 @@ func responseComplete(b []byte) bool {
 	}
 	return false // close-delimited: wait for idle / next request
 }
+
+var sharedZstdDec, _ = zstd.NewReader(nil, zstd.WithDecoderConcurrency(0), zstd.WithDecoderMaxMemory(uint64(maxDecoded)))
 
 // decodeBody returns the decoded body and whether the framing says it is complete.
 func decodeBody(h header, body []byte) ([]byte, bool) {
@@ -412,15 +525,20 @@ func decodeBody(h header, body []byte) ([]byte, bool) {
 // decodeEncoded applies a content-encoding; ok is false when the encoding cannot be decoded.
 func decodeEncoded(body []byte, enc string) ([]byte, bool) {
 	switch strings.TrimSpace(enc) {
+	case "", "identity":
+		return body, true
 	case "gzip", "x-gzip":
 		r, err := gzip.NewReader(bytes.NewReader(body))
 		if err != nil {
 			return nil, false
 		}
 		out, _ := io.ReadAll(io.LimitReader(r, maxDecoded))
+		_ = r.Close()
 		return out, true
 	case "deflate":
-		out, _ := io.ReadAll(io.LimitReader(flate.NewReader(bytes.NewReader(body)), maxDecoded))
+		fr := flate.NewReader(bytes.NewReader(body))
+		out, _ := io.ReadAll(io.LimitReader(fr, maxDecoded))
+		_ = fr.Close()
 		return out, true
 	case "br":
 		out, err := io.ReadAll(io.LimitReader(brotli.NewReader(bytes.NewReader(body)), maxDecoded))
@@ -429,6 +547,15 @@ func decodeEncoded(body []byte, enc string) ([]byte, bool) {
 		}
 		return out, true
 	case "zstd":
+		if sharedZstdDec != nil {
+			out, err := sharedZstdDec.DecodeAll(body, make([]byte, 0, len(body)*2))
+			if err == nil {
+				if len(out) > maxDecoded {
+					out = out[:maxDecoded]
+				}
+				return out, true
+			}
+		}
 		zr, err := zstd.NewReader(bytes.NewReader(body))
 		if err != nil {
 			return nil, false
@@ -439,25 +566,23 @@ func decodeEncoded(body []byte, enc string) ([]byte, bool) {
 			return nil, false
 		}
 		return out, true
-	case "", "identity":
-		return body, true
 	}
 	return nil, false
 }
 
 // dechunk decodes chunked transfer encoding; done is true once the last chunk was seen.
 func dechunk(b []byte) ([]byte, bool) {
-	var out []byte
+	out := make([]byte, 0, len(b))
 	for {
-		i := bytes.Index(b, []byte("\r\n"))
+		i := bytes.Index(b, crlfBytes)
 		if i < 0 {
 			return out, false
 		}
-		sizeText := string(b[:i])
-		if j := strings.IndexByte(sizeText, ';'); j >= 0 {
-			sizeText = sizeText[:j]
+		sizeSlice := b[:i]
+		if j := bytes.IndexByte(sizeSlice, ';'); j >= 0 {
+			sizeSlice = sizeSlice[:j]
 		}
-		n, err := strconv.ParseInt(strings.TrimSpace(sizeText), 16, 64)
+		n, err := strconv.ParseInt(string(bytes.TrimSpace(sizeSlice)), 16, 64)
 		if err != nil || n < 0 {
 			return out, false
 		}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import statistics
 from collections import Counter, defaultdict
+from functools import lru_cache
 from typing import Optional
 
 from .model import KINDS
@@ -18,17 +19,38 @@ LINKS = {
 
 
 def _in(rec: dict) -> int:
-    u = rec.get("usage") or {}
-    return u.get("input_total") if u.get("input_total") is not None else rec.get("est_input", 0)
+    u = rec.get("usage")
+    if isinstance(u, dict) and u.get("input_total") is not None:
+        return int(u["input_total"])
+    return int(rec.get("est_input") or 0)
 
 
-def group_requests(records: list, gap_s: float = 5.0) -> list:
+def _ts(rec: dict) -> float:
+    v = rec.get("ts")
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
+
+
+def _sorted_records(records: list) -> list:
+    n = len(records)
+    if n <= 1:
+        return list(records)
+    prev = _ts(records[0])
+    for i in range(1, n):
+        cur = _ts(records[i])
+        if cur < prev:
+            return sorted(records, key=_ts)
+        prev = cur
+    return records
+
+
+def group_requests(records: list, gap_s: float = 5.0, *, _pre_sorted: bool = False) -> list:
     """Group calls into user turns: a new turn starts after a quiet gap or when an entry step repeats with a new input."""
     groups: list = []
     last_end: Optional[float] = None
     seen_step: dict = {}
-    for r in sorted(records, key=lambda r: r.get("ts", 0)):
-        start = r.get("ts", 0)
+    ordered = records if _pre_sorted else _sorted_records(records)
+    for r in ordered:
+        start = _ts(r)
         end = start + (r.get("latency_ms") or 0) / 1000.0
         step_key = (r.get("sysfp"), r.get("model"))
         conv = r.get("conv")
@@ -50,8 +72,8 @@ def group_requests(records: list, gap_s: float = 5.0) -> list:
 def _infer_history_deltas(turns: list) -> dict:
     """For legacy records where a JSON user payload was not yet split, infer per-call history tokens from cross-turn deltas."""
     has_explicit_history = any(
-        s.get("kind") in ("history_user", "history_assistant") and s.get("tokens", 0) > 0
-        for g in turns for r in g for s in r.get("segments", [])
+        s.get("kind") in ("history_user", "history_assistant") and (s.get("tokens") or 0) > 0
+        for g in turns for r in g for s in (r.get("segments") or ())
     )
     if has_explicit_history or len(turns) < 2:
         return {}
@@ -59,7 +81,7 @@ def _infer_history_deltas(turns: list) -> dict:
     for r in turns[0]:
         sk = (r.get("sysfp"), r.get("model"))
         if r.get("sysfp") and sk not in base_user:
-            u_tok = sum(s.get("tokens", 0) for s in r.get("segments", []) if s.get("kind") in ("user_prompt", "raw_prompt"))
+            u_tok = sum((s.get("tokens") or 0) for s in (r.get("segments") or ()) if s.get("kind") in ("user_prompt", "raw_prompt"))
             base_user[sk] = u_tok
     if not base_user:
         return {}
@@ -69,7 +91,7 @@ def _infer_history_deltas(turns: list) -> dict:
         call_deltas = []
         for r in g:
             sk = (r.get("sysfp"), r.get("model"))
-            u_tok = sum(s.get("tokens", 0) for s in r.get("segments", []) if s.get("kind") in ("user_prompt", "raw_prompt"))
+            u_tok = sum((s.get("tokens") or 0) for s in (r.get("segments") or ()) if s.get("kind") in ("user_prompt", "raw_prompt"))
             if sk in base_user and u_tok > base_user[sk]:
                 d = u_tok - base_user[sk]
                 call_deltas.append((id(r), d, u_tok))
@@ -83,23 +105,35 @@ def _infer_history_deltas(turns: list) -> dict:
     return inferred
 
 
-def kind_breakdown(records: list, gap_s: float = 5.0) -> dict:
+def kind_breakdown(
+    records: list,
+    gap_s: float = 5.0,
+    *,
+    _turns: Optional[list] = None,
+    _inferred: Optional[dict] = None,
+) -> dict:
     """Sum input tokens by segment kind plus the unattributed residual."""
-    totals: Counter = Counter()
+    totals: dict = defaultdict(int)
     reported_total = 0
-    turns = group_requests(records, gap_s)
-    inferred = _infer_history_deltas(turns)
+    turns = _turns if _turns is not None else group_requests(records, gap_s)
+    inferred = _inferred if _inferred is not None else _infer_history_deltas(turns)
     for r in records:
-        for s in r.get("segments", []):
-            totals[s["kind"]] += s["tokens"]
-        inf = inferred.get(id(r), 0)
-        if inf > 0 and totals["user_prompt"] >= inf:
+        u_call = 0
+        for s in r.get("segments") or ():
+            k = s.get("kind", "other")
+            tok = int(s.get("tokens") or 0)
+            totals[k] += tok
+            if k in ("user_prompt", "raw_prompt"):
+                u_call += tok
+        inf = inferred.get(id(r), 0) if inferred else 0
+        if inf > 0 and u_call >= inf and totals["user_prompt"] >= inf:
             totals["user_prompt"] -= inf
             totals["history_user"] += inf
-        if r.get("residual") is not None:
-            totals["residual"] += r["residual"]
+        res = r.get("residual")
+        if res is not None:
+            totals["residual"] += int(res)
         reported_total += _in(r)
-    return {"totals": dict(totals), "input_total": reported_total}
+    return {"totals": {k: v for k, v in totals.items() if v != 0}, "input_total": reported_total}
 
 
 def step_map(records: list) -> list:
@@ -111,7 +145,7 @@ def step_map(records: list) -> list:
         s["input"] += _in(r)
         s["label"] = s["label"] or r.get("sys_label")
         s["model"] = s["model"] or r.get("model")
-        fixed = sum(x["tokens"] for x in r.get("segments", []) if x["kind"] in ("system", "tool_def", "response_schema"))
+        fixed = sum((x.get("tokens") or 0) for x in (r.get("segments") or ()) if x.get("kind") in ("system", "tool_def", "response_schema"))
         s["fixed"].append(fixed)
     rows = []
     for key, s in steps.items():
@@ -126,27 +160,81 @@ def step_map(records: list) -> list:
 def _called_tools(records: list) -> set:
     names: set = set()
     for r in records:
-        names.update(r.get("tool_calls", []))
-        for s in r.get("segments", []):
-            if s["kind"] == "tool_call" and s.get("name"):
+        names.update(r.get("tool_calls") or ())
+        for s in r.get("segments") or ():
+            if s.get("kind") == "tool_call" and s.get("name"):
                 names.add(s["name"])
     return names
 
 
-def findings(records: list, min_cacheable: int = 1024, gap_s: float = 5.0) -> list:
+def findings(
+    records: list,
+    min_cacheable: int = 1024,
+    gap_s: float = 5.0,
+    *,
+    _turns: Optional[list] = None,
+    _bd: Optional[dict] = None,
+) -> list:
     out: list = []
     if not records:
         return out
-    total_in = sum(_in(r) for r in records) or 1
+    ordered = _sorted_records(records)
+    total_in = sum(_in(r) for r in ordered) or 1
 
-    # Tool definitions that are never called.
-    called = _called_tools(records)
+    # Single-pass scan for called tools, static blocks, cache stats, short prompts, failures, and system hashes.
+    called = _called_tools(ordered)
     unused: Counter = Counter()
-    for r in records:
-        defined = set(r["tools_defined"]) if "tools_defined" in r else None
-        for s in r.get("segments", []):
-            if s["kind"] == "tool_def" and s.get("name") and (defined is None or s["name"] in defined) and s["name"] not in called:
-                unused[s["name"]] += s["tokens"]
+    seen: dict = {}
+    cached = 0
+    have_cache = False
+    short = 0
+    failed_count = 0
+    failed_tokens = 0
+    sys_per_call: list = []
+    by_conv: dict = defaultdict(list)
+    q: Counter = Counter()
+    neg_poor = 0
+
+    for r in ordered:
+        r_in = _in(r)
+        if r_in < min_cacheable:
+            short += 1
+        u = r.get("usage") or {}
+        if "cached" in u:
+            have_cache = True
+            cached += u.get("cached") or 0
+        if r.get("error") or ((r.get("status") or 200) >= 400):
+            failed_count += 1
+            failed_tokens += r_in
+        qual = r.get("quality")
+        if qual:
+            q[qual] += 1
+            if qual == "poor" and (r.get("residual") or 0) < 0:
+                neg_poor += 1
+        by_conv[r.get("conv") or "_default"].append(r)
+
+        defined = set(r["tools_defined"]) if "tools_defined" in r and r["tools_defined"] is not None else None
+        sys_tok_sum = 0
+        sys_hashes: list = []
+        for s in r.get("segments") or ():
+            k = s.get("kind")
+            tok = int(s.get("tokens") or 0)
+            nm = s.get("name")
+            sh = s.get("hash")
+            if k == "tool_def" and nm and (defined is None or nm in defined) and nm not in called:
+                unused[nm] += tok
+            if k in ("system", "tool_def", "response_schema", "other") and tok >= 200 and sh:
+                e = seen.get(sh)
+                if e is None:
+                    seen[sh] = {"tokens": tok, "name": nm, "kind": k, "calls": 1}
+                else:
+                    e["calls"] += 1
+            if k == "system":
+                sys_tok_sum += tok
+                sys_hashes.append(sh or "")
+        if sys_hashes:
+            sys_per_call.append((sys_tok_sum, "|".join(sys_hashes)))
+
     if unused:
         paid = sum(unused.values())
         names = ", ".join(n for n, _ in unused.most_common(5))
@@ -156,13 +244,6 @@ def findings(records: list, min_cacheable: int = 1024, gap_s: float = 5.0) -> li
             "see": LINKS["isolate"],
         })
 
-    # Repeated static blocks (same hash, large).
-    seen: dict = {}
-    for r in records:
-        for s in r.get("segments", []):
-            if s["kind"] in ("system", "tool_def", "response_schema", "other") and s["tokens"] >= 200 and s.get("hash"):
-                e = seen.setdefault(s["hash"], {"tokens": s["tokens"], "name": s.get("name"), "kind": s["kind"], "calls": 0})
-                e["calls"] += 1
     rep = [e for e in seen.values() if e["calls"] >= 2]
     rep.sort(key=lambda e: -e["tokens"] * e["calls"])
     for e in rep[:3]:
@@ -174,47 +255,34 @@ def findings(records: list, min_cacheable: int = 1024, gap_s: float = 5.0) -> li
                 "see": LINKS["isolate"],
             })
 
-    # Tool results dominating input.
-    bd = kind_breakdown(records)["totals"]
+    bd = (_bd if _bd is not None else kind_breakdown(ordered, gap_s, _turns=_turns))["totals"]
     tr = bd.get("tool_result", 0)
     if tr / total_in > 0.4:
         out.append({"severity": "high", "text": f"Tool results are {100 * tr / total_in:.1f}% of input tokens: truncate, paginate, or search before reading", "see": LINKS["improve"]})
 
-    # Cache hit rate.
-    cached = sum((r.get("usage") or {}).get("cached", 0) for r in records)
-    have_cache = any("cached" in (r.get("usage") or {}) for r in records)
-    if have_cache and len(records) > 3:
+    if have_cache and len(ordered) > 3:
         pct = 100 * cached / total_in
         if pct < 30:
             out.append({"severity": "medium", "text": f"Cache hit rate is {pct:.1f}%. Check that stable content comes first and the history is append-only", "see": LINKS["concepts"]})
 
-    # Short prompts that cannot be cached.
-    short = sum(1 for r in records if _in(r) < min_cacheable)
-    if short and short == len(records):
+    if short and short == len(ordered):
         out.append({"severity": "low", "text": f"All calls are under {min_cacheable} tokens; provider prompt caching typically needs a longer prefix (check your provider's minimum)", "see": LINKS["concepts"]})
 
-    # Fan-out.
-    groups = group_requests(records, gap_s)
+    groups = _turns if _turns is not None else group_requests(ordered, gap_s, _pre_sorted=True)
     sizes = [len(g) for g in groups]
     if sizes and statistics.median(sizes) >= 4:
         out.append({"severity": "medium", "text": f"Each user request triggers a median of {statistics.median(sizes):g} LLM calls (max {max(sizes)}): look for steps to skip, merge, or run on a smaller model", "see": LINKS["improve"]})
 
-    # Failure loops: repeated identical tool calls in one conversation or repeated HTTP/provider errors.
-    failed = [r for r in records if r.get("error") or ((r.get("status") or 200) >= 400)]
-    if len(failed) >= 2:
-        f_tokens = sum(_in(r) for r in failed)
+    if failed_count >= 2:
         out.append({
-            "severity": "high" if len(failed) >= 3 or f_tokens / total_in >= 0.15 else "medium",
-            "text": f"{len(failed)} call(s) failed with an error or HTTP >= 400 ({f_tokens:,} input tokens): check retry/backoff or failure-loop guards",
+            "severity": "high" if failed_count >= 3 or failed_tokens / total_in >= 0.15 else "medium",
+            "text": f"{failed_count} call(s) failed with an error or HTTP >= 400 ({failed_tokens:,} input tokens): check retry/backoff or failure-loop guards",
             "see": LINKS["improve"],
         })
-    by_conv: dict = defaultdict(list)
-    for r in sorted(records, key=lambda x: x.get("ts", 0)):
-        by_conv[r.get("conv") or "_default"].append(r)
     for conv_recs in by_conv.values():
         streak_name, streak_len, streak_tokens = None, 0, 0
         for r in conv_recs:
-            tcs = r.get("tool_calls") or [s.get("name") for s in r.get("segments", []) if s["kind"] == "tool_call" and s.get("name")]
+            tcs = r.get("tool_calls") or [s.get("name") for s in (r.get("segments") or ()) if s.get("kind") == "tool_call" and s.get("name")]
             sig = ",".join(str(x) for x in tcs if x) if tcs else None
             if sig and sig == streak_name:
                 streak_len += 1
@@ -234,12 +302,6 @@ def findings(records: list, min_cacheable: int = 1024, gap_s: float = 5.0) -> li
                 "see": LINKS["improve"],
             })
 
-    # Prompt cache-busting: system prompt token count stays nearly constant while its hash changes on almost every call.
-    sys_per_call = []
-    for r in records:
-        sys_segs = [s for s in r.get("segments", []) if s["kind"] == "system"]
-        if sys_segs:
-            sys_per_call.append((sum(s["tokens"] for s in sys_segs), "|".join(s.get("hash", "") for s in sys_segs)))
     if len(sys_per_call) >= 3:
         toks = [t for t, _ in sys_per_call]
         hashes = {h for _, h in sys_per_call if h}
@@ -251,12 +313,11 @@ def findings(records: list, min_cacheable: int = 1024, gap_s: float = 5.0) -> li
                 "see": LINKS["improve"],
             })
 
-    # Context growth curve: history + tool_result tokens growing rapidly across turns of a conversation.
-    for conv_key, conv_recs in by_conv.items():
+    for conv_recs in by_conv.values():
         if len(conv_recs) < 4:
             continue
         hist_series = [
-            sum(s["tokens"] for s in r.get("segments", []) if s["kind"] in ("history_user", "history_assistant", "tool_result"))
+            sum((s.get("tokens") or 0) for s in (r.get("segments") or ()) if s.get("kind") in ("history_user", "history_assistant", "tool_result"))
             for r in conv_recs
         ]
         non_zero = [h for h in hist_series if h > 0]
@@ -269,15 +330,12 @@ def findings(records: list, min_cacheable: int = 1024, gap_s: float = 5.0) -> li
             })
             break
 
-    # Attribution quality.
-    q = Counter(r.get("quality") for r in records if r.get("quality"))
     poor = q.get("poor", 0)
     if poor and poor / max(1, sum(q.values())) > 0.3:
-        neg = sum(1 for r in records if (r.get("residual") or 0) < 0 and r.get("quality") == "poor")
         note = (
             " (reported input is smaller than counted segments on some calls; servers such as Ollama report only newly evaluated "
             "tokens in prompt_eval_count and omit KV-cached prefix tokens)"
-            if neg
+            if neg_poor
             else " (opaque content, hidden tokens, or an approximate tokenizer)"
         )
         out.append({"severity": "info", "text": f"{poor} of {sum(q.values())} calls have a large unexplained residual{note}; treat the breakdown as approximate", "see": LINKS["diagnose"]})
@@ -302,38 +360,75 @@ def endpoint_map(records: list) -> list:
     return sorted(out, key=lambda g: -g["input"])
 
 
+@lru_cache(maxsize=512)
+def _join_tuple(items: tuple) -> str:
+    return "\n\n".join(items)
+
+
+def _join_texts(items: list) -> str:
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    return _join_tuple(tuple(items))
+
+
 def _call_detail(rec: dict, call_index: int, session_id: str, turn_index: int, inferred_hist: int = 0) -> dict:
-    segs = rec.get("segments", [])
-    by_k: Counter = Counter()
-    texts: dict = defaultdict(list)
+    segs = rec.get("segments") or ()
+    sys_tok = hist_u = hist_a = user_tok = td_tok = tc_tok = tr_tok = rs_tok = other_tok = 0
+    t_sys: list = []
+    t_hist: list = []
+    t_user: list = []
+    t_tools: list = []
+    t_other: list = []
+
     for s in segs:
         k = s.get("kind", "other")
-        by_k[k] += s.get("tokens", 0)
+        tok = int(s.get("tokens") or 0)
         txt = s.get("text")
-        if txt:
-            label = f"[{s['name']}]\n{txt}" if s.get("name") else txt
-            if k == "system":
-                texts["system"].append(label)
-            elif k in ("history_user", "history_assistant"):
-                role_tag = "Assistant" if k == "history_assistant" else "User/Context"
-                texts["history"].append(f"({role_tag}) {label}")
-            elif k in ("user_prompt", "raw_prompt"):
-                texts["user_prompt"].append(label)
-            elif k in ("tool_def", "tool_call", "tool_result", "response_schema"):
-                texts["tools_schema"].append(f"({k}) {label}")
-            else:
-                texts["other"].append(label)
+        nm = s.get("name")
+        if k == "system":
+            sys_tok += tok
+            if txt:
+                t_sys.append(f"[{nm}]\n{txt}" if nm else txt)
+        elif k == "history_user":
+            hist_u += tok
+            if txt:
+                t_hist.append(f"(User/Context) [{nm}]\n{txt}" if nm else f"(User/Context) {txt}")
+        elif k == "history_assistant":
+            hist_a += tok
+            if txt:
+                t_hist.append(f"(Assistant) [{nm}]\n{txt}" if nm else f"(Assistant) {txt}")
+        elif k in ("user_prompt", "raw_prompt"):
+            user_tok += tok
+            if txt:
+                t_user.append(f"[{nm}]\n{txt}" if nm else txt)
+        elif k == "tool_def":
+            td_tok += tok
+            if txt:
+                t_tools.append(f"(tool_def) [{nm}]\n{txt}" if nm else f"(tool_def) {txt}")
+        elif k == "tool_call":
+            tc_tok += tok
+            if txt:
+                t_tools.append(f"(tool_call) [{nm}]\n{txt}" if nm else f"(tool_call) {txt}")
+        elif k == "tool_result":
+            tr_tok += tok
+            if txt:
+                t_tools.append(f"(tool_result) [{nm}]\n{txt}" if nm else f"(tool_result) {txt}")
+        elif k == "response_schema":
+            rs_tok += tok
+            if txt:
+                t_tools.append(f"(response_schema) [{nm}]\n{txt}" if nm else f"(response_schema) {txt}")
+        else:
+            other_tok += tok
+            if txt:
+                t_other.append(f"[{nm}]\n{txt}" if nm else txt)
 
-    sys_tok = by_k["system"]
-    hist_u = by_k["history_user"]
-    hist_a = by_k["history_assistant"]
-    user_tok = by_k["user_prompt"] + by_k["raw_prompt"]
     if inferred_hist > 0 and hist_u + hist_a == 0 and user_tok > inferred_hist:
         hist_u = inferred_hist
         user_tok -= inferred_hist
     hist_tok = hist_u + hist_a
-    tools_tok = by_k["tool_def"] + by_k["tool_call"] + by_k["tool_result"] + by_k["response_schema"]
-    other_tok = by_k["other"] + by_k["attachment"]
+    tools_tok = td_tok + tc_tok + tr_tok + rs_tok
     u = rec.get("usage") or {}
     in_total = _in(rec)
     cached = u.get("cached") or 0
@@ -345,7 +440,7 @@ def _call_detail(rec: dict, call_index: int, session_id: str, turn_index: int, i
         "id": rec.get("id") or f"c{call_index}",
         "session": session_id,
         "turn": turn_index,
-        "ts": rec.get("ts", 0.0),
+        "ts": _ts(rec),
         "model": rec.get("model") or rec.get("provider") or "-",
         "provider": rec.get("provider") or "-",
         "step": (rec.get("sysfp") or "")[:6] or "-",
@@ -356,10 +451,10 @@ def _call_detail(rec: dict, call_index: int, session_id: str, turn_index: int, i
         "history_assistant": hist_a,
         "user_prompt": user_tok,
         "tools_schema": tools_tok,
-        "tool_def": by_k["tool_def"],
-        "tool_call": by_k["tool_call"],
-        "tool_result": by_k["tool_result"],
-        "response_schema": by_k["response_schema"],
+        "tool_def": td_tok,
+        "tool_call": tc_tok,
+        "tool_result": tr_tok,
+        "response_schema": rs_tok,
         "other": other_tok,
         "residual": rec.get("residual") or 0,
         "input_total": in_total,
@@ -369,22 +464,28 @@ def _call_detail(rec: dict, call_index: int, session_id: str, turn_index: int, i
         "status": rec.get("status"),
         "inferred_history": inferred_hist > 0,
         "prompts": {
-            "system": "\n\n".join(texts["system"]),
-            "history": "\n\n".join(texts["history"]),
-            "user_prompt": "\n\n".join(texts["user_prompt"]),
-            "tools_schema": "\n\n".join(texts["tools_schema"]),
-            "other": "\n\n".join(texts["other"]),
+            "system": _join_texts(t_sys),
+            "history": _join_texts(t_hist),
+            "user_prompt": _join_texts(t_user),
+            "tools_schema": _join_texts(t_tools),
+            "other": _join_texts(t_other),
             "response": resp_text,
         },
     }
 
 
-def session_turn_breakdown(records: list, gap_s: float = 5.0) -> dict:
+def session_turn_breakdown(
+    records: list,
+    gap_s: float = 5.0,
+    *,
+    _turns: Optional[list] = None,
+    _inferred: Optional[dict] = None,
+) -> dict:
     """Organize calls into Sessions -> Turns -> Calls with System / History / User Prompt / Tools breakdown and texts."""
     if not records:
         return {"sessions": [], "turns": [], "calls": []}
-    raw_turns = group_requests(records, gap_s)
-    inferred = _infer_history_deltas(raw_turns)
+    raw_turns = _turns if _turns is not None else group_requests(records, gap_s)
+    inferred = _inferred if _inferred is not None else _infer_history_deltas(raw_turns)
 
     # Group turns into sessions: turns belong to the same session when they share a conversation hash,
     # share pipeline steps with growing/continuing history, or run within the same continuous agent run.
@@ -396,7 +497,7 @@ def session_turn_breakdown(records: list, gap_s: float = 5.0) -> dict:
         cur_sysfps = {r.get("sysfp") for r in g if r.get("sysfp")}
         cur_convs = {r.get("conv") for r in g if r.get("conv")}
         cur_hist = sum(
-            sum(s.get("tokens", 0) for s in r.get("segments", []) if s.get("kind") in ("history_user", "history_assistant"))
+            sum((s.get("tokens") or 0) for s in (r.get("segments") or ()) if s.get("kind") in ("history_user", "history_assistant"))
             + inferred.get(id(r), 0)
             for r in g
         )
@@ -405,7 +506,6 @@ def session_turn_breakdown(records: list, gap_s: float = 5.0) -> dict:
         else:
             same_conv = bool(cur_convs & prev_convs)
             shared_pipeline = bool(cur_sysfps & prev_sysfps)
-            # If history reset to 0 after having history on the same pipeline, a new conversation started.
             history_reset = prev_had_history and cur_hist == 0 and not same_conv
             if (same_conv or shared_pipeline) and not history_reset:
                 session_groups[-1].append(g)
@@ -485,25 +585,28 @@ def session_turn_breakdown(records: list, gap_s: float = 5.0) -> dict:
 
 
 def summarize(records: list, gap_s: float = 5.0) -> dict:
-    bd = kind_breakdown(records, gap_s=gap_s)
-    inputs = [_in(r) for r in records]
-    first = records[0] if records else {}
-    stb = session_turn_breakdown(records, gap_s=gap_s)
+    ordered = _sorted_records(records)
+    turns = group_requests(ordered, gap_s, _pre_sorted=True)
+    inferred = _infer_history_deltas(turns)
+    bd = kind_breakdown(ordered, gap_s=gap_s, _turns=turns, _inferred=inferred)
+    inputs = [_in(r) for r in ordered]
+    first = ordered[0] if ordered else {}
+    stb = session_turn_breakdown(ordered, gap_s=gap_s, _turns=turns, _inferred=inferred)
     return {
-        "calls": len(records),
+        "calls": len(ordered),
         "input_total": bd["input_total"],
-        "output_total": sum((r.get("usage") or {}).get("output", 0) or 0 for r in records),
-        "cached_total": sum((r.get("usage") or {}).get("cached", 0) or 0 for r in records),
+        "output_total": sum((r.get("usage") or {}).get("output", 0) or 0 for r in ordered),
+        "cached_total": sum((r.get("usage") or {}).get("cached", 0) or 0 for r in ordered),
         "by_kind": bd["totals"],
-        "steps": step_map(records),
-        "endpoints": endpoint_map(records),
+        "steps": step_map(ordered),
+        "endpoints": endpoint_map(ordered),
         "sessions": stb["sessions"],
         "turns": stb["turns"],
         "call_details": stb["calls"],
-        "fan_out": [len(g) for g in group_requests(records, gap_s)],
+        "fan_out": [len(g) for g in turns],
         "first_call_input": _in(first) if first else 0,
         "median_input": int(statistics.median(inputs)) if inputs else 0,
-        "findings": findings(records, gap_s=gap_s),
+        "findings": findings(ordered, gap_s=gap_s, _turns=turns, _bd=bd),
         "kinds_order": list(KINDS) + ["residual"],
     }
 
@@ -517,15 +620,21 @@ def estimate_cost(records: list, prices: dict) -> dict:
     """
     total = 0.0
     missing: set = set()
+    if not isinstance(prices, dict):
+        return {"total": 0.0, "models_without_price": []}
     for r in records:
         u = r.get("usage") or {}
         p = prices.get(r.get("model") or "") or prices.get("default")
-        if not p or u.get("input_total") is None:
+        if not isinstance(p, dict) or u.get("input_total") is None:
             missing.add(r.get("model") or "?")
             continue
-        cached = u.get("cached") or 0
-        uncached = max(0, u["input_total"] - cached)
-        total += (uncached * p.get("input", 0) + cached * p.get("cached", p.get("input", 0)) + (u.get("output") or 0) * p.get("output", 0)) / 1_000_000
+        cached = max(0, int(u.get("cached") or 0))
+        uncached = max(0, int(u["input_total"]) - cached)
+        out_tok = max(0, int(u.get("output") or 0))
+        p_in = float(p.get("input") or 0.0)
+        p_cached = float(p.get("cached") if p.get("cached") is not None else p_in)
+        p_out = float(p.get("output") or 0.0)
+        total += (uncached * p_in + cached * p_cached + out_tok * p_out) / 1_000_000
     return {"total": total, "models_without_price": sorted(missing)}
 
 
@@ -541,17 +650,19 @@ def bootstrap_diff(a: list, b: list, n: int = 2000, seed: int = 0) -> Optional[t
     """Mean(b) - mean(a) with a 95% percentile bootstrap interval; None when a sample is empty."""
     import random
 
-    if not a or not b:
+    na, nb = len(a), len(b)
+    if not na or not nb or n <= 0:
         return None
     rng = random.Random(seed)
-    diffs = []
-    for _ in range(n):
-        ma = sum(rng.choice(a) for _ in a) / len(a)
-        mb = sum(rng.choice(b) for _ in b) / len(b)
-        diffs.append(mb - ma)
+    choices = rng.choices
+    inv_a = 1.0 / na
+    inv_b = 1.0 / nb
+    diffs = [sum(choices(b, k=nb)) * inv_b - sum(choices(a, k=na)) * inv_a for _ in range(n)]
     diffs.sort()
-    point = sum(b) / len(b) - sum(a) / len(a)
-    return point, diffs[int(0.025 * n)], diffs[int(0.975 * n) - 1]
+    point = sum(b) * inv_b - sum(a) * inv_a
+    lo_idx = min(n - 1, max(0, int(0.025 * n)))
+    hi_idx = min(n - 1, max(0, int(0.975 * n) - 1))
+    return point, diffs[lo_idx], diffs[hi_idx]
 
 
 def compare(before: list, after: list, gap_s: float = 5.0) -> dict:
@@ -579,15 +690,15 @@ def to_legacy(records: list, gap_s: float = 5.0) -> list:
     for gi, g in enumerate(group_requests(records, gap_s), 1):
         for r in g:
             u = r.get("usage") or {}
-            defs = [{"name": s.get("name") or "tool", "tokens": s["tokens"]} for s in r.get("segments", []) if s["kind"] == "tool_def"]
+            defs = [{"name": s.get("name") or "tool", "tokens": int(s.get("tokens") or 0)} for s in (r.get("segments") or ()) if s.get("kind") == "tool_def"]
             rows.append({
                 "session": r.get("conv") or r.get("run") or "s",
                 "turn": gi,
                 "model": r.get("model"),
-                "input_tokens": u.get("input_total", r.get("est_input", 0)),
-                "cached_input_tokens": u.get("cached", 0) or 0,
-                "output_tokens": u.get("output", r.get("output_est") or 0) or 0,
+                "input_tokens": int(u.get("input_total") if u.get("input_total") is not None else (r.get("est_input") or 0)),
+                "cached_input_tokens": int(u.get("cached") or 0),
+                "output_tokens": int(u.get("output") if u.get("output") is not None else (r.get("output_est") or 0)),
                 "tool_defs": defs,
-                "tool_calls": [{"name": n, "error": None, "output_tokens": 0} for n in r.get("tool_calls", [])],
+                "tool_calls": [{"name": n, "error": None, "output_tokens": 0} for n in (r.get("tool_calls") or ())],
             })
     return rows

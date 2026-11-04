@@ -30,6 +30,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any, Iterator, Optional
 from urllib.parse import unquote
 
@@ -37,6 +38,8 @@ from .parse.request import ANTHROPIC, COMPLETIONS, GEMINI, OPENAI_CHAT, OPENAI_R
 
 ACCEPT = 50
 CANDIDATE = 25
+_CGNAT_NET = ipaddress.ip_network("100.64.0.0/10")
+_HOST_SPLIT_RE = re.compile(r"[.\-_0-9]+")
 
 # ---- pre-filter (mirrored in the Node hook, the Go helper and the mitmproxy addon; see tests/vectors) --------------
 
@@ -50,6 +53,7 @@ EXCLUDED_PATH = re.compile(
 _PLAUSIBLE_KEYS = re.compile(r'"(?:messages|contents|chat_history)"\s*:\s*\[|"(?:prompt|input|inputs|preamble|message)"\s*:')
 
 
+@lru_cache(maxsize=1024)
 def normalize_path(path: str) -> str:
     p = (path or "").split("?", 1)[0].split("#", 1)[0]
     return p.rstrip("/") or "/"
@@ -57,14 +61,16 @@ def normalize_path(path: str) -> str:
 
 def plausible(method: str, path: str, body_text: str) -> bool:
     """Cheap test that decides whether a request body is worth sending to the detector at all."""
-    if (method or "").upper() != "POST":
+    if (method or "").upper() != "POST" or not body_text:
         return False
-    head = (body_text or "").lstrip()
+    head = body_text[:512].lstrip() if len(body_text) > 512 else body_text.lstrip()
     if len(head) < 8 or head[0] != "{":
         return False
     if EXCLUDED_PATH.search(normalize_path(path)):
         return False
-    return _PLAUSIBLE_KEYS.search(body_text) is not None
+    if len(body_text) <= 81_920:
+        return _PLAUSIBLE_KEYS.search(body_text) is not None
+    return _PLAUSIBLE_KEYS.search(body_text[:65_536]) is not None or _PLAUSIBLE_KEYS.search(body_text[-16_384:]) is not None
 
 
 # ---- host classification ------------------------------------------------------------------------------------------
@@ -116,52 +122,57 @@ class HostInfo:
     reasons: list = field(default_factory=list)
 
 
-def classify_host(host: str, port: int = 0) -> HostInfo:
+@lru_cache(maxsize=1024)
+def _classify_host_cached(host: str, port: int = 0) -> tuple[str, int, tuple[str, ...]]:
     h = (host or "").strip().strip("[]").lower().rstrip(".")
-    info = HostInfo()
+    if "%" in h:
+        h = h.split("%", 1)[0]
     if not h:
-        info.cls = "unknown"
-        return info
+        return "unknown", 0, ()
     for suffix, name in _PROVIDERS:
         if h == suffix or h.endswith("." + suffix):
-            info.cls, info.points = f"provider:{name}", 15
-            info.reasons.append(f"known provider domain ({name})")
+            reasons = [f"known provider domain ({name})"]
             if "privatelink" in h:
-                info.reasons.append("private endpoint")
-            return info
+                reasons.append("private endpoint")
+            return f"provider:{name}", 15, tuple(reasons)
     if _BEDROCK.match(h):
-        info.cls, info.points = "provider:aws_bedrock", 15
-        info.reasons.append("known provider domain (aws_bedrock)")
-        return info
+        return "provider:aws_bedrock", 15, ("known provider domain (aws_bedrock)",)
     try:
         ip = ipaddress.ip_address(h)
     except ValueError:
         ip = None
     if ip is not None:
         if ip.is_loopback:
-            info.cls = "loopback"
-        elif ip.is_private or ip.is_link_local or ip in ipaddress.ip_network("100.64.0.0/10"):
-            info.cls = "private-ip"
+            cls = "loopback"
+        elif ip.is_private or ip.is_link_local or (ip.version == 4 and ip in _CGNAT_NET):
+            cls = "private-ip"
         else:
-            info.cls = "public"
+            cls = "public"
     elif h == "localhost" or h.endswith(".localhost"):
-        info.cls = "loopback"
+        cls = "loopback"
     elif h.endswith(_PRIVATE_SUFFIXES) or ".privatelink." in h or h.startswith("privatelink.") or h == "host.docker.internal":
-        info.cls = "private-dns"
+        cls = "private-dns"
     elif "." not in h:
-        info.cls = "local-name"  # a bare service name (docker compose, Kubernetes, /etc/hosts)
+        cls = "local-name"  # a bare service name (docker compose, Kubernetes, /etc/hosts)
     else:
-        info.cls = "public"
-    if info.cls in ("loopback", "private-ip", "private-dns", "local-name"):
-        info.points += 5
-        info.reasons.append(f"non-public host ({info.cls})")
-    if ip is None and set(re.split(r"[.\-_0-9]+", h)) & _NAME_TOKENS:
-        info.points += 5
-        info.reasons.append("host name mentions an LLM server")
+        cls = "public"
+    points = 0
+    reasons: list[str] = []
+    if cls in ("loopback", "private-ip", "private-dns", "local-name"):
+        points += 5
+        reasons.append(f"non-public host ({cls})")
+    if ip is None and set(_HOST_SPLIT_RE.split(h)) & _NAME_TOKENS:
+        points += 5
+        reasons.append("host name mentions an LLM server")
     if port in _PORT_HINTS:
-        info.points += 5
-        info.reasons.append(f"conventional LLM server port ({port})")
-    return info
+        points += 5
+        reasons.append(f"conventional LLM server port ({port})")
+    return cls, points, tuple(reasons)
+
+
+def classify_host(host: str, port: int = 0) -> HostInfo:
+    cls, points, reasons = _classify_host_cached(host or "", int(port or 0))
+    return HostInfo(cls=cls, points=points, reasons=list(reasons))
 
 
 # ---- path hints ---------------------------------------------------------------------------------------------------
@@ -177,12 +188,13 @@ _PATH_HINTS = (
 )
 _MODEL_FROM_PATH = (
     re.compile(r"/deployments/([^/]+)/", re.I),  # Azure OpenAI
-    re.compile(r"/models/([^/:?]+)(?:[:/])", re.I),  # Gemini, Vertex
+    (re.compile(r"/models/([^/:?]+)(?:[:/])", re.I)),  # Gemini, Vertex
     re.compile(r"/model/([^/]+)/(?:converse|invoke)", re.I),  # Bedrock
 )
 _STREAM_PATH = re.compile(r":streamGenerateContent$|/converse-stream$|-with-response-stream$|/generate_stream$", re.I)
 
 
+@lru_cache(maxsize=1024)
 def path_hint(path: str) -> Optional[str]:
     p = normalize_path(path)
     for rx, api in _PATH_HINTS:
@@ -191,10 +203,12 @@ def path_hint(path: str) -> Optional[str]:
     return None
 
 
+@lru_cache(maxsize=1024)
 def model_from_path(path: str) -> Optional[str]:
     p = normalize_path(path)
+    target = p + "/"
     for rx in _MODEL_FROM_PATH:
-        m = rx.search(p + "/")
+        m = rx.search(target)
         if m:
             return unquote(m.group(1))
     return None
@@ -296,20 +310,22 @@ def _response_objects(text: str, sse: bool) -> Iterator[dict]:
         return
     n = 0
     if sse or raw.startswith(("data:", "event:")):
-        for block in re.split(r"\r?\n\r?\n", raw):
-            for line in block.splitlines():
-                if line.startswith("data:"):
-                    payload = line[5:].strip()
-                    if payload and payload != "[DONE]":
-                        try:
-                            o = json.loads(payload)
-                        except ValueError:
-                            continue
-                        if isinstance(o, dict):
-                            yield o
-                            n += 1
-                            if n >= 200:
-                                return
+        lines = raw.splitlines()
+        # Check the first 100 and last 100 lines first (where start/delta/usage events live)
+        scan_lines = lines if len(lines) <= 240 else (lines[:120] + lines[-120:])
+        for line in scan_lines:
+            if line.startswith("data:"):
+                payload = line[5:].strip()
+                if payload and payload != "[DONE]":
+                    try:
+                        o = json.loads(payload)
+                    except ValueError:
+                        continue
+                    if isinstance(o, dict):
+                        yield o
+                        n += 1
+                        if n >= 200:
+                            return
         return
     try:
         o = json.loads(raw)
@@ -396,16 +412,30 @@ class DetectConfig:
         return cls(_split_list(e.get("TOKPROF_LLM_HOSTS")), _split_list(e.get("TOKPROF_LLM_PATHS")), _split_list(e.get("TOKPROF_EXCLUDE_HOSTS")))
 
 
+@lru_cache(maxsize=256)
+def _parse_cidr(cidr: str):
+    try:
+        return ipaddress.ip_network(cidr, strict=False)
+    except ValueError:
+        return None
+
+
 def host_matches(patterns: list, host: str, port: int) -> bool:
+    if not patterns:
+        return False
     h = (host or "").lower().strip("[]")
+    if "%" in h:
+        h = h.split("%", 1)[0]
     for pat in patterns:
         p = pat.lower()
         if "/" in p:
-            try:
-                if ipaddress.ip_address(h) in ipaddress.ip_network(p, strict=False):
-                    return True
-            except ValueError:
-                pass
+            net = _parse_cidr(p)
+            if net is not None:
+                try:
+                    if ipaddress.ip_address(h) in net:
+                        return True
+                except ValueError:
+                    pass
             continue
         want_port = None
         if p.count(":") == 1 and p.rsplit(":", 1)[1].isdigit():
@@ -528,7 +558,8 @@ class Detector:
         with self._lock:
             if ev is None:
                 key = (host, port, normalize_path(path))
-                self.missed[key] = self.missed.get(key, 0) + 1
+                if len(self.missed) < 4096 or key in self.missed:
+                    self.missed[key] = self.missed.get(key, 0) + 1
                 return None
         v.evidence.append(ev)
         v.score += 40
@@ -540,6 +571,8 @@ class Detector:
         with self._lock:
             st = self.endpoints.get((host, port))
             if st is None:
+                if len(self.endpoints) >= 1024:
+                    self.endpoints.pop(next(iter(self.endpoints)), None)
                 st = self.endpoints[(host, port)] = EndpointStat(host, port, v.host_class)
             st.calls += 1
             st.apis[v.api] = st.apis.get(v.api, 0) + 1
@@ -549,6 +582,8 @@ class Detector:
             st.how.add(v.evidence[0] if v.evidence else "")
             if v.forced or any(e.startswith("response has") for e in v.evidence) or v.score >= 60:
                 st.confirmed = True
+                if len(self._known) >= 4096 and (host, port, np_) not in self._known:
+                    self._known.pop(next(iter(self._known)), None)
                 self._known[(host, port, np_)] = v.api
 
     # -- reporting --

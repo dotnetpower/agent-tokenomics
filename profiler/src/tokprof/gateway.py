@@ -8,6 +8,7 @@ client still gets its response (fail-open); upstream failures surface as 502 lik
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import os
 import re
@@ -15,6 +16,7 @@ import ssl
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable, Optional
 from urllib.parse import urlsplit
@@ -49,73 +51,104 @@ class Route:
         return cls(prefix=prefix.rstrip("/"), scheme=scheme, host=u.hostname or "", port=port, base_path=u.path.rstrip("/"))
 
 
+def _parse_content_length(cl: Optional[str]) -> Optional[int]:
+    if not cl:
+        return None
+    first = cl.split(",", 1)[0].strip()
+    if not first.isdigit():
+        return None
+    val = int(first)
+    return val if val >= 0 else None
+
+
 class BodyFramer:
-    """Tracks HTTP/1.1 body framing so we know when a response ends and can decode chunked data."""
+    """Tracks HTTP/1.1 body framing so we know when a response ends and can decode chunked data in O(N)."""
 
     def __init__(self, headers: dict, no_body: bool):
         te = headers.get("transfer-encoding", "").lower()
         self.chunked = "chunked" in te
-        cl = headers.get("content-length")
-        self.remaining = int(cl) if (cl and cl.isdigit() and not self.chunked) else None
+        cl_val = _parse_content_length(headers.get("content-length")) if not self.chunked else None
+        self.remaining = cl_val
         self.done = no_body or (self.remaining == 0)
-        self._buf = b""
+        self._buf = bytearray()
+        self._pos = 0
         self._chunk_left = 0
         self._state = "size"
 
     def feed(self, data: bytes) -> bytes:
-        if self.done:
+        if self.done or not data:
             return b""
         if self.chunked:
             return self._feed_chunked(data)
         if self.remaining is not None:
+            if len(data) <= self.remaining:
+                self.remaining -= len(data)
+                if self.remaining == 0:
+                    self.done = True
+                return data
             take = data[: self.remaining]
-            self.remaining -= len(take)
-            if self.remaining == 0:
-                self.done = True
+            self.remaining = 0
+            self.done = True
             return take
         return data
 
     def _feed_chunked(self, data: bytes) -> bytes:
-        self._buf += data
-        out = b""
-        while True:
-            if self._state == "size":
-                i = self._buf.find(b"\r\n")
+        self._buf.extend(data)
+        buf = self._buf
+        pos = self._pos
+        n = len(buf)
+        out = bytearray()
+        while pos < n:
+            state = self._state
+            if state == "size":
+                i = buf.find(b"\r\n", pos)
                 if i < 0:
                     break
-                line = self._buf[:i].split(b";", 1)[0].strip()
-                self._buf = self._buf[i + 2:]
+                semi = buf.find(b";", pos, i)
+                line = bytes(buf[pos : (semi if semi >= 0 else i)]).strip()
+                pos = i + 2
                 try:
                     size = int(line, 16)
                 except ValueError:
                     self.done = True
                     break
+                if size < 0:
+                    self.done = True
+                    break
                 if size == 0:
                     self._state = "trailer"
                 else:
-                    self._chunk_left, self._state = size, "data"
-            elif self._state == "data":
-                if not self._buf:
+                    self._chunk_left = size
+                    self._state = "data"
+            elif state == "data":
+                avail = n - pos
+                if avail <= 0:
                     break
-                take = self._buf[: self._chunk_left]
-                out += take
-                self._buf = self._buf[len(take):]
-                self._chunk_left -= len(take)
+                take_n = self._chunk_left if avail >= self._chunk_left else avail
+                out.extend(buf[pos : pos + take_n])
+                pos += take_n
+                self._chunk_left -= take_n
                 if self._chunk_left == 0:
                     self._state = "crlf"
-            elif self._state == "crlf":
-                if len(self._buf) < 2:
+            elif state == "crlf":
+                if n - pos < 2:
                     break
-                self._buf, self._state = self._buf[2:], "size"
-            elif self._state == "trailer":
-                i = self._buf.find(b"\r\n")
+                pos += 2
+                self._state = "size"
+            elif state == "trailer":
+                i = buf.find(b"\r\n", pos)
                 if i < 0:
                     break
-                line, self._buf = self._buf[:i], self._buf[i + 2:]
-                if line == b"":
+                line_len = i - pos
+                pos = i + 2
+                if line_len == 0:
                     self.done = True
                     break
-        return out
+        if pos > 65536 or pos == len(buf):
+            del buf[:pos]
+            pos = 0
+        self._pos = pos
+        return bytes(out)
 
 
 def _parse_head(raw: bytes):
@@ -138,19 +171,17 @@ def _hdict(headers: list) -> dict:
     return d
 
 
-async def _read_head(reader: asyncio.StreamReader, limit: int = MAX_HEAD):
-    """Read until the blank line that ends an HTTP head; return (head, leftover body bytes).
-
-    Implemented with plain reads because StreamReader.readuntil() occasionally missed a wake-up on
-    Python 3.9 (response data arrived, the waiter never resumed).
-    """
+async def _read_head(reader: asyncio.StreamReader, limit: int = MAX_HEAD, timeout: Optional[float] = None):
+    """Read until the blank line that ends an HTTP head; return (head, leftover body bytes)."""
     buf = bytearray()
     while True:
-        chunk = await reader.read(65536)
+        read_coro = reader.read(65536)
+        chunk = await (asyncio.wait_for(read_coro, timeout=timeout) if timeout else read_coro)
         if not chunk:
             raise asyncio.IncompleteReadError(bytes(buf), None)
-        buf += chunk
-        i = buf.find(b"\r\n\r\n")
+        search_from = max(0, len(buf) - 3)
+        buf.extend(chunk)
+        i = buf.find(b"\r\n\r\n", search_from)
         if i >= 0:
             return bytes(buf[:i]), bytes(buf[i + 4:])
         if len(buf) > limit:
@@ -159,19 +190,19 @@ async def _read_head(reader: asyncio.StreamReader, limit: int = MAX_HEAD):
 
 async def _read_request_body(reader: asyncio.StreamReader, hd: dict, prefix: bytes = b"") -> bytes:
     if "chunked" in hd.get("transfer-encoding", "").lower():
-        framer, out = BodyFramer(hd, False), b""
+        framer, out = BodyFramer(hd, False), bytearray()
         data = prefix
         while True:
             if data:
-                out += framer.feed(data)
+                out.extend(framer.feed(data))
                 if len(out) > MAX_BODY:
                     raise ValueError("request body too large")
             if framer.done:
-                return out
+                return bytes(out)
             data = await reader.read(65536)
             if not data:
-                return out
-    n = int(hd.get("content-length", "0") or 0)
+                return bytes(out)
+    n = _parse_content_length(hd.get("content-length")) or 0
     if n > MAX_BODY:
         raise ValueError("request body too large")
     if len(prefix) >= n:
@@ -220,6 +251,7 @@ class Gateway:
         self._server: Optional[asyncio.AbstractServer] = None
         self._warned: set = set()
         self._ctx = make_upstream_context()
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="tokprof-rec")
 
     # ---- lifecycle -------------------------------------------------
     async def start(self) -> int:
@@ -231,16 +263,17 @@ class Gateway:
         if self._server:
             self._server.close()
             await self._server.wait_closed()
+        self._executor.shutdown(wait=False)
 
-    async def _open_upstream(self, scheme: str, host: str, port: int):
+    async def _open_upstream(self, scheme: str, host: str, port: int, timeout: float = 30.0):
         if scheme != "https":
-            return await asyncio.open_connection(host, port)
+            return await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
         proxy = proxy_for(host)
         if proxy:
             loop = asyncio.get_running_loop()
             sock = await loop.run_in_executor(None, connect_via_proxy, proxy[0], proxy[1], host, port, proxy[2])
-            return await asyncio.open_connection(sock=sock, ssl=self._ctx, server_hostname=host)
-        return await asyncio.open_connection(host, port, ssl=self._ctx, server_hostname=host)
+            return await asyncio.wait_for(asyncio.open_connection(sock=sock, ssl=self._ctx, server_hostname=host), timeout=timeout)
+        return await asyncio.wait_for(asyncio.open_connection(host, port, ssl=self._ctx, server_hostname=host), timeout=timeout)
 
     # ---- routing ---------------------------------------------------
     def _resolve(self, path: str):
@@ -269,7 +302,15 @@ class Gateway:
         """Wait for in-flight requests (including their recording) to finish."""
         deadline = time.time() + timeout
         while self._active > 0 and time.time() < deadline:
-            await asyncio.sleep(0.02)
+            await asyncio.sleep(0.005)
+
+    def _valid_token(self, provided: Optional[str]) -> bool:
+        if not self.ingest_token or not provided:
+            return False
+        try:
+            return hmac.compare_digest(provided.encode("utf-8"), self.ingest_token.encode("utf-8"))
+        except Exception:
+            return False
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         self._active += 1
@@ -278,7 +319,7 @@ class Gateway:
             self._tasks.add(task)
         try:
             await self._serve(reader, writer)
-        except (ConnectionError, asyncio.IncompleteReadError, asyncio.LimitOverrunError) as exc:
+        except (ConnectionError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, asyncio.TimeoutError) as exc:
             self.stats["dropped"] = self.stats.get("dropped", 0) + 1
             self._warn_once("drop:" + type(exc).__name__, f"client connection ended early ({type(exc).__name__})")
         except Exception as exc:  # never let one connection take the gateway down
@@ -289,6 +330,7 @@ class Gateway:
                 self._tasks.discard(task)
             try:
                 writer.close()
+                await asyncio.wait_for(writer.wait_closed(), timeout=0.2)
             except Exception:
                 pass
 
@@ -301,7 +343,7 @@ class Gateway:
         await writer.drain()
 
     async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        raw, leftover = await _read_head(reader)
+        raw, leftover = await _read_head(reader, timeout=60.0)
         first, headers = _parse_head(raw)
         method, target, _ = (first.split(" ") + ["", "", ""])[:3]
         hd = _hdict(headers)
@@ -311,7 +353,7 @@ class Gateway:
             age = None if self._last_request is None else time.time() - self._last_request
             return await self._respond(writer, 200, "OK", json.dumps({"ok": True, "last_request_age_s": age, **self.stats}).encode(), "application/json")
         if target.startswith("/__tokprof/shutdown") and method == "POST":
-            if self.ingest_token is None or hd.get("x-tokprof-token") != self.ingest_token:
+            if not self._valid_token(hd.get("x-tokprof-token")):
                 return await self._respond(writer, 403, "Forbidden", b"tokprof: bad shutdown token")
             if self.on_shutdown is not None:
                 self.on_shutdown()
@@ -436,7 +478,7 @@ class Gateway:
                 response = sse.finish() if sse is not None else parse_response_body(parsed.provider, text, False)
                 if not self._decide(verdict, host, port, upath, text, is_sse):
                     return
-                await asyncio.get_running_loop().run_in_executor(None, self._record, parsed, response, target, status, t0, ttfb, err, None, verdict, host, port)
+                await asyncio.get_running_loop().run_in_executor(self._executor, self._record, parsed, response, target, status, t0, ttfb, err, None, verdict, host, port)
             except Exception as exc:
                 self.stats["record_errors"] += 1
                 self._warn_once("rec:" + type(exc).__name__, f"could not record a call ({exc!r}); traffic is unaffected")
@@ -458,11 +500,11 @@ class Gateway:
 
     async def _ingest(self, writer, hd: dict, body: bytes) -> None:
         """Accept a raw exchange captured by an in-process hook and record it like proxied traffic."""
-        if self.ingest_token is None or hd.get("x-tokprof-token") != self.ingest_token:
+        if not self._valid_token(hd.get("x-tokprof-token")):
             return await self._respond(writer, 403, "Forbidden", b"tokprof: bad ingest token")
         try:
             msg = json.loads(body)
-            await asyncio.get_running_loop().run_in_executor(None, self.ingest_message, msg)
+            await asyncio.get_running_loop().run_in_executor(self._executor, self.ingest_message, msg)
         except Exception as exc:
             self.stats["record_errors"] += 1
             self._warn_once("ingest:" + type(exc).__name__, f"could not record an ingested call ({exc!r})")
@@ -482,10 +524,14 @@ class Gateway:
                 m = re.match(r"^(\[[^\]]+\]|[^:]+):(\d+)$", host)  # host:port or [v6]:port from a Host header
                 if m:
                     host, port = m.group(1), int(m.group(2))
-            port = int(port or 0)
+            try:
+                port = int(port or 0)
+            except (TypeError, ValueError):
+                port = 0
             if host in ("127.0.0.1", "localhost") and self.port and port == self.port:
                 return  # already proxied through this gateway
-            req_obj = json.loads(msg.get("request") or "null")
+            raw_req = msg.get("request")
+            req_obj = raw_req if isinstance(raw_req, dict) else json.loads(raw_req or "null")
             verdict = self.detector.inspect(method=str(msg.get("method") or "POST"), host=host, port=port, path=path, body=req_obj)
             if not (verdict.llm or verdict.candidate) or not isinstance(req_obj, dict):
                 return

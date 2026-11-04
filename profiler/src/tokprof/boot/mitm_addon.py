@@ -76,9 +76,45 @@ def _plausible(method, path, text):
 
 class TokprofAddon:
     def __init__(self):
+        import queue
+
         self.port = 0
         self.token = ""
         self._warned = False
+        self._q = queue.Queue(maxsize=2000)
+        self._worker_started = False
+        self._lock = threading.Lock()
+
+    def _ensure_worker(self):
+        if not self._worker_started:
+            with self._lock:
+                if not self._worker_started:
+                    self._worker_started = True
+                    threading.Thread(target=self._worker_loop, name="tokprof-mitm-worker", daemon=True).start()
+
+    def _worker_loop(self):
+        conn = None
+        while True:
+            payload = self._q.get()
+            try:
+                body_bytes = json.dumps(payload).encode("utf-8")
+                headers = {"Content-Type": "application/json", "X-Tokprof-Token": self.token, "Connection": "keep-alive"}
+                for _attempt in range(2):
+                    try:
+                        if conn is None:
+                            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+                        conn.request("POST", "/__tokprof/ingest", body=body_bytes, headers=headers)
+                        conn.getresponse().read()
+                        break
+                    except Exception:
+                        try:
+                            if conn is not None:
+                                conn.close()
+                        except Exception:
+                            pass
+                        conn = None
+            except Exception as exc:
+                self._warn("could not deliver a captured call: %r" % (exc,))
 
     def load(self, loader):
         loader.add_option("tokprof_port", int, 0, "Port of the tokprof gateway ingest endpoint")
@@ -143,19 +179,13 @@ class TokprofAddon:
                 "ttfb_ms": ttfb,
                 "latency_ms": int((time.time() - t0) * 1000),
             }
-            threading.Thread(target=self._post, args=(payload,), daemon=True).start()
+            self._ensure_worker()
+            try:
+                self._q.put_nowait(payload)
+            except Exception:
+                pass
         except Exception as exc:
             self._warn("could not capture a call: %r" % (exc,))
-
-    def _post(self, payload):
-        try:
-            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
-            conn.request("POST", "/__tokprof/ingest", body=json.dumps(payload).encode("utf-8"),
-                         headers={"Content-Type": "application/json", "X-Tokprof-Token": self.token})
-            conn.getresponse().read()
-            conn.close()
-        except Exception as exc:
-            self._warn("could not deliver a captured call: %r" % (exc,))
 
 
 addons = [TokprofAddon()]

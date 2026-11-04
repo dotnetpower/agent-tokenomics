@@ -105,11 +105,15 @@ def hook_env(base_env: dict, port: int, token: str) -> dict:
     """Environment that loads the in-process hooks (Python sitecustomize, Node --require) in child processes."""
     env = {"TOKPROF_PORT": str(port), "TOKPROF_TOKEN": token}
     existing = base_env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = BOOT_DIR + (os.pathsep + existing if existing else "")
+    parts = [p for p in existing.split(os.pathsep) if p and os.path.abspath(p) != os.path.abspath(BOOT_DIR)]
+    env["PYTHONPATH"] = os.pathsep.join([BOOT_DIR] + parts)
     preload = os.path.join(BOOT_DIR, "node_preload.js")
     node_opts = base_env.get("NODE_OPTIONS", "")
     flag = '--require "%s"' % preload.replace("\\", "/")
-    env["NODE_OPTIONS"] = (node_opts + " " + flag).strip()
+    if flag not in node_opts:
+        env["NODE_OPTIONS"] = (node_opts + " " + flag).strip()
+    else:
+        env["NODE_OPTIONS"] = node_opts
     return env
 
 
@@ -176,7 +180,9 @@ def run_profiled(
         code = 127
     finally:
         # Let in-flight responses finish before stopping the gateway.
-        time.sleep(0.2)
+        deadline = time.time() + 0.15
+        while gw._active > 0 and time.time() < deadline:
+            time.sleep(0.01)
         thread.stop()
         writer.close()
     if not quiet:

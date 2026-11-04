@@ -16,12 +16,15 @@ const (
 	h2Data         = 0x0
 	h2Headers      = 0x1
 	h2RstStream    = 0x3
+	h2GoAway       = 0x7
 	h2Continuation = 0x9
 
 	flagEndStream  = 0x1
 	flagEndHeaders = 0x4
 	flagPadded     = 0x8
 	flagPriority   = 0x20
+
+	maxH2Streams = 512
 )
 
 type h2stream struct {
@@ -105,6 +108,12 @@ func (h *h2conn) feed(dir int, data []byte, now time.Time) []*h2stream {
 func (h *h2conn) stream(id uint32, now time.Time) *h2stream {
 	s := h.streams[id]
 	if s == nil {
+		if len(h.streams) >= maxH2Streams {
+			for k := range h.streams {
+				delete(h.streams, k)
+				break
+			}
+		}
 		s = &h2stream{t0: now}
 		h.streams[id] = s
 	}

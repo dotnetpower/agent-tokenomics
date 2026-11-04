@@ -20,11 +20,13 @@ const PLAUSIBLE_KEYS = /"(?:messages|contents|chat_history)"\s*:\s*\[|"(?:prompt
 function plausible(method, path, text) {
   try {
     if (String(method).toUpperCase() !== "POST" || !text) return false;
-    const head = text.replace(/^\s+/, "");
+    const sampleHead = text.length > 512 ? text.slice(0, 512) : text;
+    const head = sampleHead.replace(/^\s+/, "");
     if (head.length < 8 || head[0] !== "{") return false;
     const p = (path.split("?")[0].split("#")[0].replace(/\/+$/, "")) || "/";
     if (EXCLUDED_PATH.test(p)) return false;
-    return PLAUSIBLE_KEYS.test(text);
+    if (text.length <= 81920) return PLAUSIBLE_KEYS.test(text);
+    return PLAUSIBLE_KEYS.test(text.slice(0, 65536)) || PLAUSIBLE_KEYS.test(text.slice(-16384));
   } catch (_) { return false; }
 }
 if (typeof module !== "undefined" && module.exports) module.exports.plausible = plausible;
@@ -56,17 +58,18 @@ function send(payload) {
 function decodeBody(buf, encoding) {
   const enc = String(encoding || "").toLowerCase().trim();
   if (!enc || enc === "identity") return buf.toString("utf8");
+  const zopts = { maxOutputLength: CAP };
   try {
-    if (enc.includes("gzip")) return zlib.gunzipSync(buf).toString("utf8");
+    if (enc.includes("gzip")) return zlib.gunzipSync(buf, zopts).toString("utf8");
     if (enc.includes("deflate")) {
-      try { return zlib.inflateSync(buf).toString("utf8"); }
-      catch (_) { return zlib.inflateRawSync(buf).toString("utf8"); }
+      try { return zlib.inflateSync(buf, zopts).toString("utf8"); }
+      catch (_) { return zlib.inflateRawSync(buf, zopts).toString("utf8"); }
     }
     if (enc.includes("br") && typeof zlib.brotliDecompressSync === "function") {
-      return zlib.brotliDecompressSync(buf).toString("utf8");
+      return zlib.brotliDecompressSync(buf, zopts).toString("utf8");
     }
     if (enc.includes("zstd") && typeof zlib.zstdDecompressSync === "function") {
-      return zlib.zstdDecompressSync(buf).toString("utf8");
+      return zlib.zstdDecompressSync(buf, zopts).toString("utf8");
     }
   } catch (_) { /* fall through: keep the request even if response decompression fails */ }
   return "";

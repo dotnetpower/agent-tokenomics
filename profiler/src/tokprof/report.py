@@ -8,9 +8,15 @@ import io
 import json
 import os
 import sys
+from functools import lru_cache
 from typing import Optional
 
 from .analyze import estimate_cost, summarize
+
+
+@lru_cache(maxsize=512)
+def _escape_cached(text: str) -> str:
+    return html.escape(text)
 
 LABELS = {
     "system": "System prompt",
@@ -68,13 +74,21 @@ def _bar(share: float, width: int = 24) -> str:
     return "#" * n + "." * (width - n)
 
 
+_UTF8_CACHE: dict = {}
+
+
 def _utf8_ok() -> bool:
     enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+    cached = _UTF8_CACHE.get(enc)
+    if cached is not None:
+        return cached
     try:
         "╭─╮█░—".encode(enc)
-        return True
+        res = True
     except Exception:
-        return False
+        res = False
+    _UTF8_CACHE[enc] = res
+    return res
 
 
 def _ubo_bar(share: float, width: int = 24, unicode_ok: Optional[bool] = None) -> str:
@@ -83,7 +97,8 @@ def _ubo_bar(share: float, width: int = 24, unicode_ok: Optional[bool] = None) -
     if not unicode_ok:
         return _bar(share, width)
     blocks = " ▏▎▍▌▋▊▉█"
-    total_eighths = int(round(max(0.0, min(1.0, share)) * width * 8))
+    clamped = 0.0 if share < 0.0 else (1.0 if share > 1.0 else share)
+    total_eighths = int(round(clamped * width * 8))
     full, rem = divmod(total_eighths, 8)
     bar = "█" * full + (blocks[rem] if rem and full < width else "")
     return bar + "░" * max(0, width - len(bar))
@@ -119,16 +134,19 @@ def render_compare(result: dict) -> str:
 def _preview_line(text: str, limit: int = 120) -> str:
     if not text:
         return ""
-    clean = " ".join(text.strip().split())
-    return (clean[:limit - 1] + "…") if len(clean) > limit else clean
+    sample = text[: limit * 3] if len(text) > limit * 3 else text
+    clean = " ".join(sample.strip().split())
+    return (clean[:limit - 1] + "…") if (len(clean) > limit or len(text) > len(sample)) else clean
 
 
 def _indent_block(text: str, prefix: str = "      ", max_lines: int = 12, max_chars: int = 900) -> list:
     if not text:
         return []
-    clipped = text.strip()
+    orig_len = len(text)
     truncated = False
-    if len(clipped) > max_chars:
+    work = text[: max_chars + 256] if orig_len > max_chars + 256 else text
+    clipped = work.strip()
+    if len(clipped) > max_chars or orig_len > len(work):
         clipped = clipped[:max_chars]
         truncated = True
     raw_lines = clipped.splitlines()
@@ -137,14 +155,14 @@ def _indent_block(text: str, prefix: str = "      ", max_lines: int = 12, max_ch
         truncated = True
     out = [f"{prefix}{ln}" for ln in raw_lines]
     if truncated:
-        out.append(f"{prefix}... ({len(text):,} chars total; see HTML dashboard or --full-prompts for full text)")
+        out.append(f"{prefix}... ({orig_len:,} chars total; see HTML dashboard or --full-prompts for full text)")
     return out
 
 
-def render_text(records: list, gap_s: float = 5.0, *, full_prompts: bool = False) -> str:
+def render_text(records: list, gap_s: float = 5.0, *, full_prompts: bool = False, _summary: Optional[dict] = None) -> str:
     if not records:
         return "No LLM calls recorded."
-    s = summarize(records, gap_s)
+    s = _summary if _summary is not None else summarize(records, gap_s)
     total = s["input_total"] or 1
     sessions = s.get("sessions", [])
     turns = s.get("turns", [])
@@ -258,10 +276,10 @@ def render_text(records: list, gap_s: float = 5.0, *, full_prompts: bool = False
     return "\n".join(lines)
 
 
-def render_markdown(records: list, gap_s: float = 5.0) -> str:
+def render_markdown(records: list, gap_s: float = 5.0, *, _summary: Optional[dict] = None) -> str:
     if not records:
         return "No LLM calls recorded."
-    s = summarize(records, gap_s)
+    s = _summary if _summary is not None else summarize(records, gap_s)
     total = s["input_total"] or 1
     md = [
         "# Token profile", "",
@@ -286,8 +304,27 @@ def render_markdown(records: list, gap_s: float = 5.0) -> str:
     return "\n".join(md)
 
 
-def render_json(records: list, gap_s: float = 5.0) -> str:
-    return json.dumps(summarize(records, gap_s), indent=2)
+def render_json(records: list, gap_s: float = 5.0, *, _summary: Optional[dict] = None) -> str:
+    return json.dumps(_summary if _summary is not None else summarize(records, gap_s), indent=2)
+
+
+@lru_cache(maxsize=512)
+def _clean_csv_text(val: Optional[str]) -> str:
+    if not val:
+        return ""
+    if "\x00" in val or "\r" in val:
+        return val.replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+    return val
+
+
+@lru_cache(maxsize=512)
+def _csv_quote_text(val: Optional[str]) -> str:
+    s = _clean_csv_text(val)
+    if not s:
+        return ""
+    if "," in s or '"' in s or "\n" in s:
+        return '"' + s.replace('"', '""') + '"'
+    return s
 
 
 CSV_COLUMNS = (
@@ -328,127 +365,45 @@ CSV_COLUMNS = (
 )
 
 
-def render_csv(records: list, gap_s: float = 5.0) -> str:
+def render_csv(records: list, gap_s: float = 5.0, *, _summary: Optional[dict] = None) -> str:
     """Render per-session, per-turn, and per-call breakdowns and prompt contents as CSV."""
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=CSV_COLUMNS, lineterminator="\n")
-    writer.writeheader()
+    header = ",".join(CSV_COLUMNS)
     if not records:
-        return buf.getvalue().rstrip("\n")
-    s = summarize(records, gap_s)
-    for sess in s.get("sessions", []):
-        writer.writerow({
-            "row_type": "session",
-            "session": sess["session"],
-            "turn": "",
-            "call_index": "",
-            "call_id": "",
-            "timestamp": "",
-            "model": ",".join(sess.get("models") or []),
-            "provider": "",
-            "step": "",
-            "step_label": "",
-            "turns_count": sess["turns_count"],
-            "calls_count": sess["calls_count"],
-            "input_total": sess["input_total"],
-            "cached_tokens": sess["cached_total"],
-            "output_tokens": sess["output_total"],
-            "system_tokens": sess["system"],
-            "history_tokens": sess["history"],
-            "history_user_tokens": "",
-            "history_assistant_tokens": "",
-            "user_prompt_tokens": sess["user_prompt"],
-            "tools_schema_tokens": sess["tools_schema"],
-            "tool_def_tokens": "",
-            "tool_call_tokens": "",
-            "tool_result_tokens": "",
-            "response_schema_tokens": "",
-            "other_tokens": sess["other"],
-            "residual_tokens": sess["residual"],
-            "latency_ms": "",
-            "status": "",
-            "system_prompt": "",
-            "conversation_history": "",
-            "user_prompt": "",
-            "tools_schema": "",
-            "assistant_response": "",
-        })
-    for t in s.get("turns", []):
-        writer.writerow({
-            "row_type": "turn",
-            "session": t["session"],
-            "turn": t["turn"],
-            "call_index": "",
-            "call_id": "",
-            "timestamp": "",
-            "model": ",".join(t.get("models") or []),
-            "provider": "",
-            "step": "",
-            "step_label": "",
-            "turns_count": 1,
-            "calls_count": t["calls_count"],
-            "input_total": t["input_total"],
-            "cached_tokens": t["cached_total"],
-            "output_tokens": t["output_total"],
-            "system_tokens": t["system"],
-            "history_tokens": t["history"],
-            "history_user_tokens": t["history_user"],
-            "history_assistant_tokens": t["history_assistant"],
-            "user_prompt_tokens": t["user_prompt"],
-            "tools_schema_tokens": t["tools_schema"],
-            "tool_def_tokens": "",
-            "tool_call_tokens": "",
-            "tool_result_tokens": "",
-            "response_schema_tokens": "",
-            "other_tokens": t["other"],
-            "residual_tokens": t["residual"],
-            "latency_ms": t["latency_ms"],
-            "status": "",
-            "system_prompt": "",
-            "conversation_history": t.get("history_text") or "",
-            "user_prompt": t.get("user_text") or "",
-            "tools_schema": "",
-            "assistant_response": t.get("response_text") or "",
-        })
-    for cd in s.get("call_details", []):
+        return header
+    s = _summary if _summary is not None else summarize(records, gap_s)
+    lines: list = [header]
+    q = _csv_quote_text
+    for sess in s.get("sessions", ()):
+        models_q = q(",".join(sess.get("models") or ()))
+        lines.append(
+            f"session,{q(sess['session'])},,,,,{models_q},,,,"
+            f"{sess['turns_count']},{sess['calls_count']},{sess['input_total']},{sess['cached_total']},{sess['output_total']},"
+            f"{sess['system']},{sess['history']},,,{sess['user_prompt']},{sess['tools_schema']},,,,"
+            f",{sess['other']},{sess['residual']},,,,,,,"
+        )
+    for t in s.get("turns", ()):
+        models_q = q(",".join(t.get("models") or ()))
+        lines.append(
+            f"turn,{q(t['session'])},{t['turn']},,,,{models_q},,,,"
+            f"1,{t['calls_count']},{t['input_total']},{t['cached_total']},{t['output_total']},"
+            f"{t['system']},{t['history']},{t['history_user']},{t['history_assistant']},{t['user_prompt']},{t['tools_schema']},,,,"
+            f",{t['other']},{t['residual']},{t['latency_ms']},,"
+            f",{q(t.get('history_text'))},{q(t.get('user_text'))},,{q(t.get('response_text'))}"
+        )
+    for cd in s.get("call_details", ()):
         p = cd.get("prompts") or {}
-        writer.writerow({
-            "row_type": "call",
-            "session": cd["session"],
-            "turn": cd["turn"],
-            "call_index": cd["index"],
-            "call_id": cd["id"],
-            "timestamp": cd["ts"],
-            "model": cd["model"],
-            "provider": cd["provider"],
-            "step": cd["step"],
-            "step_label": cd.get("step_label") or "",
-            "turns_count": "",
-            "calls_count": 1,
-            "input_total": cd["input_total"],
-            "cached_tokens": cd["cached"],
-            "output_tokens": cd["output"],
-            "system_tokens": cd["system"],
-            "history_tokens": cd["history"],
-            "history_user_tokens": cd["history_user"],
-            "history_assistant_tokens": cd["history_assistant"],
-            "user_prompt_tokens": cd["user_prompt"],
-            "tools_schema_tokens": cd["tools_schema"],
-            "tool_def_tokens": cd["tool_def"],
-            "tool_call_tokens": cd["tool_call"],
-            "tool_result_tokens": cd["tool_result"],
-            "response_schema_tokens": cd["response_schema"],
-            "other_tokens": cd["other"],
-            "residual_tokens": cd["residual"],
-            "latency_ms": cd["latency_ms"] if cd.get("latency_ms") is not None else "",
-            "status": cd["status"] if cd.get("status") is not None else "",
-            "system_prompt": p.get("system") or "",
-            "conversation_history": p.get("history") or "",
-            "user_prompt": p.get("user_prompt") or "",
-            "tools_schema": p.get("tools_schema") or "",
-            "assistant_response": p.get("response") or "",
-        })
-    return buf.getvalue().rstrip("\n")
+        lat = cd["latency_ms"] if cd.get("latency_ms") is not None else ""
+        st = cd["status"] if cd.get("status") is not None else ""
+        lines.append(
+            f"call,{q(cd['session'])},{cd['turn']},{cd['index']},{q(cd['id'])},{cd['ts']},"
+            f"{q(cd['model'])},{q(cd['provider'])},{q(cd['step'])},{q(cd.get('step_label') or '')},,"
+            f"1,{cd['input_total']},{cd['cached']},{cd['output']},"
+            f"{cd['system']},{cd['history']},{cd['history_user']},{cd['history_assistant']},{cd['user_prompt']},{cd['tools_schema']},"
+            f"{cd['tool_def']},{cd['tool_call']},{cd['tool_result']},{cd['response_schema']},{cd['other']},{cd['residual']},"
+            f"{lat},{st},"
+            f"{q(p.get('system'))},{q(p.get('history'))},{q(p.get('user_prompt'))},{q(p.get('tools_schema'))},{q(p.get('response'))}"
+        )
+    return "\n".join(lines)
 
 
 def render_pretty(
@@ -458,6 +413,7 @@ def render_pretty(
     color: Optional[bool] = None,
     prices: Optional[dict] = None,
     full_prompts: bool = False,
+    _summary: Optional[dict] = None,
 ) -> str:
     """Rich Unicode terminal report with box-drawing cards, smooth bars, per-session/per-turn breakdown, and prompt contents."""
     if not records:
@@ -468,7 +424,7 @@ def render_pretty(
     def c(tag: str, text: str) -> str:
         return f"{ANSI_COLORS.get(tag, '')}{text}{ANSI_COLORS['reset']}" if color else text
 
-    s = summarize(records, gap_s)
+    s = _summary if _summary is not None else summarize(records, gap_s)
     total = s["input_total"] or 1
     cache_pct = 100.0 * s["cached_total"] / total if s["input_total"] else 0.0
     fo = s["fan_out"]
@@ -646,9 +602,10 @@ def render_html(
     *,
     prices: Optional[dict] = None,
     title: str = "tokprof — LLM Token Profile",
+    _summary: Optional[dict] = None,
 ) -> str:
     """Self-contained single-file HTML dashboard with interactive SVG breakdown and per-call timeline."""
-    s = summarize(records, gap_s)
+    s = _summary if _summary is not None else summarize(records, gap_s)
     total = s["input_total"] or 1
     cache_pct = (100.0 * s["cached_total"] / total) if s["input_total"] else 0.0
     fo = s["fan_out"]
@@ -772,7 +729,7 @@ def render_html(
                     f'<div class="p-sec">'
                     f'<div class="p-head"><span class="dot" style="background:{col}"></span>'
                     f"<strong>{label}</strong> <span class=\"sub\">({tok_cnt:,} tokens)</span></div>"
-                    f'<pre class="p-pre">{html.escape(p[key])}</pre>'
+                    f'<pre class="p-pre">{_escape_cached(p[key])}</pre>'
                     f"</div>"
                 )
         inspector = (

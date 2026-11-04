@@ -51,14 +51,15 @@ type Event struct {
 }
 
 type Tap struct {
-	objs      tlsObjects
-	reader    *ringbuf.Reader
-	mu        sync.Mutex
-	fileLinks map[string][]link.Link
-	pidFiles  map[int]map[string]bool
-	once      sync.Once
-	tps       []link.Link // syscall tracepoints for plain HTTP
-	base      time.Time   // wall-clock time of CLOCK_MONOTONIC == 0
+	objs       tlsObjects
+	reader     *ringbuf.Reader
+	mu         sync.Mutex
+	fileLinks  map[string][]link.Link
+	pidFiles   map[int]map[string]bool
+	inodeCache map[string]string
+	once       sync.Once
+	tps        []link.Link // syscall tracepoints for plain HTTP
+	base       time.Time   // wall-clock time of CLOCK_MONOTONIC == 0
 }
 
 // Options tune what the kernel side watches.
@@ -78,9 +79,10 @@ func New(opts Options) (*Tap, error) {
 	var ts unix.Timespec
 	_ = unix.ClockGettime(unix.CLOCK_MONOTONIC, &ts)
 	t := &Tap{
-		base:      time.Now().Add(-time.Duration(ts.Nano())),
-		fileLinks: map[string][]link.Link{},
-		pidFiles:  map[int]map[string]bool{},
+		base:       time.Now().Add(-time.Duration(ts.Nano())),
+		fileLinks:  map[string][]link.Link{},
+		pidFiles:   map[int]map[string]bool{},
+		inodeCache: map[string]string{},
 	}
 	spec, err := loadTls()
 	if err != nil {
@@ -152,12 +154,17 @@ func (t *Tap) ClearPlain(pid uint32, fd uint32) {
 	_ = t.objs.PlainConns.Delete(plainKey{pid, fd})
 }
 
-func inodeKey(path string) string {
-	var st syscall.Stat_t
-	if err := syscall.Stat(path, &st); err == nil {
-		return fmt.Sprintf("%d:%d", st.Dev, st.Ino)
+func (t *Tap) inodeKey(path string) string {
+	if k, ok := t.inodeCache[path]; ok {
+		return k
 	}
-	return path
+	var st syscall.Stat_t
+	k := path
+	if err := syscall.Stat(path, &st); err == nil {
+		k = fmt.Sprintf("%d:%d", st.Dev, st.Ino)
+	}
+	t.inodeCache[path] = k
+	return k
 }
 
 // Attach installs probes in every TLS provider of the process whose underlying
@@ -173,7 +180,7 @@ func (t *Tap) Attach(p inspect.Process) (int, error) {
 	added := 0
 	var firstErr error
 	for _, pr := range p.Providers {
-		ikey := inodeKey(pr.File)
+		ikey := t.inodeKey(pr.File)
 		if t.pidFiles[p.PID][ikey] {
 			continue
 		}

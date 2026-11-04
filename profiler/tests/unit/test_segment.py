@@ -159,3 +159,44 @@ def test_tiktoken_decomposition_matches_openai_chat_token_formula():
     assert counter.method == "tiktoken:o200k_base"
     assert rec.quality == "good"
     assert abs(rec.residual) / exact_tokens <= 0.05
+
+
+def test_stability_and_perf_hardening_across_5_rounds():
+    from tokprof.counting import get_counter
+    from tokprof.gateway import BodyFramer
+    from tokprof.report import render_csv
+    from tokprof.segment import quality_label, redact_secrets
+
+    # Round 1: Expanded secret redaction (AWS, Google, Slack, JWT) and lone surrogate handling
+    aws_key = "AKIA" + "0123456789ABCDEF"
+    gcp_key = "AIza" + ("A" * 35)
+    jwt_tok = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    red = redact_secrets(f"aws={aws_key} gcp={gcp_key} jwt={jwt_tok}")
+    assert aws_key not in red and gcp_key not in red and jwt_tok not in red
+    assert red.count("***REDACTED***") == 3
+
+    tk = get_counter("openai/gpt-5-mini", prefer_tiktoken=True)
+    assert tk.count("surrogate \ud800 test") > 0
+    assert quality_label(10, 0) is None
+    assert quality_label(10, -5) is None
+
+    # Round 3: BodyFramer comma-separated Content-Length & multi-chunk single-buffer feed
+    bf_cl = BodyFramer({"content-length": "5, 5"}, False)
+    assert bf_cl.feed(b"hello world") == b"hello" and bf_cl.done
+    bf_ch = BodyFramer({"transfer-encoding": "chunked"}, False)
+    assert bf_ch.feed(b"3\r\nabc\r\n2;ext=1\r\nde\r\n0\r\n\r\n") == b"abcde" and bf_ch.done
+
+    # Round 4: CSV NUL byte and CR sanitization
+    rec = {
+        "id": "c1",
+        "ts": 100.0,
+        "model": "gpt-4o",
+        "provider": "openai_chat",
+        "sysfp": "abcdef",
+        "usage": {"input_total": 10, "output": 5},
+        "segments": [{"kind": "user_prompt", "tokens": 10, "text": "hello\x00world\r\nline2"}],
+        "response_text": "resp\x00ok",
+    }
+    csv_text = render_csv([rec])
+    assert "\x00" not in csv_text and "helloworld" in csv_text and "respok" in csv_text
+
