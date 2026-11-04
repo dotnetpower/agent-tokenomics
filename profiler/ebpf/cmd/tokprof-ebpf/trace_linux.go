@@ -250,6 +250,10 @@ func runTrace(args []string) {
 	for running := true; running; {
 		select {
 		case ev := <-events:
+			if ev.SSL&(1<<61) != 0 && ev.SSL&tap.PlainFlag == 0 {
+				logf("enter sample pid=%d comm=%s syscall=%d dir=%d fd=%d len=%d first=%q", ev.PID, ev.Comm, (ev.SSL>>32)&0xffff, ev.Dir, ev.SSL&0xffffffff, ev.Total, firstBytes(ev.Data, 24))
+				continue
+			}
 			if ev.SSL&tap.DebugFlag != 0 && ev.SSL&tap.PlainFlag == 0 {
 				logf("unmatched write pid=%d comm=%s fd=%d len=%d first=%q", ev.PID, ev.Comm, ev.SSL&0xffffffff, ev.Total, firstBytes(ev.Data, 32))
 				continue

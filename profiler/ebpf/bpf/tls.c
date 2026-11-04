@@ -310,6 +310,20 @@ static __always_inline int sys_enter(struct sys_enter_ctx *c, __u32 dir, __u32 v
 	if (!watching(&tgid))
 		return 0;
 	bump(0);
+	if (debug_unmatched) {
+		char comm[8] = {};
+
+		bpf_get_current_comm(comm, sizeof(comm));
+		if (comm[0] == 'g' && comm[1] == 'o' && comm[2] == 'c' && comm[3] == 'l') { // testing only: follow the Go e2e client
+			struct call_args da = {};
+
+			da.ssl = (1ULL << 61) | ((__u64)(c->id & 0xffff) << 32) | (__u32)c->args[0];
+			da.buf = vec ? 0 : c->args[1];
+			da.dir = dir;
+			if (!vec && c->args[2] > 0)
+				emit_all(&da, id, c->args[2] > 32 ? 32 : (__u32)c->args[2]);
+		}
+	}
 	a.fd = (__u32)c->args[0];
 	a.buf = c->args[1];
 	a.len = c->args[2];
