@@ -84,7 +84,7 @@ def test_one_step_profile_and_shorthand_generates_html_and_pretty_report(tmp_pat
             timeout=60,
         )
         assert r.returncode == 0, r.stderr + r.stdout
-        assert "tokprof — LLM Token Profile" in r.stdout
+        assert "LLM Token Profile" in r.stdout
         assert (tmp_path / ".tokprof" / "latest.html").is_file()
         html_text = (tmp_path / ".tokprof" / "latest.html").read_text(encoding="utf-8")
         assert "Input Token Breakdown" in html_text and "System prompt" in html_text

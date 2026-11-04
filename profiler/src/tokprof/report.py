@@ -66,7 +66,20 @@ def _bar(share: float, width: int = 24) -> str:
     return "#" * n + "." * (width - n)
 
 
-def _ubo_bar(share: float, width: int = 24) -> str:
+def _utf8_ok() -> bool:
+    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        "╭─╮█░—".encode(enc)
+        return True
+    except Exception:
+        return False
+
+
+def _ubo_bar(share: float, width: int = 24, unicode_ok: Optional[bool] = None) -> str:
+    if unicode_ok is None:
+        unicode_ok = _utf8_ok()
+    if not unicode_ok:
+        return _bar(share, width)
     blocks = " ▏▎▍▌▋▊▉█"
     total_eighths = int(round(max(0.0, min(1.0, share)) * width * 8))
     full, rem = divmod(total_eighths, 8)
@@ -190,14 +203,20 @@ def render_pretty(records: list, gap_s: float = 5.0, *, color: Optional[bool] = 
     med_fo = sorted(fo)[len(fo) // 2] if fo else 0
     max_fo = max(fo) if fo else 0
 
+    u_ok = _utf8_ok()
+    rule = ("─" if u_ok else "-") * 76
+    top = "╭" + ("─" * 78) + "╮" if u_ok else "+" + ("-" * 78) + "+"
+    mid = "│  tokprof — LLM Token Profile                                                 │" if u_ok else "|  tokprof - LLM Token Profile                                                 |"
+    bot = "╰" + ("─" * 78) + "╯" if u_ok else "+" + ("-" * 78) + "+"
+
     calls_str = c("bold", f"{s['calls']:,}")
     in_str = c("bold", f"{s['input_total']:,}")
     out_str = c("bold", f"{s['output_total']:,}")
     cached_str = c("bold", f"{s['cached_total']:,}")
     lines = [
-        c("bold", "╭──────────────────────────────────────────────────────────────────────────────╮"),
-        c("bold", "│  tokprof — LLM Token Profile                                                 │"),
-        c("bold", "╰──────────────────────────────────────────────────────────────────────────────╯"),
+        c("bold", top),
+        c("bold", mid),
+        c("bold", bot),
         f"  Calls: {calls_str}   Input: {in_str}   Output: {out_str}   Cached: {cached_str} ({cache_pct:.1f}%)",
         f"  First-call overhead: {s['first_call_input']:,} tok   "
         f"Median input/call: {s['median_input']:,} tok   "
@@ -206,16 +225,16 @@ def render_pretty(records: list, gap_s: float = 5.0, *, color: Optional[bool] = 
     if prices:
         lines.append("  " + render_cost(records, prices))
 
-    lines += ["", c("bold", "  Input token breakdown"), "  " + "─" * 76]
+    lines += ["", c("bold", "  Input token breakdown"), "  " + rule]
     for kind in s["kinds_order"]:
         v = s["by_kind"].get(kind, 0)
         if v:
             share = v / total
-            bar = c(kind, _ubo_bar(max(0.0, min(1.0, share)), 26))
+            bar = c(kind, _ubo_bar(max(0.0, min(1.0, share)), 26, u_ok))
             lines.append(f"  {LABELS.get(kind, kind):<32}{v:>12,}  {100 * share:5.1f}%  {bar}")
 
     if len(records) > 1:
-        lines += ["", c("bold", "  Call timeline (input tokens per call)"), "  " + "─" * 76]
+        lines += ["", c("bold", "  Call timeline (input tokens per call)"), "  " + rule]
         max_call_in = max((r.get("usage") or {}).get("input_total") or r.get("est_input", 0) or 1 for r in records[:20])
         for idx, r in enumerate(records[:20], 1):
             u = r.get("usage") or {}
@@ -223,7 +242,7 @@ def render_pretty(records: list, gap_s: float = 5.0, *, color: Optional[bool] = 
             cached = u.get("cached") or 0
             model = (r.get("model") or r.get("provider") or "-")[:18]
             lat = f"{r['latency_ms']}ms" if r.get("latency_ms") is not None else "-"
-            bar = _ubo_bar(inp / max_call_in, 20)
+            bar = _ubo_bar(inp / max_call_in, 20, u_ok)
             cache_tag = f" (cached {cached:,})" if cached else ""
             lines.append(f"  #{idx:<3} {model:<18} {inp:>10,} tok  {bar}  {lat:>7}{cache_tag}")
         if len(records) > 20:
@@ -233,7 +252,7 @@ def render_pretty(records: list, gap_s: float = 5.0, *, color: Optional[bool] = 
         lines += [
             "",
             c("bold", "  Per-step token map (grouped by system prompt)"),
-            "  " + "─" * 76,
+            "  " + rule,
             f"  {'step':<8}{'label/model':<28}{'calls':>6}{'input':>14}{'fixed/call':>14}",
         ]
         for st in s["steps"][:12]:
@@ -245,7 +264,7 @@ def render_pretty(records: list, gap_s: float = 5.0, *, color: Optional[bool] = 
         lines += [
             "",
             c("bold", "  Endpoints (by detected API and host class)"),
-            "  " + "─" * 76,
+            "  " + rule,
             f"  {'host':<28}{'class':<18}{'api':<16}{'calls':>6}{'input':>12}",
         ]
         for e in eps[:12]:
@@ -253,7 +272,7 @@ def render_pretty(records: list, gap_s: float = 5.0, *, color: Optional[bool] = 
             lines.append(f"  {who:<28}{e['class']:<18}{e['api']:<16}{e['calls']:>6}{e['input']:>12,}")
 
     if s["findings"]:
-        lines += ["", c("bold", "  Findings & recommendations"), "  " + "─" * 76]
+        lines += ["", c("bold", "  Findings & recommendations"), "  " + rule]
         for f in s["findings"]:
             sev = f["severity"]
             badge = c(sev, f"[{sev.upper()}]")

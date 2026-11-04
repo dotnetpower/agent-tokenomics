@@ -570,7 +570,7 @@ class Detector:
             lines.append("LLM endpoints detected:")
             for r in rows:
                 where = f"{r['host']}:{r['port']}" if r["port"] else r["host"] or "(unknown host)"
-                apis = ", ".join(f"{a}×{n}" for a, n in r["apis"].items())
+                apis = ", ".join(f"{a}x{n}" for a, n in r["apis"].items())
                 lines.append(f"  {where}  [{r['class']}]  {r['calls']} call(s)  {apis}")
                 lines.append(f"      paths: {', '.join(r['paths'])}")
                 if r["evidence"]:
@@ -582,7 +582,7 @@ class Detector:
             top = sorted(missed.items(), key=lambda kv: -kv[1])[:3]
             lines.append(f"{total} JSON POST request(s) looked LLM-like but their responses did not, so they were not recorded:")
             for (h, p, path), n in top:
-                lines.append(f"  {h}:{p}{path}  ×{n}")
+                lines.append(f"  {h}:{p}{path}  x{n}")
             lines.append("  If one of these is a model endpoint, force it with --llm-host HOST[:PORT] or --llm-path REGEX.")
         return "\n".join(lines)
 
