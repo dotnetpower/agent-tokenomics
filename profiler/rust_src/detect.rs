@@ -143,6 +143,21 @@ const NAME_TOKENS: &[&str] = &[
 
 const PORT_HINTS: &[u16] = &[8000, 8001, 8080, 11434, 4000, 1234, 30000, 5000, 9000, 3000];
 
+#[inline]
+fn is_stream_path(npath: &str) -> bool {
+    if npath.ends_with(":streamGenerateContent")
+        || npath.ends_with("/converse-stream")
+        || npath.ends_with("-with-response-stream")
+        || npath.ends_with("/generate_stream")
+    {
+        return true;
+    }
+    if npath.contains("stream") || npath.contains("Stream") || npath.contains("STREAM") {
+        return STREAM_PATH_RE.is_match(npath);
+    }
+    false
+}
+
 pub fn normalize_path(path: &str) -> String {
     normalize_path_slice(path).to_string()
 }
@@ -214,27 +229,29 @@ fn is_cgnat_v4(ip: std::net::Ipv4Addr) -> bool {
     octets[0] == 100 && (octets[1] & 0b1100_0000) == 64
 }
 
-static HOST_INFO_CACHE: Lazy<Mutex<HashMap<(String, u16), HostInfo>>> =
+type HostKey = (u64, u64, usize, u16);
+static HOST_INFO_CACHE: Lazy<Mutex<HashMap<HostKey, HostInfo>>> =
     Lazy::new(|| Mutex::new(HashMap::with_capacity(256)));
 
 pub fn classify_host(host: &str, port: u16) -> HostInfo {
     if host.len() <= 256 {
+        let (h1, h2) = crate::counting::fast_hash_pair(host.as_bytes());
+        let key: HostKey = (h1, h2, host.len(), port);
         if let Ok(guard) = HOST_INFO_CACHE.lock() {
-            if let Some(cached) = guard.get(&(host.to_string(), port)) {
+            if let Some(cached) = guard.get(&key) {
                 return cached.clone();
             }
         }
-    }
-    let info = classify_host_uncached(host, port);
-    if host.len() <= 256 {
+        let info = classify_host_uncached(host, port);
         if let Ok(mut guard) = HOST_INFO_CACHE.lock() {
             if guard.len() >= 512 {
                 guard.clear();
             }
-            guard.insert((host.to_string(), port), info.clone());
+            guard.insert(key, info.clone());
         }
+        return info;
     }
-    info
+    classify_host_uncached(host, port)
 }
 
 fn classify_host_uncached(host: &str, port: u16) -> HostInfo {
@@ -384,9 +401,34 @@ fn percent_decode(s: &str) -> String {
 
 pub fn model_from_path(path: &str) -> Option<String> {
     let np = normalize_path_slice(path);
-    if !np.contains("/deployments/")
-        && !np.contains("/models/")
-        && !np.contains("/model/")
+    if let Some((_, rest)) = np.split_once("/deployments/") {
+        if let Some((seg, _)) = rest.split_once('/') {
+            if !seg.is_empty() {
+                return Some(if seg.contains('%') {
+                    percent_decode(seg)
+                } else {
+                    seg.to_string()
+                });
+            }
+        } else if !rest.is_empty() {
+            return Some(if rest.contains('%') {
+                percent_decode(rest)
+            } else {
+                rest.to_string()
+            });
+        }
+    }
+    if let Some((_, rest)) = np.split_once("/models/") {
+        let seg = rest.split(['/', ':', '?']).next().unwrap_or("");
+        if !seg.is_empty() {
+            return Some(if seg.contains('%') {
+                percent_decode(seg)
+            } else {
+                seg.to_string()
+            });
+        }
+    }
+    if !np.contains("/model/")
         && !np.to_ascii_lowercase().contains("/deployments/")
         && !np.to_ascii_lowercase().contains("/models/")
         && !np.to_ascii_lowercase().contains("/model/")
@@ -1090,14 +1132,20 @@ impl Detector {
         if !host.is_empty() && host_matches(&self.cfg.exclude_hosts, host, port) {
             return self.reject(v, "host excluded by --exclude-host");
         }
-        if let Some(m) = EXCLUDED_PATH_RE.find(&npath) {
-            let matched = m.as_str().trim_matches(|c| c == '/' || c == ':');
-            return self.reject(v, format!("non-generative endpoint ({matched})"));
+        let hint = path_hint(&npath);
+        let is_fast_llm_path = matches!(
+            hint,
+            Some(OPENAI_CHAT | OPENAI_RESPONSES | ANTHROPIC | COMPLETIONS | GEMINI)
+        );
+        if !is_fast_llm_path {
+            if let Some(m) = EXCLUDED_PATH_RE.find(&npath) {
+                let matched = m.as_str().trim_matches(|c| c == '/' || c == ':');
+                return self.reject(v, format!("non-generative endpoint ({matched})"));
+            }
         }
         let shape = classify_body(body);
-        let hint = path_hint(&npath);
         v.model_hint = model_from_path(&npath);
-        v.stream_hint = STREAM_PATH_RE.is_match(&npath);
+        v.stream_hint = is_stream_path(&npath);
         let forced = (!host.is_empty() && host_matches(&self.cfg.hosts, host, port))
             || self.path_rx.iter().any(|rx| rx.is_match(&npath));
 

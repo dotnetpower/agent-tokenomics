@@ -414,21 +414,25 @@ fn try_decompose_structured_user(
     if s.len() < 4 || !s.starts_with('{') || !s.ends_with('}') {
         return (false, None);
     }
-    let lower_sample = if s.len() > 16_384 {
+    let sample = if s.len() > 16_384 {
         let mut end = 16_384;
         while !s.is_char_boundary(end) {
             end -= 1;
         }
-        s[..end].to_ascii_lowercase()
+        &s[..end]
     } else {
-        s.to_ascii_lowercase()
+        s
     };
-    if !STRUCTURED_FAST_HINTS.iter().any(|h| lower_sample.contains(h))
-        && (s.len() <= 16_384
-            || !STRUCTURED_FAST_HINTS
-                .iter()
-                .any(|h| s.to_ascii_lowercase().contains(h)))
-    {
+    let fast_hit = STRUCTURED_FAST_HINTS.iter().any(|h| sample.contains(h))
+        || {
+            let low = sample.to_ascii_lowercase();
+            STRUCTURED_FAST_HINTS.iter().any(|h| low.contains(h))
+        }
+        || (s.len() > 16_384 && {
+            let low = s.to_ascii_lowercase();
+            STRUCTURED_FAST_HINTS.iter().any(|h| low.contains(h))
+        });
+    if !fast_hit {
         return (false, None);
     }
     let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(s) else {
@@ -437,17 +441,17 @@ fn try_decompose_structured_user(
     if obj.is_empty() {
         return (false, None);
     }
-    let mut flat: Vec<(String, Value)> = Vec::new();
-    for (k, v) in &obj {
+    let mut flat: Vec<(String, Value)> = Vec::with_capacity(obj.len() + 4);
+    for (k, v) in obj {
         if WRAPPER_KEYS.contains(&k.as_str()) {
             if let Value::Object(inner) = v {
                 for (ik, iv) in inner {
-                    flat.push((ik.clone(), iv.clone()));
+                    flat.push((ik, iv));
                 }
                 continue;
             }
         }
-        flat.push((k.clone(), v.clone()));
+        flat.push((k, v));
     }
     let has_recognized = flat.iter().any(|(k, _)| {
         let kl = k.to_ascii_lowercase();
@@ -487,9 +491,9 @@ fn try_decompose_structured_user(
         if HISTORY_KEYS.contains(&ks) {
             emit_history_value(segments, &k, &v, turn);
         } else if USER_PROMPT_KEYS.contains(&ks) {
-            let val_text = match &v {
-                Value::String(st) => st.clone(),
-                other => dumps_canonical(other),
+            let val_text = match v {
+                Value::String(st) => st,
+                other => dumps_canonical(&other),
             };
             let kind = if is_current {
                 "user_prompt"
@@ -507,9 +511,9 @@ fn try_decompose_structured_user(
             );
             added_user = true;
         } else if TOOL_DEF_KEYS.contains(&ks) {
-            let val_text = match &v {
-                Value::String(st) => st.clone(),
-                other => dumps_canonical(other),
+            let val_text = match v {
+                Value::String(st) => st,
+                other => dumps_canonical(&other),
             };
             add_seg(
                 segments,
@@ -521,7 +525,7 @@ fn try_decompose_structured_user(
                 false,
             );
         } else if TOOL_RESULT_KEYS.contains(&ks) {
-            if let Value::Object(sub_obj) = &v {
+            if let Value::Object(ref sub_obj) = v {
                 if !added_user {
                     for sub_k in ["utterance", "question", "query", "user_query", "goal"] {
                         if let Some(sub_v) = sub_obj.get(sub_k).and_then(|x| x.as_str()) {
@@ -547,9 +551,9 @@ fn try_decompose_structured_user(
                     }
                 }
             }
-            let val_text = match &v {
-                Value::String(st) => st.clone(),
-                other => dumps_canonical(other),
+            let val_text = match v {
+                Value::String(st) => st,
+                other => dumps_canonical(&other),
             };
             add_seg(
                 segments,
@@ -561,9 +565,9 @@ fn try_decompose_structured_user(
                 false,
             );
         } else if SCHEMA_KEYS.contains(&ks) {
-            let val_text = match &v {
-                Value::String(st) => st.clone(),
-                other => dumps_canonical(other),
+            let val_text = match v {
+                Value::String(st) => st,
+                other => dumps_canonical(&other),
             };
             add_seg(
                 segments,
@@ -575,9 +579,9 @@ fn try_decompose_structured_user(
                 false,
             );
         } else if SYSTEM_KEYS.contains(&ks) {
-            let val_text = match &v {
-                Value::String(st) => st.clone(),
-                other => dumps_canonical(other),
+            let val_text = match v {
+                Value::String(st) => st,
+                other => dumps_canonical(&other),
             };
             add_seg(
                 segments,
@@ -691,12 +695,12 @@ fn parse_openai_chat(body: &Map<String, Value>) -> ParsedRequest {
             }
         }
     }
-    let mut msgs: Vec<Map<String, Value>> = body
+    let mut msgs: Vec<std::borrow::Cow<'_, Map<String, Value>>> = body
         .get("messages")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|m| m.as_object().cloned())
+                .filter_map(|m| m.as_object().map(std::borrow::Cow::Borrowed))
                 .collect()
         })
         .unwrap_or_default();
@@ -716,7 +720,7 @@ fn parse_openai_chat(body: &Map<String, Value>) -> ParsedRequest {
                     {
                         m.insert("content".to_string(), c.clone());
                     }
-                    msgs.push(m);
+                    msgs.push(std::borrow::Cow::Owned(m));
                 }
             }
         }
@@ -726,7 +730,7 @@ fn parse_openai_chat(body: &Map<String, Value>) -> ParsedRequest {
             let mut m = Map::new();
             m.insert("role".to_string(), Value::String("user".to_string()));
             m.insert("content".to_string(), Value::String(msg_str.to_string()));
-            msgs.push(m);
+            msgs.push(std::borrow::Cow::Owned(m));
         }
     }
 

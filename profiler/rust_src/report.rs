@@ -1072,7 +1072,19 @@ pub fn render_csv(
             &owned_s
         }
     };
-    let mut out = String::with_capacity(header.len() + s.call_details.len() * 1024 + 512);
+    let est_row_bytes = s
+        .call_details
+        .first()
+        .map(|c| {
+            c.prompts.system.len()
+                + c.prompts.tools_schema.len()
+                + c.prompts.user_prompt.len()
+                + c.prompts.history.len()
+                + c.prompts.response.len()
+                + 256
+        })
+        .unwrap_or(512);
+    let mut out = String::with_capacity(header.len() + s.call_details.len() * est_row_bytes + 4096);
     out.push_str(&header);
     let mut cache: HashMap<(u64, u64, usize), String> = HashMap::with_capacity(64);
 
@@ -1354,119 +1366,6 @@ pub fn render_html(
         .max()
         .unwrap_or(1) as f64;
     let shown_cnt = s.call_details.len().min(150);
-    let mut call_html = String::with_capacity(shown_cnt * 2048);
-    let mut sec_cache: HashMap<(&'static str, i64, u64, u64, usize), String> =
-        HashMap::with_capacity(64);
-    for cd in s.call_details.iter().take(150) {
-        let _ = write!(
-            call_html,
-            r#"<tr><td class="num">#{}</td><td><code>{}·T{}</code></td><td><code>{}"#,
-            cd.index,
-            html_escape(&cd.session),
-            cd.turn,
-            html_escape(&cd.model)
-        );
-        if let Some(ref sl) = cd.step_label {
-            if sl != &cd.model {
-                let _ = write!(call_html, r#" <span class="sub">({})</span>"#, html_escape(sl));
-            }
-        }
-        let lat = cd
-            .latency_ms
-            .map(|ms| format!("{} ms", fmt_num(ms)))
-            .unwrap_or_else(|| "-".to_string());
-        let _ = write!(
-            call_html,
-            r#"</code></td><td class="num">{}</td><td class="num">{}</td><td class="num">{}</td><td class="num">{}</td><td class="num"><strong>{}</strong></td><td class="num">{}</td><td class="num">{}</td><td class="num">{lat}</td><td><div class="call-bar">"#,
-            fmt_num(cd.system),
-            fmt_num(cd.history),
-            fmt_num(cd.user_prompt),
-            fmt_num(cd.tools_schema),
-            fmt_num(cd.input_total),
-            fmt_num(cd.cached),
-            fmt_num(cd.output),
-        );
-        for (k_name, kv, col) in [
-            ("System Prompt", cd.system, kind_color_hex("system")),
-            (
-                "Conversation History",
-                cd.history,
-                kind_color_hex("history_user"),
-            ),
-            ("User Prompt", cd.user_prompt, kind_color_hex("user_prompt")),
-            ("Tools & Schema", cd.tools_schema, kind_color_hex("tool_def")),
-        ] {
-            if kv > 0 {
-                let w = 100.0 * (kv as f64) / max_in;
-                let _ = write!(
-                    call_html,
-                    r#"<span style="width:{w:.2}%;background:{col}" title="{k_name}: {} tok"></span>"#,
-                    fmt_num(kv)
-                );
-            }
-        }
-        call_html.push_str("</div>");
-        let p = &cd.prompts;
-        let has_any_prompt = !p.system.is_empty()
-            || !p.history.is_empty()
-            || !p.user_prompt.is_empty()
-            || !p.tools_schema.is_empty()
-            || !p.other.is_empty()
-            || !p.response.is_empty();
-        if has_any_prompt {
-            call_html.push_str(
-                r#"<details class="p-details"><summary>View prompts &amp; response</summary><div class="p-box">"#,
-            );
-            for (val, label, tok_cnt, col) in [
-                (&p.system, "System Prompt", cd.system, kind_color_hex("system")),
-                (
-                    &p.history,
-                    "Conversation History",
-                    cd.history,
-                    kind_color_hex("history_user"),
-                ),
-                (
-                    &p.user_prompt,
-                    "Current User Prompt",
-                    cd.user_prompt,
-                    kind_color_hex("user_prompt"),
-                ),
-                (
-                    &p.tools_schema,
-                    "Tools & Response Schema",
-                    cd.tools_schema,
-                    kind_color_hex("tool_def"),
-                ),
-                (&p.other, "Other Context", cd.other, kind_color_hex("other")),
-                (&p.response, "Assistant Output", cd.output, "#10b981"),
-            ] {
-                if !val.is_empty() {
-                    let (h1, h2) = fast_hash_pair(val.as_bytes());
-                    let ckey = (label, tok_cnt, h1, h2, val.len());
-                    if let Some(cached_sec) = sec_cache.get(&ckey) {
-                        call_html.push_str(cached_sec);
-                    } else {
-                        let sec_html = format!(
-                            r#"<div class="p-sec"><div class="p-head"><span class="dot" style="background:{col}"></span><strong>{label}</strong> <span class="sub">({} tokens)</span></div><pre class="p-pre">{}</pre></div>"#,
-                            fmt_num(tok_cnt),
-                            html_escape(val)
-                        );
-                        call_html.push_str(&sec_html);
-                        sec_cache.insert(ckey, sec_html);
-                    }
-                }
-            }
-            call_html.push_str("</div></details>");
-        } else {
-            call_html.push_str(
-                r#"<span class="sub">no text stored (re-capture to inspect full prompt text)</span>"#,
-            );
-        }
-        call_html.push_str("</td></tr>");
-    }
-    if call_html.is_empty() {
-        call_html.push_str(r#"<tr><td colspan="12" class="sub">No calls recorded</td></tr>"#);
-    }
 
     let mut step_rows = Vec::new();
     for st in s.steps.iter().take(20) {
@@ -1529,7 +1428,56 @@ pub fn render_html(
         })
         .unwrap_or_default();
 
-    format!(
+    let title_esc = html_escape(title);
+    let sess_cnt = fmt_usize(s.sessions.len());
+    let turns_cnt = fmt_usize(s.turns.len());
+    let calls_cnt = fmt_usize(s.calls);
+    let in_tot = fmt_num(s.input_total);
+    let med_in = fmt_num(s.median_input);
+    let cached_tot = fmt_num(s.cached_total);
+    let out_tot = fmt_num(s.output_total);
+    let first_in = fmt_num(s.first_call_input);
+    let stack_html = stack_divs.join("");
+    let bd_html = breakdown_rows.join("");
+    let sess_html = if session_rows.is_empty() {
+        r#"<tr><td colspan="10" class="sub">No sessions recorded</td></tr>"#.to_string()
+    } else {
+        session_rows.join("")
+    };
+    let turn_html = if turn_rows.is_empty() {
+        r#"<tr><td colspan="10" class="sub">No turns recorded</td></tr>"#.to_string()
+    } else {
+        turn_rows.join("")
+    };
+    let shown_calls = shown_cnt;
+    let total_calls = s.call_details.len();
+    let findings_html = finding_cards.join("");
+    let steps_html = if step_rows.is_empty() {
+        r#"<tr><td colspan="5" class="sub">No steps recorded</td></tr>"#.to_string()
+    } else {
+        step_rows.join("")
+    };
+    let eps_html = if ep_rows.is_empty() {
+        r#"<tr><td colspan="5" class="sub">No endpoints recorded</td></tr>"#.to_string()
+    } else {
+        ep_rows.join("")
+    };
+
+    let est_call_bytes = s
+        .call_details
+        .first()
+        .map(|c| {
+            c.prompts.system.len()
+                + c.prompts.tools_schema.len()
+                + c.prompts.user_prompt.len()
+                + c.prompts.history.len()
+                + c.prompts.response.len()
+                + 1024
+        })
+        .unwrap_or(1024);
+    let mut doc = String::with_capacity(16_384 + shown_cnt * est_call_bytes);
+    let _ = write!(
+        doc,
         r#"<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1655,7 +1603,126 @@ footer {{ color: var(--muted); font-size: 0.8rem; margin-top: 24px; text-align: 
           <th class="num">Input</th><th class="num">Cached</th><th class="num">Output</th><th class="num">Latency</th><th>Prompts &amp; Response</th>
         </tr>
       </thead>
-      <tbody>{call_html}</tbody>
+      <tbody>"#
+    );
+
+    if shown_cnt == 0 {
+        doc.push_str(r#"<tr><td colspan="12" class="sub">No calls recorded</td></tr>"#);
+    } else {
+        let mut sec_cache: HashMap<(&'static str, i64, u64, u64, usize), String> =
+            HashMap::with_capacity(64);
+        for cd in s.call_details.iter().take(150) {
+            let _ = write!(
+                doc,
+                r#"<tr><td class="num">#{}</td><td><code>{}·T{}</code></td><td><code>{}"#,
+                cd.index,
+                html_escape(&cd.session),
+                cd.turn,
+                html_escape(&cd.model)
+            );
+            if let Some(ref sl) = cd.step_label {
+                if sl != &cd.model {
+                    let _ = write!(doc, r#" <span class="sub">({})</span>"#, html_escape(sl));
+                }
+            }
+            let lat = cd
+                .latency_ms
+                .map(|ms| format!("{} ms", fmt_num(ms)))
+                .unwrap_or_else(|| "-".to_string());
+            let _ = write!(
+                doc,
+                r#"</code></td><td class="num">{}</td><td class="num">{}</td><td class="num">{}</td><td class="num">{}</td><td class="num"><strong>{}</strong></td><td class="num">{}</td><td class="num">{}</td><td class="num">{lat}</td><td><div class="call-bar">"#,
+                fmt_num(cd.system),
+                fmt_num(cd.history),
+                fmt_num(cd.user_prompt),
+                fmt_num(cd.tools_schema),
+                fmt_num(cd.input_total),
+                fmt_num(cd.cached),
+                fmt_num(cd.output),
+            );
+            for (k_name, kv, col) in [
+                ("System Prompt", cd.system, kind_color_hex("system")),
+                (
+                    "Conversation History",
+                    cd.history,
+                    kind_color_hex("history_user"),
+                ),
+                ("User Prompt", cd.user_prompt, kind_color_hex("user_prompt")),
+                ("Tools & Schema", cd.tools_schema, kind_color_hex("tool_def")),
+            ] {
+                if kv > 0 {
+                    let w = 100.0 * (kv as f64) / max_in;
+                    let _ = write!(
+                        doc,
+                        r#"<span style="width:{w:.2}%;background:{col}" title="{k_name}: {} tok"></span>"#,
+                        fmt_num(kv)
+                    );
+                }
+            }
+            doc.push_str("</div>");
+            let p = &cd.prompts;
+            let has_any_prompt = !p.system.is_empty()
+                || !p.history.is_empty()
+                || !p.user_prompt.is_empty()
+                || !p.tools_schema.is_empty()
+                || !p.other.is_empty()
+                || !p.response.is_empty();
+            if has_any_prompt {
+                doc.push_str(
+                    r#"<details class="p-details"><summary>View prompts &amp; response</summary><div class="p-box">"#,
+                );
+                for (val, label, tok_cnt, col) in [
+                    (&p.system, "System Prompt", cd.system, kind_color_hex("system")),
+                    (
+                        &p.history,
+                        "Conversation History",
+                        cd.history,
+                        kind_color_hex("history_user"),
+                    ),
+                    (
+                        &p.user_prompt,
+                        "Current User Prompt",
+                        cd.user_prompt,
+                        kind_color_hex("user_prompt"),
+                    ),
+                    (
+                        &p.tools_schema,
+                        "Tools & Response Schema",
+                        cd.tools_schema,
+                        kind_color_hex("tool_def"),
+                    ),
+                    (&p.other, "Other Context", cd.other, kind_color_hex("other")),
+                    (&p.response, "Assistant Output", cd.output, "#10b981"),
+                ] {
+                    if !val.is_empty() {
+                        let (h1, h2) = fast_hash_pair(val.as_bytes());
+                        let ckey = (label, tok_cnt, h1, h2, val.len());
+                        if let Some(cached_sec) = sec_cache.get(&ckey) {
+                            doc.push_str(cached_sec);
+                        } else {
+                            let sec_html = format!(
+                                r#"<div class="p-sec"><div class="p-head"><span class="dot" style="background:{col}"></span><strong>{label}</strong> <span class="sub">({} tokens)</span></div><pre class="p-pre">{}</pre></div>"#,
+                                fmt_num(tok_cnt),
+                                html_escape(val)
+                            );
+                            doc.push_str(&sec_html);
+                            sec_cache.insert(ckey, sec_html);
+                        }
+                    }
+                }
+                doc.push_str("</div></details>");
+            } else {
+                doc.push_str(
+                    r#"<span class="sub">no text stored (re-capture to inspect full prompt text)</span>"#,
+                );
+            }
+            doc.push_str("</td></tr>");
+        }
+    }
+
+    let _ = write!(
+        doc,
+        r#"</tbody>
     </table>
   </div>
 
@@ -1685,41 +1752,7 @@ footer {{ color: var(--muted); font-size: 0.8rem; margin-top: 24px; text-align: 
 </div>
 </body>
 </html>
-"#,
-        title_esc = html_escape(title),
-        sess_cnt = fmt_usize(s.sessions.len()),
-        turns_cnt = fmt_usize(s.turns.len()),
-        calls_cnt = fmt_usize(s.calls),
-        in_tot = fmt_num(s.input_total),
-        med_in = fmt_num(s.median_input),
-        cached_tot = fmt_num(s.cached_total),
-        out_tot = fmt_num(s.output_total),
-        first_in = fmt_num(s.first_call_input),
-        stack_html = stack_divs.join(""),
-        bd_html = breakdown_rows.join(""),
-        sess_html = if session_rows.is_empty() {
-            r#"<tr><td colspan="10" class="sub">No sessions recorded</td></tr>"#.to_string()
-        } else {
-            session_rows.join("")
-        },
-        turn_html = if turn_rows.is_empty() {
-            r#"<tr><td colspan="10" class="sub">No turns recorded</td></tr>"#.to_string()
-        } else {
-            turn_rows.join("")
-        },
-        shown_calls = shown_cnt,
-        total_calls = s.call_details.len(),
-        call_html = call_html,
-        findings_html = finding_cards.join(""),
-        steps_html = if step_rows.is_empty() {
-            r#"<tr><td colspan="5" class="sub">No steps recorded</td></tr>"#.to_string()
-        } else {
-            step_rows.join("")
-        },
-        eps_html = if ep_rows.is_empty() {
-            r#"<tr><td colspan="5" class="sub">No endpoints recorded</td></tr>"#.to_string()
-        } else {
-            ep_rows.join("")
-        },
-    )
+"#
+    );
+    doc
 }

@@ -477,6 +477,7 @@ fn append_seg_text(buf: &mut String, prefix: Option<&str>, name: Option<&str>, t
     buf.push_str(txt);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_call_detail(
     rec: &CallRecord,
     call_index: usize,
@@ -484,6 +485,7 @@ fn build_call_detail(
     turn_index: usize,
     inferred_hist: i64,
     sys_cache: &mut HashMap<String, String>,
+    tools_cache: &mut HashMap<(String, i64, i64), String>,
 ) -> CallDetail {
     let mut sys_tok = 0i64;
     let mut hist_u = 0i64;
@@ -495,80 +497,86 @@ fn build_call_detail(
     let mut rs_tok = 0i64;
     let mut other_tok = 0i64;
 
-    let cached_sys = rec.sysfp.as_ref().and_then(|sfp| sys_cache.get(sfp)).cloned();
+    for s in &rec.segments {
+        let tok = s.tokens;
+        match s.kind.as_str() {
+            "system" => sys_tok += tok,
+            "history_user" => hist_u += tok,
+            "history_assistant" => hist_a += tok,
+            "user_prompt" | "raw_prompt" => user_tok += tok,
+            "tool_def" => td_tok += tok,
+            "tool_call" => tc_tok += tok,
+            "tool_result" => tr_tok += tok,
+            "response_schema" => rs_tok += tok,
+            _ => other_tok += tok,
+        }
+    }
+
+    let sfp_key = rec.sysfp.clone().unwrap_or_default();
+    let cached_sys = if !sfp_key.is_empty() {
+        sys_cache.get(&sfp_key).cloned()
+    } else {
+        None
+    };
+    let tools_key = (sfp_key.clone(), td_tok, rs_tok);
+    let can_cache_tools = !sfp_key.is_empty() && tc_tok == 0 && tr_tok == 0 && (td_tok + rs_tok) > 0;
+    let cached_tools = if can_cache_tools {
+        tools_cache.get(&tools_key).cloned()
+    } else {
+        None
+    };
+
     let mut s_sys = cached_sys.clone().unwrap_or_default();
     let mut s_hist = String::new();
     let mut s_user = String::new();
-    let mut s_tools = String::new();
+    let mut s_tools = cached_tools.clone().unwrap_or_default();
     let mut s_other = String::new();
 
     for s in &rec.segments {
+        let Some(ref txt) = s.text else { continue };
         let k = s.kind.as_str();
-        let tok = s.tokens;
         let nm = s.name.as_deref();
         match k {
             "system" => {
-                sys_tok += tok;
                 if cached_sys.is_none() {
-                    if let Some(ref txt) = s.text {
-                        append_seg_text(&mut s_sys, None, nm, txt);
-                    }
+                    append_seg_text(&mut s_sys, None, nm, txt);
                 }
             }
             "history_user" => {
-                hist_u += tok;
-                if let Some(ref txt) = s.text {
-                    append_seg_text(&mut s_hist, Some("(User/Context) "), nm, txt);
-                }
+                append_seg_text(&mut s_hist, Some("(User/Context) "), nm, txt);
             }
             "history_assistant" => {
-                hist_a += tok;
-                if let Some(ref txt) = s.text {
-                    append_seg_text(&mut s_hist, Some("(Assistant) "), nm, txt);
-                }
+                append_seg_text(&mut s_hist, Some("(Assistant) "), nm, txt);
             }
             "user_prompt" | "raw_prompt" => {
-                user_tok += tok;
-                if let Some(ref txt) = s.text {
-                    append_seg_text(&mut s_user, None, nm, txt);
-                }
+                append_seg_text(&mut s_user, None, nm, txt);
             }
             "tool_def" => {
-                td_tok += tok;
-                if let Some(ref txt) = s.text {
+                if cached_tools.is_none() {
                     append_seg_text(&mut s_tools, Some("(tool_def) "), nm, txt);
                 }
             }
             "tool_call" => {
-                tc_tok += tok;
-                if let Some(ref txt) = s.text {
-                    append_seg_text(&mut s_tools, Some("(tool_call) "), nm, txt);
-                }
+                append_seg_text(&mut s_tools, Some("(tool_call) "), nm, txt);
             }
             "tool_result" => {
-                tr_tok += tok;
-                if let Some(ref txt) = s.text {
-                    append_seg_text(&mut s_tools, Some("(tool_result) "), nm, txt);
-                }
+                append_seg_text(&mut s_tools, Some("(tool_result) "), nm, txt);
             }
             "response_schema" => {
-                rs_tok += tok;
-                if let Some(ref txt) = s.text {
+                if cached_tools.is_none() {
                     append_seg_text(&mut s_tools, Some("(response_schema) "), nm, txt);
                 }
             }
             _ => {
-                other_tok += tok;
-                if let Some(ref txt) = s.text {
-                    append_seg_text(&mut s_other, None, nm, txt);
-                }
+                append_seg_text(&mut s_other, None, nm, txt);
             }
         }
     }
-    if cached_sys.is_none() && !s_sys.is_empty() {
-        if let Some(ref sfp) = rec.sysfp {
-            sys_cache.insert(sfp.clone(), s_sys.clone());
-        }
+    if cached_sys.is_none() && !s_sys.is_empty() && !sfp_key.is_empty() {
+        sys_cache.insert(sfp_key, s_sys.clone());
+    }
+    if cached_tools.is_none() && can_cache_tools && !s_tools.is_empty() {
+        tools_cache.insert(tools_key, s_tools.clone());
     }
 
     if inferred_hist > 0 && hist_u + hist_a == 0 && user_tok > inferred_hist {
@@ -703,6 +711,7 @@ pub fn session_turn_breakdown(
     let mut turns_out = Vec::with_capacity(turns.len());
     let mut calls_out = Vec::with_capacity(total_calls);
     let mut sys_cache: HashMap<String, String> = HashMap::with_capacity(16);
+    let mut tools_cache: HashMap<(String, i64, i64), String> = HashMap::with_capacity(16);
     let mut call_idx = 0usize;
 
     for (si, s_turns) in session_groups.into_iter().enumerate() {
@@ -726,7 +735,15 @@ pub fn session_turn_breakdown(
             for (ci, r) in g.iter().enumerate() {
                 call_idx += 1;
                 let inf = inferred.get(&(orig_ti, ci)).copied().unwrap_or(0);
-                let cd = build_call_detail(r, call_idx, &sid, turn_num, inf, &mut sys_cache);
+                let cd = build_call_detail(
+                    r,
+                    call_idx,
+                    &sid,
+                    turn_num,
+                    inf,
+                    &mut sys_cache,
+                    &mut tools_cache,
+                );
                 calls_out.push(cd);
             }
             let t_slice = &calls_out[t_start..];
@@ -864,36 +881,36 @@ pub fn findings(
     }
     let total_in = ordered.iter().map(rec_input).sum::<i64>().max(1);
 
-    let mut called: HashSet<String> = HashSet::new();
+    let mut called: HashSet<&str> = HashSet::new();
     for r in ordered {
         for tc in &r.tool_calls {
-            called.insert(tc.clone());
+            called.insert(tc.as_str());
         }
         for s in &r.segments {
             if s.kind == "tool_call" {
                 if let Some(ref nm) = s.name {
-                    called.insert(nm.clone());
+                    called.insert(nm.as_str());
                 }
             }
         }
     }
 
-    let mut unused: HashMap<String, i64> = HashMap::new();
-    struct BlockEntry {
+    let mut unused: HashMap<&str, i64> = HashMap::new();
+    struct BlockEntry<'a> {
         tokens: i64,
-        name: Option<String>,
-        kind: String,
+        name: Option<&'a str>,
+        kind: &'a str,
         calls: usize,
     }
-    let mut seen_blocks: HashMap<String, BlockEntry> = HashMap::new();
+    let mut seen_blocks: HashMap<&str, BlockEntry<'_>> = HashMap::new();
     let mut cached = 0i64;
     let mut have_cache = false;
     let mut short = 0usize;
     let mut failed_count = 0usize;
     let mut failed_tokens = 0i64;
-    let mut sys_per_call: Vec<(i64, String)> = Vec::new();
-    let mut by_conv: BTreeMap<String, Vec<&CallRecord>> = BTreeMap::new();
-    let mut q_counts: HashMap<String, usize> = HashMap::new();
+    let mut sys_per_call: Vec<(i64, String)> = Vec::with_capacity(ordered.len());
+    let mut by_conv: BTreeMap<&str, Vec<&CallRecord>> = BTreeMap::new();
+    let mut q_counts: HashMap<&str, usize> = HashMap::new();
     let mut neg_poor = 0usize;
 
     for r in ordered {
@@ -910,12 +927,12 @@ pub fn findings(
             failed_tokens += r_in;
         }
         if let Some(ref qual) = r.quality {
-            *q_counts.entry(qual.clone()).or_insert(0) += 1;
+            *q_counts.entry(qual.as_str()).or_insert(0) += 1;
             if qual == "poor" && r.residual.unwrap_or(0) < 0 {
                 neg_poor += 1;
             }
         }
-        let conv_key = r.conv.clone().unwrap_or_else(|| "_default".to_string());
+        let conv_key = r.conv.as_deref().unwrap_or("_default");
         by_conv.entry(conv_key).or_default().push(r);
 
         let defined_set: Option<HashSet<&str>> = if !r.tools_defined.is_empty() {
@@ -924,15 +941,15 @@ pub fn findings(
             None
         };
         let mut sys_tok_sum = 0i64;
-        let mut sys_hashes = Vec::new();
+        let mut sys_hashes = String::new();
         for s in &r.segments {
             if s.kind == "tool_def" {
                 if let Some(ref nm) = s.name {
                     let is_def = defined_set
                         .as_ref()
                         .is_none_or(|ds| ds.contains(nm.as_str()));
-                    if is_def && !called.contains(nm) {
-                        *unused.entry(nm.clone()).or_insert(0) += s.tokens;
+                    if is_def && !called.contains(nm.as_str()) {
+                        *unused.entry(nm.as_str()).or_insert(0) += s.tokens;
                     }
                 }
             }
@@ -943,33 +960,36 @@ pub fn findings(
                 && !s.hash.is_empty()
             {
                 let be = seen_blocks
-                    .entry(s.hash.clone())
+                    .entry(s.hash.as_str())
                     .or_insert_with(|| BlockEntry {
                         tokens: s.tokens,
-                        name: s.name.clone(),
-                        kind: s.kind.clone(),
+                        name: s.name.as_deref(),
+                        kind: s.kind.as_str(),
                         calls: 0,
                     });
                 be.calls += 1;
             }
             if s.kind == "system" {
                 sys_tok_sum += s.tokens;
-                sys_hashes.push(s.hash.clone());
+                if !sys_hashes.is_empty() {
+                    sys_hashes.push('|');
+                }
+                sys_hashes.push_str(&s.hash);
             }
         }
-        if !sys_hashes.is_empty() {
-            sys_per_call.push((sys_tok_sum, sys_hashes.join("|")));
+        if sys_tok_sum > 0 || !sys_hashes.is_empty() {
+            sys_per_call.push((sys_tok_sum, sys_hashes));
         }
     }
 
     if !unused.is_empty() {
         let paid: i64 = unused.values().sum();
-        let mut top_unused: Vec<(&String, &i64)> = unused.iter().collect();
+        let mut top_unused: Vec<(&&str, &i64)> = unused.iter().collect();
         top_unused.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
         let names: Vec<&str> = top_unused
             .into_iter()
             .take(5)
-            .map(|(n, _)| n.as_str())
+            .map(|(n, _)| *n)
             .collect();
         let ratio = (paid as f64) / (total_in as f64);
         out.push(Finding {
@@ -985,7 +1005,7 @@ pub fn findings(
         });
     }
 
-    let mut rep: Vec<&BlockEntry> = seen_blocks.values().filter(|e| e.calls >= 2).collect();
+    let mut rep: Vec<&BlockEntry<'_>> = seen_blocks.values().filter(|e| e.calls >= 2).collect();
     rep.sort_by_key(|b| std::cmp::Reverse(b.tokens * (b.calls as i64)));
     for e in rep.into_iter().take(3) {
         let paid = e.tokens * (e.calls as i64);
@@ -993,7 +1013,6 @@ pub fn findings(
         if ratio >= 0.05 {
             let nm_part = e
                 .name
-                .as_ref()
                 .map(|n| format!(" '{n}'"))
                 .unwrap_or_default();
             out.push(Finding {

@@ -1,4 +1,5 @@
 use once_cell::sync::Lazy;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tiktoken_rs::CoreBPE;
@@ -6,6 +7,7 @@ use tiktoken_rs::CoreBPE;
 const MAX_CACHE_TEXT_LEN: usize = 65_536;
 const SHARD_COUNT: usize = 16;
 const MAX_SHARD_ENTRIES: usize = 256;
+const L1_SLOTS: usize = 64;
 
 static O200K_BPE: Lazy<Option<CoreBPE>> = Lazy::new(|| tiktoken_rs::o200k_base().ok());
 static CL100K_BPE: Lazy<Option<CoreBPE>> = Lazy::new(|| tiktoken_rs::cl100k_base().ok());
@@ -17,35 +19,58 @@ static COUNT_SHARDS: Lazy<[Mutex<HashMap<CacheKey, i64>>; SHARD_COUNT]> = Lazy::
     std::array::from_fn(|_| Mutex::new(HashMap::with_capacity(MAX_SHARD_ENTRIES)))
 });
 
+thread_local! {
+    static L1_COUNT_CACHE: [Cell<(CacheKey, i64)>; L1_SLOTS] =
+        std::array::from_fn(|_| Cell::new(((0, 0, 0, 0), 0)));
+}
+
+#[inline]
+fn read_u64_le(slice: &[u8]) -> u64 {
+    let mut arr = [0u8; 8];
+    arr.copy_from_slice(&slice[..8]);
+    u64::from_le_bytes(arr)
+}
+
 #[inline]
 pub fn fast_hash_pair(bytes: &[u8]) -> (u64, u64) {
-    let mut h1: u64 = 0xcbf29ce484222325;
-    let mut h2: u64 = 0x84222325cbf29ce4;
+    let mut h1: u64 = 0xcbf29ce484222325 ^ (bytes.len() as u64);
+    let mut h2: u64 = 0x84222325cbf29ce4 ^ ((bytes.len() as u64).rotate_left(32));
     let len = bytes.len();
     if len <= 512 {
-        for &b in bytes {
-            h1 = (h1 ^ (b as u64)).wrapping_mul(0x100000001b3);
-            h2 = (h2.wrapping_add(b as u64)).wrapping_mul(0x517cc1b727220a95);
+        let mut i = 0usize;
+        while i + 8 <= len {
+            let w = read_u64_le(&bytes[i..i + 8]);
+            h1 = (h1 ^ w).wrapping_mul(0x9E3779B97F4A7C15);
+            h2 = (h2.wrapping_add(w)).wrapping_mul(0xBF58476D1CE4E5B9);
+            i += 8;
+        }
+        while i < len {
+            let b = bytes[i] as u64;
+            h1 = (h1 ^ b).wrapping_mul(0x100000001b3);
+            h2 = (h2.wrapping_add(b)).wrapping_mul(0x517cc1b727220a95);
+            i += 1;
         }
     } else {
-        for &b in &bytes[..128] {
-            h1 = (h1 ^ (b as u64)).wrapping_mul(0x100000001b3);
+        // 16 words (128B) from head + 16 words (128B) from tail + 32 strided interior words
+        let mut i = 0usize;
+        while i < 128 {
+            let w1 = read_u64_le(&bytes[i..i + 8]);
+            let w2 = read_u64_le(&bytes[len - 128 + i..len - 120 + i]);
+            h1 = (h1 ^ w1).wrapping_mul(0x9E3779B97F4A7C15);
+            h2 = (h2 ^ w2).wrapping_mul(0xBF58476D1CE4E5B9);
+            i += 8;
         }
-        for &b in &bytes[len - 128..] {
-            h2 = (h2 ^ (b as u64)).wrapping_mul(0x517cc1b727220a95);
-        }
-        let step = (len - 256) / 64;
-        if step > 0 {
-            let mut idx = 128;
-            while idx < len - 128 {
-                let b = bytes[idx];
-                h1 = (h1 ^ (b as u64)).wrapping_mul(0x100000001b3);
-                h2 = (h2.rotate_left(5) ^ (b as u64)).wrapping_mul(0x517cc1b727220a95);
-                idx += step;
-            }
+        let span = len - 256;
+        let step = (span / 32).max(8);
+        let mut idx = 128usize;
+        while idx + 8 <= len - 128 {
+            let w = read_u64_le(&bytes[idx..idx + 8]);
+            h1 = (h1 ^ w).wrapping_mul(0x9E3779B97F4A7C15);
+            h2 = (h2.rotate_left(13) ^ w).wrapping_mul(0x94D049BB133111EB);
+            idx += step;
         }
     }
-    (h1, h2)
+    (h1 ^ (h1 >> 31), h2 ^ (h2 >> 29))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,9 +146,21 @@ impl TokenCounter {
                 if text.len() <= MAX_CACHE_TEXT_LEN {
                     let (h1, h2) = fast_hash_pair(text.as_bytes());
                     let key: CacheKey = (enc_id as u8, text.len(), h1, h2);
-                    let shard_idx = (h1 as usize) & (SHARD_COUNT - 1);
+                    let l1_idx = (h1 as usize) & (L1_SLOTS - 1);
+                    if let Some(hit) = L1_COUNT_CACHE.with(|slots| {
+                        let (ck, cv) = slots[l1_idx].get();
+                        if ck == key {
+                            Some(cv)
+                        } else {
+                            None
+                        }
+                    }) {
+                        return hit;
+                    }
+                    let shard_idx = ((h1 >> 6) as usize) & (SHARD_COUNT - 1);
                     if let Ok(guard) = COUNT_SHARDS[shard_idx].lock() {
                         if let Some(&cached) = guard.get(&key) {
+                            L1_COUNT_CACHE.with(|slots| slots[l1_idx].set((key, cached)));
                             return cached;
                         }
                     }
@@ -137,6 +174,7 @@ impl TokenCounter {
                         }
                         guard.insert(key, n);
                     }
+                    L1_COUNT_CACHE.with(|slots| slots[l1_idx].set((key, n)));
                     return n;
                 }
                 match enc_id.bpe() {

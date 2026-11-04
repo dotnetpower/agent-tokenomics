@@ -7,6 +7,7 @@ use once_cell::sync::Lazy;
 use rand::RngCore;
 use regex::Regex;
 use sha2::Sha256;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -19,10 +20,16 @@ pub const MAX_SEGMENT_TEXT_CHARS: usize = 32_768;
 pub const MAX_SECTION_SPLIT_CHARS: usize = 524_288;
 
 const HASH_SHARDS: usize = 16;
+const L1_HASH_SLOTS: usize = 64;
 type HashCacheKey = (u64, u64, usize, u64);
 type HashShardMap = HashMap<HashCacheKey, [u8; 16]>;
 static HASH_CACHE: Lazy<[Mutex<HashShardMap>; HASH_SHARDS]> =
     Lazy::new(|| std::array::from_fn(|_| Mutex::new(HashMap::with_capacity(256))));
+
+thread_local! {
+    static L1_HASH_CACHE: [Cell<(HashCacheKey, [u8; 16])>; L1_HASH_SLOTS] =
+        std::array::from_fn(|_| Cell::new(((0, 0, 0, 0), [0u8; 16])));
+}
 
 static ID_SEED: Lazy<u64> = Lazy::new(|| {
     let mut b = [0u8; 8];
@@ -159,10 +166,22 @@ pub fn hash_text(text: &str, salt: &[u8]) -> String {
         let (h1, h2) = fast_hash_pair(text.as_bytes());
         let (s1, _) = fast_hash_pair(key);
         let ckey: HashCacheKey = (h1, h2, text.len(), s1);
-        let shard = (h1 as usize) & (HASH_SHARDS - 1);
+        let l1_idx = (h1 as usize) & (L1_HASH_SLOTS - 1);
+        if let Some(hex_arr) = L1_HASH_CACHE.with(|slots| {
+            let (ck, cv) = slots[l1_idx].get();
+            if ck == ckey && ck.2 != 0 {
+                Some(cv)
+            } else {
+                None
+            }
+        }) {
+            return std::str::from_utf8(&hex_arr).unwrap_or("").to_string();
+        }
+        let shard = ((h1 >> 6) as usize) & (HASH_SHARDS - 1);
         if let Ok(guard) = HASH_CACHE[shard].lock() {
-            if let Some(hex_arr) = guard.get(&ckey) {
-                return std::str::from_utf8(hex_arr).unwrap_or("").to_string();
+            if let Some(&hex_arr) = guard.get(&ckey) {
+                L1_HASH_CACHE.with(|slots| slots[l1_idx].set((ckey, hex_arr)));
+                return std::str::from_utf8(&hex_arr).unwrap_or("").to_string();
             }
         }
         let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key size");
@@ -176,6 +195,7 @@ pub fn hash_text(text: &str, salt: &[u8]) -> String {
             }
             guard.insert(ckey, hex_arr);
         }
+        L1_HASH_CACHE.with(|slots| slots[l1_idx].set((ckey, hex_arr)));
         return std::str::from_utf8(&hex_arr).unwrap_or("").to_string();
     }
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key size");

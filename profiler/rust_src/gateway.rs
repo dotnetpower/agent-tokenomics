@@ -1084,6 +1084,7 @@ pub struct GatewayServer {
     pub gateway: Arc<Gateway>,
     pub port: u16,
     stop: Arc<AtomicBool>,
+    stopped: bool,
     handle: Option<thread::JoinHandle<()>>,
     workers: Vec<thread::JoinHandle<()>>,
 }
@@ -1144,13 +1145,16 @@ impl GatewayServer {
             gateway,
             port,
             stop,
+            stopped: false,
             handle: Some(handle),
             workers,
         })
     }
 
     pub fn stop(&mut self) {
-        if !self.stop.swap(true, Ordering::SeqCst) {
+        if !self.stopped {
+            self.stopped = true;
+            self.stop.store(true, Ordering::SeqCst);
             let _ = TcpStream::connect_timeout(
                 &std::net::SocketAddr::from(([127, 0, 0, 1], self.port)),
                 Duration::from_millis(50),

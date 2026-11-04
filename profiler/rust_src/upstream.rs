@@ -265,6 +265,20 @@ pub fn proxy_for(host: &str) -> Option<ProxyInfo> {
 }
 
 pub fn connect_tcp_timeout(host: &str, port: u16, timeout: Duration) -> std::io::Result<TcpStream> {
+    if host == "127.0.0.1" || host == "localhost" {
+        let s = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), timeout)?;
+        let _ = s.set_nodelay(true);
+        let _ = s.set_read_timeout(Some(Duration::from_secs(60)));
+        let _ = s.set_write_timeout(Some(Duration::from_secs(60)));
+        return Ok(s);
+    }
+    if let Ok(ip) = host.trim_matches(|c| c == '[' || c == ']').parse::< std::net::IpAddr>() {
+        let s = TcpStream::connect_timeout(&SocketAddr::new(ip, port), timeout)?;
+        let _ = s.set_nodelay(true);
+        let _ = s.set_read_timeout(Some(Duration::from_secs(60)));
+        let _ = s.set_write_timeout(Some(Duration::from_secs(60)));
+        return Ok(s);
+    }
     let addr_spec = if host.contains(':') && !host.starts_with('[') {
         format!("[{host}]:{port}")
     } else {
@@ -281,6 +295,7 @@ pub fn connect_tcp_timeout(host: &str, port: u16, timeout: Duration) -> std::io:
     for addr in addrs {
         match TcpStream::connect_timeout(&addr, timeout) {
             Ok(s) => {
+                let _ = s.set_nodelay(true);
                 let _ = s.set_read_timeout(Some(Duration::from_secs(60)));
                 let _ = s.set_write_timeout(Some(Duration::from_secs(60)));
                 return Ok(s);

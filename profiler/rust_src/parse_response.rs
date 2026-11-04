@@ -535,6 +535,24 @@ fn trim_ascii(mut s: &[u8]) -> &[u8] {
     s
 }
 
+#[derive(serde::Deserialize)]
+struct FastChatChunk<'a> {
+    #[serde(default, borrow)]
+    choices: Vec<FastChatChoice<'a>>,
+}
+
+#[derive(serde::Deserialize)]
+struct FastChatChoice<'a> {
+    #[serde(default, borrow)]
+    delta: Option<FastChatDelta<'a>>,
+}
+
+#[derive(serde::Deserialize)]
+struct FastChatDelta<'a> {
+    #[serde(default, borrow)]
+    content: Option<std::borrow::Cow<'a, str>>,
+}
+
 pub struct SSEParser {
     pub provider: String,
     buf: Vec<u8>,
@@ -556,25 +574,49 @@ impl SSEParser {
         if data.is_empty() {
             return;
         }
+        // Fast path when internal buffer is empty: scan `data` directly without copying into `self.buf`
+        if self.pos == self.buf.len() {
+            self.buf.clear();
+            self.pos = 0;
+            let mut cur = 0usize;
+            while cur < data.len() {
+                let Some((idx, sep_len)) = find_next_sse_boundary(&data[cur..]) else {
+                    break;
+                };
+                let ev = &data[cur..cur + idx];
+                cur += idx + sep_len;
+                self.process_event_slice(ev);
+            }
+            if cur < data.len() {
+                let rem = &data[cur..];
+                if rem.len() <= MAX_SSE_BUFFER {
+                    self.buf.extend_from_slice(rem);
+                }
+            }
+            return;
+        }
+
         if self.buf.len().saturating_sub(self.pos) + data.len() > MAX_SSE_BUFFER {
             self.buf.clear();
             self.pos = 0;
             return;
         }
         self.buf.extend_from_slice(data);
-        while self.pos < self.buf.len() {
-            let Some((idx, sep_len)) = find_next_sse_boundary(&self.buf[self.pos..]) else {
+        let mut local_buf = std::mem::take(&mut self.buf);
+        while self.pos < local_buf.len() {
+            let Some((idx, sep_len)) = find_next_sse_boundary(&local_buf[self.pos..]) else {
                 break;
             };
             let ev_start = self.pos;
             let ev_end = self.pos + idx;
             self.pos += idx + sep_len;
-            self.process_event_range(ev_start, ev_end);
+            self.process_event_slice(&local_buf[ev_start..ev_end]);
         }
-        if self.pos > 65_536 || self.pos == self.buf.len() {
-            self.buf.drain(..self.pos);
+        if self.pos > 65_536 || self.pos == local_buf.len() {
+            local_buf.drain(..self.pos);
             self.pos = 0;
         }
+        self.buf = local_buf;
     }
 
     pub fn feed_text(&mut self, raw: &str) {
@@ -582,9 +624,7 @@ impl SSEParser {
             if let Some(rest) = line.strip_prefix("data:") {
                 let payload = rest.trim();
                 if !payload.is_empty() && payload != "[DONE]" {
-                    if let Ok(Value::Object(o)) = serde_json::from_str::<Value>(payload) {
-                        self.process_obj(&o);
-                    }
+                    self.process_json_bytes(payload.as_bytes());
                 }
             }
         }
@@ -592,71 +632,81 @@ impl SSEParser {
 
     pub fn finish(&mut self) -> ParsedResponse {
         if self.pos < self.buf.len() {
-            let ev_start = self.pos;
-            let ev_end = self.buf.len();
-            self.pos = ev_end;
-            self.process_event_range(ev_start, ev_end);
-            self.buf.clear();
+            let local_buf = std::mem::take(&mut self.buf);
+            let pos = self.pos;
             self.pos = 0;
+            self.process_event_slice(&local_buf[pos..]);
         }
         self.result.clone()
     }
 
-    fn process_event_range(&mut self, start: usize, end: usize) {
-        let raw = &self.buf[start..end];
+    fn process_json_bytes(&mut self, slice: &[u8]) {
+        if slice.is_empty() || slice == b"[DONE]" {
+            return;
+        }
+        if self.provider == OPENAI_CHAT
+            && find_subslice(slice, b"\"choices\"").is_some()
+            && find_subslice(slice, b"\"usage\"").is_none()
+            && find_subslice(slice, b"\"tool_calls\"").is_none()
+        {
+            if let Ok(chunk) = serde_json::from_slice::<FastChatChunk<'_>>(slice) {
+                for ch in chunk.choices {
+                    if let Some(d) = ch.delta {
+                        if let Some(c) = d.content {
+                            self.result.text.push_str(&c);
+                        }
+                    }
+                }
+                return;
+            }
+        }
+        if let Ok(Value::Object(o)) = serde_json::from_slice::<Value>(slice) {
+            self.process_obj(&o);
+        }
+    }
+
+    fn process_event_slice(&mut self, raw: &[u8]) {
         if find_subslice(raw, b"data:").is_none() {
             return;
         }
-        let mut first_payload: Option<(usize, usize)> = None;
+        let mut first_payload: Option<&[u8]> = None;
         let mut multi_payload: Option<Vec<u8>> = None;
-        let mut line_start = start;
-        while line_start <= end {
-            let rel_nl = self.buf[line_start..end]
+        let mut line_start = 0usize;
+        while line_start <= raw.len() {
+            let rel_nl = raw[line_start..]
                 .iter()
                 .position(|&b| b == b'\n')
-                .unwrap_or(end - line_start);
+                .unwrap_or(raw.len() - line_start);
             let mut line_end = line_start + rel_nl;
-            if line_end > line_start && self.buf[line_end - 1] == b'\r' {
+            if line_end > line_start && raw[line_end - 1] == b'\r' {
                 line_end -= 1;
             }
-            let line = &self.buf[line_start..line_end];
+            let line = &raw[line_start..line_end];
             if line.starts_with(b"data:") {
                 let p = trim_ascii(&line[5..]);
                 if let Some(ref mut joined) = multi_payload {
                     joined.push(b'\n');
                     joined.extend_from_slice(p);
-                } else if let Some((fs, fe)) = first_payload {
-                    let mut v = Vec::with_capacity((fe - fs) + 1 + p.len());
-                    v.extend_from_slice(&self.buf[fs..fe]);
+                } else if let Some(fp) = first_payload {
+                    let mut v = Vec::with_capacity(fp.len() + 1 + p.len());
+                    v.extend_from_slice(fp);
                     v.push(b'\n');
                     v.extend_from_slice(p);
                     multi_payload = Some(v);
                 } else {
-                    let off = p.as_ptr() as usize - self.buf.as_ptr() as usize;
-                    first_payload = Some((off, off + p.len()));
+                    first_payload = Some(p);
                 }
             }
-            if line_start + rel_nl >= end {
+            if line_start + rel_nl >= raw.len() {
                 break;
             }
             line_start += rel_nl + 1;
         }
 
         if let Some(joined) = multi_payload {
-            if joined.is_empty() || joined == b"[DONE]" {
-                return;
-            }
-            if let Ok(Value::Object(o)) = serde_json::from_slice::<Value>(&joined) {
-                self.process_obj(&o);
-            }
-        } else if let Some((ps, pe)) = first_payload {
-            let slice = &self.buf[ps..pe];
-            if slice.is_empty() || slice == b"[DONE]" {
-                return;
-            }
-            if let Ok(Value::Object(o)) = serde_json::from_slice::<Value>(slice) {
-                self.process_obj(&o);
-            }
+            self.process_json_bytes(&joined);
+        } else if let Some(slice) = first_payload {
+            self.process_json_bytes(slice);
         }
     }
 
