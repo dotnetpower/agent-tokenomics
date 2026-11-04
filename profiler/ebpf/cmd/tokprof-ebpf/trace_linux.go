@@ -70,6 +70,7 @@ func runTrace(args []string) {
 	exitOnEOF := fs.Bool("exit-on-stdin-eof", false, "exit (and remove all probes) when stdin closes; used by the Python launcher")
 	crashAfter := fs.Duration("crash-after", 0, "testing only: SIGKILL this process after the delay, to check that the kernel removes the probes")
 	noPlain := fs.Bool("no-plain", false, "only observe TLS libraries; skip the syscall probes for cleartext HTTP")
+	debugUnmatched := fs.Bool("debug-unmatched", false, "testing only: log the first bytes of writes that do not start an HTTP POST")
 	debug := fs.Bool("debug", false, "print the full eBPF verifier log when the program fails to load")
 	verbose := fs.Bool("verbose", false, "log connections that were ignored and why")
 	dump := fs.Bool("dump-events", false, "log every captured chunk (debugging; prints the first bytes of plaintext)")
@@ -94,7 +95,7 @@ func runTrace(args []string) {
 		fatal("choose what to watch: --pid, --comm or --all")
 	}
 
-	t, err := tap.New(tap.Options{WatchAll: sel.all, NoPlain: *noPlain})
+	t, err := tap.New(tap.Options{WatchAll: sel.all, NoPlain: *noPlain, DebugUnmatched: *debugUnmatched})
 	if err != nil {
 		if *debug {
 			var ve *ebpf.VerifierError
@@ -249,6 +250,10 @@ func runTrace(args []string) {
 	for running := true; running; {
 		select {
 		case ev := <-events:
+			if ev.SSL&tap.DebugFlag != 0 && ev.SSL&tap.PlainFlag == 0 {
+				logf("unmatched write pid=%d comm=%s fd=%d len=%d first=%q", ev.PID, ev.Comm, ev.SSL&0xffffffff, ev.Total, firstBytes(ev.Data, 32))
+				continue
+			}
 			if *dump {
 				logf("ev pid=%d tid=%d ssl=%#x dir=%d total=%d off=%d len=%d %q", ev.PID, ev.TID, ev.SSL, ev.Dir, ev.Total, ev.Off, len(ev.Data), firstBytes(ev.Data, 20))
 			}

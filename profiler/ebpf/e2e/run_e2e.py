@@ -279,7 +279,7 @@ def main():
         time.sleep(1.0)
 
         pids = ",".join(str(p.pid) for p in clients.values())
-        cmd = ([ "sudo", "-n"] if args.sudo else []) + [helper, "trace", "--pid", pids, "--idle", "500ms", "--exit-on-stdin-eof", "--verbose"] + (["--dump-events"] if os.environ.get("E2E_DUMP") else [])
+        cmd = ([ "sudo", "-n"] if args.sudo else []) + [helper, "trace", "--pid", pids, "--idle", "500ms", "--exit-on-stdin-eof", "--verbose", "--debug-unmatched"] + (["--dump-events"] if os.environ.get("E2E_DUMP") else [])
         jsonl = os.path.join(tmp, "out.jsonl")
         penv = None
         if args.tokprof:

@@ -66,6 +66,7 @@ const (
 	tlsProgSslReadExEnter  = "ssl_read_ex_enter"
 	tlsProgSslWriteEnter   = "ssl_write_enter"
 	tlsProgSslWriteExEnter = "ssl_write_ex_enter"
+	tlsVarDebugUnmatched   = "debug_unmatched"
 	tlsVarNsDev            = "ns_dev"
 	tlsVarNsIno            = "ns_ino"
 	tlsVarSelfTgid         = "self_tgid"
@@ -149,10 +150,11 @@ type tlsMapSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tlsVariableSpecs struct {
-	NsDev    *ebpf.VariableSpec `ebpf:"ns_dev"`
-	NsIno    *ebpf.VariableSpec `ebpf:"ns_ino"`
-	SelfTgid *ebpf.VariableSpec `ebpf:"self_tgid"`
-	WatchAll *ebpf.VariableSpec `ebpf:"watch_all"`
+	DebugUnmatched *ebpf.VariableSpec `ebpf:"debug_unmatched"`
+	NsDev          *ebpf.VariableSpec `ebpf:"ns_dev"`
+	NsIno          *ebpf.VariableSpec `ebpf:"ns_ino"`
+	SelfTgid       *ebpf.VariableSpec `ebpf:"self_tgid"`
+	WatchAll       *ebpf.VariableSpec `ebpf:"watch_all"`
 }
 
 // tlsObjects contains all objects after they have been loaded into the kernel.
@@ -200,10 +202,11 @@ func (m *tlsMaps) Close() error {
 //
 // It can be passed to loadTlsObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tlsVariables struct {
-	NsDev    *ebpf.Variable `ebpf:"ns_dev"`
-	NsIno    *ebpf.Variable `ebpf:"ns_ino"`
-	SelfTgid *ebpf.Variable `ebpf:"self_tgid"`
-	WatchAll *ebpf.Variable `ebpf:"watch_all"`
+	DebugUnmatched *ebpf.Variable `ebpf:"debug_unmatched"`
+	NsDev          *ebpf.Variable `ebpf:"ns_dev"`
+	NsIno          *ebpf.Variable `ebpf:"ns_ino"`
+	SelfTgid       *ebpf.Variable `ebpf:"self_tgid"`
+	WatchAll       *ebpf.Variable `ebpf:"watch_all"`
 }
 
 // tlsPrograms contains all programs after they have been loaded into the kernel.

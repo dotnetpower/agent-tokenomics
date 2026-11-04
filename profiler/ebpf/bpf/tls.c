@@ -214,6 +214,7 @@ int ssl_leave(struct pt_regs *ctx)
 
 const volatile __u32 self_tgid;
 const volatile __u32 watch_all;
+const volatile __u32 debug_unmatched; // testing only: report the first bytes of writes that did not start an HTTP POST
 
 struct sys_enter_ctx {
 	__u64 pad;
@@ -359,6 +360,13 @@ static __always_inline int sys_exit(struct sys_exit_ctx *c)
 			return 0;
 		if (head[0] != 'P' || head[1] != 'O' || head[2] != 'S' || head[3] != 'T' || head[4] != ' ') {
 			bump(4); // a write on a watched process that does not start an HTTP POST (usual: logs, files, other protocols)
+			if (debug_unmatched) {
+				ca.ssl = (1ULL << 62) | a.fd;
+				ca.buf = first;
+				ca.num = a.len;
+				ca.dir = a.dir;
+				emit_all(&ca, id, ret > 32 ? 32 : (__u32)ret);
+			}
 			return 0;
 		}
 		bpf_map_update_elem(&plain_conns, &k, &one, BPF_ANY);

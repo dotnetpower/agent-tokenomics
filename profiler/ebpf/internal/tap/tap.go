@@ -31,6 +31,9 @@ const (
 	// PlainFlag marks the connection id of a cleartext socket (the top bit; the rest is the file descriptor).
 	PlainFlag = uint64(1) << 63
 
+	// DebugFlag marks a debug sample (see Options.DebugUnmatched).
+	DebugFlag = uint64(1) << 62
+
 	// MaxCapture is the most bytes of one TLS call the kernel side copies (16 chunks of 16 KiB).
 	MaxCapture = 16 * 16384
 )
@@ -61,6 +64,8 @@ type Tap struct {
 type Options struct {
 	WatchAll bool // observe plain HTTP in every process (otherwise only those added with Watch)
 	NoPlain  bool // do not attach the syscall tracepoints at all
+	// DebugUnmatched reports the first bytes of writes that did not start an HTTP POST (testing only).
+	DebugUnmatched bool
 }
 
 // New loads the program into the kernel. It needs CAP_BPF/CAP_PERFMON (or root).
@@ -76,6 +81,9 @@ func New(opts Options) (*Tap, error) {
 		return nil, fmt.Errorf("load eBPF spec: %w", err)
 	}
 	_ = spec.Variables["self_tgid"].Set(uint32(os.Getpid()))
+	if opts.DebugUnmatched {
+		_ = spec.Variables["debug_unmatched"].Set(uint32(1))
+	}
 	if opts.WatchAll {
 		_ = spec.Variables["watch_all"].Set(uint32(1))
 	}
