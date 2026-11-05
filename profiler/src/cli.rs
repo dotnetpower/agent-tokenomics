@@ -15,15 +15,31 @@ use crate::store::{atomic_write_0600, read_jsonl, ReadStats};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::fs;
-use std::io::{IsTerminal, Read};
+use std::io::{IsTerminal, Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SUBCOMMANDS: &[&str] = &[
-    "profile", "run", "shell", "ebpf", "mitm", "explain", "report", "compare", "export", "start",
-    "serve", "status", "env", "stop", "doctor", "selftest",
+    "profile",
+    "run",
+    "shell",
+    "ebpf",
+    "mitm",
+    "explain",
+    "report",
+    "compare",
+    "export",
+    "start",
+    "serve",
+    "serve-report",
+    "status",
+    "env",
+    "stop",
+    "doctor",
+    "selftest",
 ];
 
 fn default_out() -> String {
@@ -97,18 +113,221 @@ fn load_prices(path_opt: Option<&str>) -> Option<Map<String, Value>> {
     val.as_object().cloned()
 }
 
-fn open_in_browser(path: &str) {
-    let abs = fs::canonicalize(path)
-        .unwrap_or_else(|_| PathBuf::from(path))
+fn open_url_in_browser(url: &str) {
+    if std::env::var("CI").is_ok()
+        || std::env::var("GITHUB_ACTIONS").is_ok()
+        || std::env::var("TOKPROF_NO_BROWSER").is_ok()
+    {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    let _ = Command::new("open")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    #[cfg(target_os = "linux")]
+    let _ = Command::new("xdg-open")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    #[cfg(windows)]
+    let _ = Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
+fn probe_report_port(port: u16, expected_dir: &str, file_name: &str) -> bool {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(120)) else {
+        return false;
+    };
+    let _ = s.set_read_timeout(Some(Duration::from_millis(200)));
+    let _ = s.set_write_timeout(Some(Duration::from_millis(200)));
+    let req = format!(
+        "GET /__tokprof/report-dir HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    if s.write_all(req.as_bytes()).is_ok() {
+        let mut resp = String::new();
+        if s.read_to_string(&mut resp).is_ok() && resp.starts_with("HTTP/1.1 200") {
+            if let Some((_, body)) = resp.split_once("\r\n\r\n") {
+                return body.trim() == expected_dir;
+            }
+        }
+    }
+    // Fallback: check if an existing static HTTP server on 18765 is already serving this file
+    if port == 18765 {
+        if let Ok(mut s2) = TcpStream::connect_timeout(&addr, Duration::from_millis(120)) {
+            let _ = s2.set_read_timeout(Some(Duration::from_millis(200)));
+            let _ = s2.set_write_timeout(Some(Duration::from_millis(200)));
+            let req2 = format!(
+                "HEAD /{file_name} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+            );
+            if s2.write_all(req2.as_bytes()).is_ok() {
+                let mut r2 = String::new();
+                if s2.read_to_string(&mut r2).is_ok()
+                    && (r2.starts_with("HTTP/1.0 200") || r2.starts_with("HTTP/1.1 200"))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+pub fn ensure_report_server(html_path: &str) -> Option<String> {
+    if std::env::var("CI").is_ok()
+        || std::env::var("GITHUB_ACTIONS").is_ok()
+        || std::env::var("TOKPROF_NO_SERVER").is_ok()
+    {
+        return None;
+    }
+    let abs = fs::canonicalize(html_path).unwrap_or_else(|_| PathBuf::from(html_path));
+    let dir = abs.parent()?;
+    let dir_str = dir.to_string_lossy().into_owned();
+    let file_name = abs.file_name()?.to_string_lossy().into_owned();
+
+    for port in 18765..=18775 {
+        if probe_report_port(port, &dir_str, &file_name) {
+            return Some(format!("http://127.0.0.1:{port}/{file_name}"));
+        }
+    }
+
+    let mut chosen_port = None;
+    for port in 18765..=18775 {
+        if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
+            drop(listener);
+            chosen_port = Some(port);
+            break;
+        }
+    }
+    let port = chosen_port?;
+    let self_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("tokprof"));
+    let _ = Command::new(self_exe)
+        .args([
+            "serve-report",
+            "--out",
+            &dir_str,
+            "--state",
+            &port.to_string(),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let deadline = Instant::now() + Duration::from_millis(600);
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    while Instant::now() < deadline {
+        if TcpStream::connect_timeout(&addr, Duration::from_millis(50)).is_ok() {
+            return Some(format!("http://127.0.0.1:{port}/{file_name}"));
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    Some(format!("http://127.0.0.1:{port}/{file_name}"))
+}
+
+pub fn serve_report_http(dir: &str, port: u16) -> i32 {
+    let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) else {
+        return 1;
+    };
+    let _ = listener.set_nonblocking(true);
+    let canon_dir = fs::canonicalize(dir)
+        .unwrap_or_else(|_| PathBuf::from(dir))
         .to_string_lossy()
         .into_owned();
-    let url = format!("file://{abs}");
-    #[cfg(target_os = "macos")]
-    let _ = Command::new("open").arg(&url).spawn();
-    #[cfg(target_os = "linux")]
-    let _ = Command::new("xdg-open").arg(&url).spawn();
-    #[cfg(windows)]
-    let _ = Command::new("cmd").args(["/C", "start", "", &url]).spawn();
+    let mut last_active = Instant::now();
+    let idle_limit = Duration::from_secs(1800);
+
+    while last_active.elapsed() < idle_limit {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                last_active = Instant::now();
+                let _ = stream.set_nonblocking(false);
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+                let mut buf = [0u8; 4096];
+                let Ok(n) = stream.read(&mut buf) else {
+                    continue;
+                };
+                if n == 0 {
+                    continue;
+                }
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let first_line = req.lines().next().unwrap_or("");
+                let mut parts = first_line.split_whitespace();
+                let method = parts.next().unwrap_or("GET");
+                let raw_target = parts.next().unwrap_or("/");
+                let path_part = raw_target.split('?').next().unwrap_or("/");
+
+                if path_part == "/__tokprof/report-dir" {
+                    let body = canon_dir.as_bytes();
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(body);
+                    continue;
+                }
+                if path_part == "/__tokprof/shutdown" && method == "POST" {
+                    let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+                    break;
+                }
+
+                let trimmed = path_part.trim_start_matches('/');
+                let rel_name = if trimmed.is_empty() {
+                    "latest.html"
+                } else {
+                    trimmed
+                };
+                if rel_name.contains("..") || rel_name.contains('/') || rel_name.contains('\\') {
+                    let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 9\r\nConnection: close\r\n\r\nForbidden");
+                    continue;
+                }
+                let file_path = Path::new(&canon_dir).join(rel_name);
+                match fs::read(&file_path) {
+                    Ok(bytes) => {
+                        let ctype = if rel_name.ends_with(".html") {
+                            "text/html; charset=utf-8"
+                        } else if rel_name.ends_with(".csv") {
+                            "text/csv; charset=utf-8"
+                        } else if rel_name.ends_with(".jsonl") || rel_name.ends_with(".json") {
+                            "application/json; charset=utf-8"
+                        } else {
+                            "application/octet-stream"
+                        };
+                        let head = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            bytes.len()
+                        );
+                        let _ = stream.write_all(head.as_bytes());
+                        if method != "HEAD" {
+                            let _ = stream.write_all(&bytes);
+                        }
+                    }
+                    Err(_) => {
+                        let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nNot Found");
+                    }
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(40));
+            }
+            Err(_) => {
+                thread::sleep(Duration::from_millis(40));
+            }
+        }
+    }
+    0
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -150,6 +369,7 @@ fn write_html_dashboard(
         summary_opt,
     );
     let _ = atomic_write_0600(&dest, &content);
+    let mut serve_target = dest.clone();
     if html_arg.is_empty() {
         let parent = Path::new(jsonl_path).parent();
         if parent
@@ -160,12 +380,20 @@ fn write_html_dashboard(
             if let Some(p) = parent {
                 let latest = p.join("latest.html").to_string_lossy().into_owned();
                 let _ = atomic_write_0600(&latest, &content);
+                serve_target = latest;
             }
         }
     }
     eprintln!("tokprof: HTML dashboard written to {dest}");
-    if open_browser {
-        open_in_browser(&dest);
+    if let Some(url) = ensure_report_server(&serve_target) {
+        eprintln!("tokprof: Report server live at {url}");
+        open_url_in_browser(&url);
+    } else if open_browser {
+        let abs = fs::canonicalize(&dest)
+            .unwrap_or_else(|_| PathBuf::from(&dest))
+            .to_string_lossy()
+            .into_owned();
+        open_url_in_browser(&format!("file://{abs}"));
     }
     Some(dest)
 }
@@ -334,7 +562,10 @@ fn run_report(
         );
     } else if open_browser && fmt == "html" {
         if let Some(of) = out_file {
-            open_in_browser(of);
+            if let Some(url) = ensure_report_server(of) {
+                eprintln!("tokprof: Report server live at {url}");
+                open_url_in_browser(&url);
+            }
         }
     }
 
@@ -825,10 +1056,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
                         .cloned()
                         .collect::<Vec<_>>()
                         .join(",");
-                    let dur = opts
-                        .duration
-                        .as_deref()
-                        .and_then(|s| s.trim_end_matches('s').parse::<f64>().ok());
+                    let dur = Some(session::parse_capped_duration_secs(opts.duration.as_deref()) as f64);
                     run_mitm(
                         &out,
                         &local_spec,
@@ -935,10 +1163,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
                     return 2;
                 }
             };
-            let dur = opts
-                .duration
-                .as_deref()
-                .and_then(|s| s.trim_end_matches('s').parse::<f64>().ok());
+            let dur = Some(session::parse_capped_duration_secs(opts.duration.as_deref()) as f64);
             let code = run_mitm(
                 &out,
                 &opts.local,
@@ -1012,6 +1237,15 @@ pub fn run_cli(argv: &[String]) -> i32 {
                 print!("{text}");
             }
             0
+        }
+        "serve-report" => {
+            let dir = opts.out.as_deref().unwrap_or(".tokprof");
+            let port = opts
+                .state
+                .as_deref()
+                .and_then(|s| s.parse::<u16>().ok())
+                .unwrap_or(18765);
+            serve_report_http(dir, port)
         }
         "start" | "serve" | "status" | "env" | "stop" => {
             let st_file = session::state_path(opts.state.as_deref());

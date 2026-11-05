@@ -14,6 +14,23 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 
+pub const MAX_PROFILE_SECS: u64 = 180;
+
+pub fn parse_capped_duration_secs(spec: Option<&str>) -> u64 {
+    let Some(raw) = spec.map(|s| s.trim()).filter(|s| !s.is_empty()) else {
+        return MAX_PROFILE_SECS;
+    };
+    let lower = raw.to_ascii_lowercase();
+    let secs = if let Some(m_str) = lower.strip_suffix('m') {
+        m_str.trim().parse::<f64>().map(|m| (m * 60.0).round() as u64).unwrap_or(MAX_PROFILE_SECS)
+    } else if let Some(s_str) = lower.strip_suffix('s') {
+        s_str.trim().parse::<f64>().map(|s| s.round() as u64).unwrap_or(MAX_PROFILE_SECS)
+    } else {
+        lower.parse::<f64>().map(|s| s.round() as u64).unwrap_or(MAX_PROFILE_SECS)
+    };
+    secs.clamp(1, MAX_PROFILE_SECS)
+}
+
 static SIG_STOP: AtomicBool = AtomicBool::new(false);
 
 pub fn clear_sig_stop() {
@@ -319,7 +336,13 @@ pub fn serve(
 
     SIG_STOP.store(false, Ordering::SeqCst);
     install_signal_handlers();
+    let max_deadline = Instant::now() + Duration::from_secs(MAX_PROFILE_SECS);
+    let mut timed_out = false;
     while !gw.shutdown_flag.load(Ordering::SeqCst) && !SIG_STOP.load(Ordering::SeqCst) {
+        if Instant::now() >= max_deadline {
+            timed_out = true;
+            break;
+        }
         thread::sleep(Duration::from_millis(25));
     }
 
@@ -336,6 +359,15 @@ pub fn serve(
     srv.stop();
     writer.close();
     let _ = fs::remove_file(state_file);
+    if timed_out {
+        let self_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("tokprof"));
+        let _ = Command::new(self_exe)
+            .args(["report", &st_obj.out, "--html", "--csv", "--open"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
     0
 }
 
@@ -402,7 +434,7 @@ pub fn start(
                     .map(|s| format!(", eBPF: {s}"))
                     .unwrap_or_default();
                 println!(
-                    "tokprof: session started (pid {}, gateway 127.0.0.1:{}{})",
+                    "tokprof: session started (pid {}, gateway 127.0.0.1:{}{}, max 3m/180s)",
                     st.pid, st.port, ebpf_info
                 );
                 println!("  recording to: {}", st.out);

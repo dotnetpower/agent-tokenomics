@@ -1222,6 +1222,257 @@ pub fn html_escape(s: &str) -> String {
     out
 }
 
+fn is_compact_json_array(arr: &[Value]) -> bool {
+    if arr.len() > 8 {
+        return false;
+    }
+    let mut total_chars = 2usize;
+    for item in arr {
+        match item {
+            Value::String(s) => total_chars += s.len() + 4,
+            Value::Number(n) => total_chars += n.to_string().len() + 2,
+            Value::Bool(_) | Value::Null => total_chars += 6,
+            _ => return false,
+        }
+    }
+    total_chars <= 72
+}
+
+fn render_json_value_html(v: &Value, indent: usize, out: &mut String) {
+    let pad = "  ".repeat(indent);
+    let inner_pad = "  ".repeat(indent + 1);
+    match v {
+        Value::Null => out.push_str(r#"<span class="j-kw">null</span>"#),
+        Value::Bool(b) => {
+            let _ = write!(out, r#"<span class="j-kw">{b}</span>"#);
+        }
+        Value::Number(n) => {
+            let _ = write!(out, r#"<span class="j-num">{n}</span>"#);
+        }
+        Value::String(s) => {
+            let _ = write!(out, r#"<span class="j-str">"{}"</span>"#, html_escape(s));
+        }
+        Value::Array(arr) => {
+            if arr.is_empty() {
+                out.push_str("[]");
+            } else if is_compact_json_array(arr) {
+                out.push('[');
+                for (i, item) in arr.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    render_json_value_html(item, 0, out);
+                }
+                out.push(']');
+            } else {
+                out.push_str("[\n");
+                for (i, item) in arr.iter().enumerate() {
+                    out.push_str(&inner_pad);
+                    render_json_value_html(item, indent + 1, out);
+                    if i + 1 < arr.len() {
+                        out.push(',');
+                    }
+                    out.push('\n');
+                }
+                out.push_str(&pad);
+                out.push(']');
+            }
+        }
+        Value::Object(map) => {
+            if map.is_empty() {
+                out.push_str("{}");
+            } else {
+                out.push_str("{\n");
+                let len = map.len();
+                for (i, (k, val)) in map.iter().enumerate() {
+                    out.push_str(&inner_pad);
+                    let _ = write!(out, r#"<span class="j-key">"{}"</span>: "#, html_escape(k));
+                    render_json_value_html(val, indent + 1, out);
+                    if i + 1 < len {
+                        out.push(',');
+                    }
+                    out.push('\n');
+                }
+                out.push_str(&pad);
+                out.push('}');
+            }
+        }
+    }
+}
+
+fn split_leading_markers(mut s: &str) -> (Vec<String>, &str) {
+    let mut badges = Vec::new();
+    loop {
+        let trimmed = s.trim_start();
+        if trimmed.starts_with('(') {
+            if let Some(end) = trimmed.find(')') {
+                if end <= 28 && !trimmed[..end].contains('\n') {
+                    badges.push(trimmed[1..end].to_string());
+                    s = &trimmed[end + 1..];
+                    continue;
+                }
+            }
+        }
+        if trimmed.starts_with('[') {
+            if let Some(end) = trimmed.find(']') {
+                if end <= 48 && !trimmed[..end].contains('\n') {
+                    badges.push(trimmed[1..end].to_string());
+                    s = &trimmed[end + 1..];
+                    continue;
+                }
+            }
+        }
+        break;
+    }
+    (badges, s.trim())
+}
+
+pub fn format_prompt_html(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if (trimmed.starts_with('{') || trimmed.starts_with('['))
+        && serde_json::from_str::<Value>(trimmed).is_ok()
+    {
+        if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+            let mut out = String::with_capacity(trimmed.len() + 256);
+            render_json_value_html(&v, 0, &mut out);
+            return out;
+        }
+    }
+
+    let mut blocks_html = Vec::new();
+    for block in trimmed.split("\n\n") {
+        let b = block.trim();
+        if b.is_empty() {
+            continue;
+        }
+        let (badges, rest) = split_leading_markers(b);
+        let mut chunk = String::new();
+        if !badges.is_empty() {
+            chunk.push_str(r#"<div class="p-badges">"#);
+            for bg in badges {
+                let _ = write!(
+                    chunk,
+                    r#"<span class="p-badge">{}</span>"#,
+                    html_escape(&bg)
+                );
+            }
+            chunk.push_str("</div>");
+        }
+        if (rest.starts_with('{') || rest.starts_with('['))
+            && serde_json::from_str::<Value>(rest).is_ok()
+        {
+            if let Ok(v) = serde_json::from_str::<Value>(rest) {
+                render_json_value_html(&v, 0, &mut chunk);
+                blocks_html.push(chunk);
+                continue;
+            }
+        }
+        let mut lines_out = Vec::new();
+        for ln in rest.lines() {
+            let tln = ln.trim();
+            if tln.starts_with('#') {
+                lines_out.push(format!(r#"<strong class="md-h">{}</strong>"#, html_escape(ln)));
+            } else {
+                lines_out.push(html_escape(ln));
+            }
+        }
+        chunk.push_str(&lines_out.join("\n"));
+        blocks_html.push(chunk);
+    }
+    blocks_html.join("\n\n")
+}
+
+fn format_turn_card_body_html(raw: &str, max_chars: usize) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let (badges, rest) = split_leading_markers(trimmed);
+    let mut out = String::new();
+    if !badges.is_empty() {
+        out.push_str(r#"<div class="tc-badges">"#);
+        for bg in badges {
+            let _ = write!(out, r#"<span class="p-badge">{}</span>"#, html_escape(&bg));
+        }
+        out.push_str("</div>");
+    }
+    if rest.starts_with('{') {
+        if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(rest) {
+            out.push_str(r#"<div class="tc-kv-list">"#);
+            for (k, v) in map.iter().take(5) {
+                let val_str = match v {
+                    Value::String(s) => preview_line(s, 140),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Number(n) => n.to_string(),
+                    other => preview_line(&other.to_string(), 100),
+                };
+                let is_status = k.eq_ignore_ascii_case("status") || k.eq_ignore_ascii_case("ring");
+                if is_status {
+                    let _ = write!(
+                        out,
+                        r#"<div class="tc-kv"><span class="tc-k">{}</span><span class="dp-status dp-status-ready">{}</span></div>"#,
+                        html_escape(k),
+                        html_escape(&val_str)
+                    );
+                } else {
+                    let _ = write!(
+                        out,
+                        r#"<div class="tc-kv"><span class="tc-k">{}</span><span class="tc-v">{}</span></div>"#,
+                        html_escape(k),
+                        html_escape(&val_str)
+                    );
+                }
+            }
+            out.push_str("</div>");
+            return out;
+        }
+    }
+    // Check if rest has multiple turns like (User/Context) ... (Assistant) {...}
+    if rest.contains("(Assistant)") {
+        let mut parts_html = Vec::new();
+        for seg in rest.split("\n\n") {
+            let (s_badges, s_rest) = split_leading_markers(seg);
+            let badge_prefix = if s_badges.is_empty() {
+                String::new()
+            } else {
+                s_badges
+                    .into_iter()
+                    .map(|b| format!(r#"<span class="p-badge">{}</span> "#, html_escape(&b)))
+                    .collect::<String>()
+            };
+            if s_rest.starts_with('{') {
+                if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(s_rest) {
+                    let summary = map
+                        .get("summary")
+                        .and_then(|v| v.as_str())
+                        .map(|s| preview_line(s, 120))
+                        .unwrap_or_else(|| preview_line(s_rest, 120));
+                    parts_html.push(format!(
+                        r#"<div class="tc-line">{badge_prefix}{}</div>"#,
+                        html_escape(&summary)
+                    ));
+                    continue;
+                }
+            }
+            parts_html.push(format!(
+                r#"<div class="tc-line">{badge_prefix}{}</div>"#,
+                html_escape(&preview_line(s_rest, 140))
+            ));
+        }
+        out.push_str(&parts_html.join(""));
+        return out;
+    }
+    let _ = write!(
+        out,
+        r#"<div class="tc-text">{}</div>"#,
+        html_escape(&preview_line(rest, max_chars))
+    );
+    out
+}
+
 pub fn render_html(
     records: &[CallRecord],
     gap_s: f64,
@@ -1315,6 +1566,17 @@ pub fn render_html(
     let mut turn_rows = Vec::new();
     for t in &s.turns {
         let tag = format!("{} · Turn {}", t.session, t.turn);
+        let t_tot = t.input_total.max(1) as f64;
+        let t_cache_pct = if t.input_total > 0 {
+            100.0 * (t.cached_total as f64) / t_tot
+        } else {
+            0.0
+        };
+        let t_sys_pct = 100.0 * (t.system as f64) / t_tot;
+        let t_his_pct = 100.0 * (t.history as f64) / t_tot;
+        let t_usr_pct = 100.0 * (t.user_prompt as f64) / t_tot;
+        let t_tls_pct = 100.0 * (t.tools_schema as f64) / t_tot;
+
         let mut t_bars = Vec::new();
         for (k_name, kv, col) in [
             ("System Prompt", t.system, kind_color_hex("system")),
@@ -1337,20 +1599,27 @@ pub fn render_html(
         let mut previews = Vec::new();
         if !t.user_text.is_empty() {
             previews.push(format!(
-                r#"<div><strong>User Prompt:</strong> <code>{}</code></div>"#,
-                html_escape(&preview_line(&t.user_text, 140))
+                r#"<div class="turn-card" style="border-left-color:{}"><div class="tc-head"><span class="tc-kicker" style="color:{}">USER PROMPT</span><span class="tc-tok dp-mono">{} tok ({t_usr_pct:.0}%)</span></div>{}</div>"#,
+                kind_color_hex("user_prompt"),
+                kind_color_hex("user_prompt"),
+                fmt_num(t.user_prompt),
+                format_turn_card_body_html(&t.user_text, 180)
             ));
         }
         if !t.history_text.is_empty() {
             previews.push(format!(
-                r#"<div><strong>Conv History:</strong> <code>{}</code></div>"#,
-                html_escape(&preview_line(&t.history_text, 140))
+                r#"<div class="turn-card" style="border-left-color:{}"><div class="tc-head"><span class="tc-kicker" style="color:{}">CONVERSATION HISTORY</span><span class="tc-tok dp-mono">{} tok ({t_his_pct:.0}%)</span></div>{}</div>"#,
+                kind_color_hex("history_user"),
+                kind_color_hex("history_user"),
+                fmt_num(t.history),
+                format_turn_card_body_html(&t.history_text, 180)
             ));
         }
         if !t.response_text.is_empty() {
             previews.push(format!(
-                r#"<div><strong>Assistant:</strong> <code>{}</code></div>"#,
-                html_escape(&preview_line(&t.response_text, 140))
+                r#"<div class="turn-card" style="border-left-color:#296e48"><div class="tc-head"><span class="tc-kicker" style="color:#296e48">ASSISTANT OUTPUT</span><span class="tc-tok dp-mono">{} tok</span></div>{}</div>"#,
+                fmt_num(t.output_total),
+                format_turn_card_body_html(&t.response_text, 180)
             ));
         }
         let preview_row = if previews.is_empty() {
@@ -1361,8 +1630,15 @@ pub fn render_html(
                 previews.join("")
             )
         };
+        let cache_badge = if t.cached_total > 0 {
+            format!(
+                r#" <span class="dp-status dp-status-ready">{t_cache_pct:.0}%</span>"#
+            )
+        } else {
+            String::new()
+        };
         turn_rows.push(format!(
-            r#"<tr><td><strong>{}</strong></td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono"><strong>{}</strong></td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td><div class="call-bar">{}</div></td></tr>{preview_row}"#,
+            r#"<tr class="turn-main-row"><td><span class="turn-pill">{}</span></td><td class="num dp-mono">{}</td><td class="num dp-mono"><strong>{}</strong> <span class="cell-pct">{t_sys_pct:.0}%</span></td><td class="num dp-mono"><strong>{}</strong> <span class="cell-pct">{t_his_pct:.0}%</span></td><td class="num dp-mono"><strong>{}</strong> <span class="cell-pct">{t_usr_pct:.0}%</span></td><td class="num dp-mono"><strong>{}</strong> <span class="cell-pct">{t_tls_pct:.0}%</span></td><td class="num dp-mono"><strong class="tot-num">{}</strong></td><td class="num dp-mono">{}{cache_badge}</td><td class="num dp-mono"><strong>{}</strong></td><td><div class="turn-bar">{}</div></td></tr>{preview_row}"#,
             html_escape(&tag),
             fmt_usize(t.calls_count),
             fmt_num(t.system),
@@ -1691,25 +1967,25 @@ body {{ margin: 0; background: var(--dp-bg); color: var(--dp-ink); font: 14px/1.
 .dp-studio button[aria-pressed="true"] {{ border-color: var(--dp-accent); }}
 .dp-studio :focus-visible {{ outline: 3px solid var(--dp-accent); outline-offset: 3px; }}
 .dp-studio code, .dp-mono {{ font-family: var(--cs-font-mono); font-variant-numeric: tabular-nums; font-size: 12.5px; }}
-.dp-masthead {{ padding: 18px 40px; display: flex; gap: 24px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--dp-rule); background: var(--dp-surface); flex-wrap: wrap; }}
-.dp-brand {{ display: flex; gap: 14px; align-items: center; text-decoration: none; color: var(--dp-ink) !important; font-size: 18px; font-weight: 650; }}
-.dp-brand-mark {{ width: 36px; height: 36px; border-radius: 7px; background: var(--dp-accent); color: #fffefa; display: inline-flex; align-items: center; justify-content: center; font: 400 20px/1 var(--dp-display); }}
-.dp-brand small {{ display: block; font-size: 12px; font-weight: 400; color: var(--dp-muted); }}
-.dp-switcher {{ display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }}
-.dp-switcher a {{ padding: 7px 13px; border: 1px solid transparent; border-radius: 6px; text-decoration: none; color: var(--dp-muted); font-size: 13px; }}
+.dp-masthead {{ padding: 12px 28px; display: flex; gap: 14px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--dp-rule); background: var(--dp-surface); flex-wrap: nowrap; }}
+.dp-brand {{ display: flex; gap: 12px; align-items: center; text-decoration: none; color: var(--dp-ink) !important; font-size: 17px; font-weight: 650; white-space: nowrap; }}
+.dp-brand-mark {{ width: 32px; height: 32px; border-radius: 6px; background: var(--dp-accent); color: #fffefa; display: inline-flex; align-items: center; justify-content: center; font: 400 18px/1 var(--dp-display); }}
+.dp-brand small {{ display: block; font-size: 11.5px; font-weight: 400; color: var(--dp-muted); }}
+.dp-switcher {{ display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }}
+.dp-switcher a {{ padding: 5px 10px; border: 1px solid transparent; border-radius: 6px; text-decoration: none; color: var(--dp-muted); font-size: 12.5px; white-space: nowrap; }}
 .dp-switcher a:hover, .dp-switcher a[aria-current="page"] {{ border-color: var(--dp-control); color: var(--dp-ink); background: var(--dp-bg); }}
-.dp-switcher a span {{ margin-right: 6px; font-family: var(--cs-font-mono); font-size: 11px; color: var(--dp-accent); }}
-.dp-notice {{ padding: 11px 40px; display: flex; flex-wrap: wrap; gap: 8px 24px; border-bottom: 1px solid var(--dp-rule); color: var(--dp-muted); font-size: 13px; background: #faf8f3; }}
+.dp-switcher a span {{ margin-right: 4px; font-family: var(--cs-font-mono); font-size: 10.5px; color: var(--dp-accent); }}
+.dp-notice {{ padding: 8px 28px; display: flex; flex-wrap: wrap; gap: 6px 20px; border-bottom: 1px solid var(--dp-rule); color: var(--dp-muted); font-size: 12.5px; background: #faf8f3; }}
 .dp-studio.dp-dark .dp-notice {{ background: #15242d; }}
 .dp-notice strong {{ color: var(--dp-ink); font-weight: 600; letter-spacing: 0.04em; }}
-.dp-page {{ padding: 28px 40px 56px; max-width: 1520px; margin: auto; }}
-.dp-edition-lead {{ border-bottom: 1px solid var(--dp-rule); padding-bottom: 18px; display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }}
-.dp-heading p, .sub {{ color: var(--dp-muted); margin-top: 8px; font-size: 15px; }}
-.dp-kicker, .k-label {{ display: block; font-size: 11px; color: var(--dp-muted); margin-bottom: 6px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; font-family: var(--cs-font-mono); }}
-.dp-edition-choice {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin: 22px 0; }}
-.dp-edition-paper, .panel, .card {{ border: 1px solid var(--dp-rule); border-radius: 8px; padding: 18px 20px; background: var(--dp-surface); box-shadow: 0 6px 20px rgb(34 45 52 / 0.04); }}
-.card .k-val {{ display: block; font: 400 30px/1.15 var(--dp-display); color: var(--dp-ink); margin-top: 4px; font-variant-numeric: tabular-nums; }}
-.card .k-sub, .dp-edition-small {{ display: block; font-size: 12.5px; color: var(--dp-muted); margin-top: 6px; }}
+.dp-page {{ padding: 20px 28px 48px; max-width: 1520px; margin: auto; }}
+.dp-edition-lead {{ border-bottom: 1px solid var(--dp-rule); padding-bottom: 12px; display: flex; justify-content: space-between; align-items: flex-end; gap: 14px; flex-wrap: wrap; }}
+.dp-heading p, .sub {{ color: var(--dp-muted); margin-top: 4px; font-size: 13.5px; }}
+.dp-kicker, .k-label {{ display: block; font-size: 10.5px; color: var(--dp-muted); margin-bottom: 4px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-family: var(--cs-font-mono); }}
+.dp-edition-choice {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 10px; margin: 14px 0; }}
+.dp-edition-paper, .panel, .card {{ border: 1px solid var(--dp-rule); border-radius: 8px; padding: 12px 14px; background: var(--dp-surface); box-shadow: 0 4px 14px rgb(34 45 52 / 0.04); }}
+.card .k-val {{ display: block; font: 400 24px/1.15 var(--dp-display); color: var(--dp-ink); margin-top: 2px; font-variant-numeric: tabular-nums; }}
+.card .k-sub, .dp-edition-small {{ display: block; font-size: 11.5px; color: var(--dp-muted); margin-top: 4px; }}
 .dp-edition-builder {{ border-bottom: 1px solid var(--dp-rule); margin-top: 6px; }}
 .dp-edition-builder > summary {{ display: flex; align-items: center; gap: 14px; padding: 14px 0; list-style: none; cursor: pointer; font-weight: 600; font-size: 15px; }}
 .dp-edition-builder > summary::-webkit-details-marker {{ display: none; }}
@@ -1778,17 +2054,46 @@ td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; white-s
   border: 1px solid var(--dp-rule); border-radius: 5px; background: var(--dp-bg); color: var(--dp-accent);
 }}
 .dp-studio button.dp-inline-btn:hover {{ background: var(--dp-tint); border-color: var(--dp-accent); }}
-.turn-preview-row td {{ background: #faf8f3; padding: 7px 14px 9px; }}
+.turn-main-row td {{ background: var(--dp-surface); font-size: 13.5px; padding-block: 10px; }}
+.turn-pill {{ display: inline-block; padding: 3px 10px; border-radius: 5px; background: var(--dp-tint); color: var(--dp-accent); font: 700 12.5px/1.3 var(--cs-font-mono); border: 1px solid #bfd1cf; white-space: nowrap; }}
+.dp-studio.dp-dark .turn-pill {{ border-color: #46666d; }}
+.cell-pct {{ display: inline-block; font-size: 11px; color: var(--dp-muted); font-weight: 500; margin-left: 2px; }}
+.tot-num {{ font-size: 14px; color: var(--dp-ink); }}
+.turn-bar {{ display: flex; height: 11px; width: 84px; background: #e7e4dc; border-radius: 4px; overflow: hidden; border: 1px solid #d5d2c8; }}
+.turn-bar span {{ display: block; height: 100%; }}
+.turn-preview-row td {{ background: #f7f5ef; padding: 10px 14px 14px; border-bottom: 2px solid var(--dp-rule); }}
 .dp-studio.dp-dark .turn-preview-row td {{ background: #15242d; }}
-.turn-preview {{ font-size: 12px; color: var(--dp-muted); display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 6px 18px; }}
-.call-detail-row td.call-detail-cell {{ background: #faf8f3; padding: 12px 14px 14px; border-bottom: 2px solid var(--dp-rule); }}
+.turn-preview {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }}
+.turn-card {{ background: var(--dp-surface); border: 1px solid var(--dp-rule); border-left: 4px solid var(--dp-accent); border-radius: 6px; padding: 10px 12px; box-shadow: 0 2px 8px rgb(34 45 52 / 0.03); }}
+.tc-head {{ display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid #edeae2; }}
+.dp-studio.dp-dark .tc-head {{ border-bottom-color: var(--dp-rule); }}
+.tc-kicker {{ font: 700 11px/1.2 var(--cs-font-mono); letter-spacing: 0.08em; }}
+.tc-tok {{ font-size: 11.5px; color: var(--dp-muted); font-weight: 600; }}
+.tc-badges, .p-badges {{ display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }}
+.p-badge {{ display: inline-block; padding: 1px 7px; border-radius: 4px; background: var(--dp-tint); color: var(--dp-accent); font: 600 11px/1.4 var(--cs-font-mono); border: 1px solid #c7d6d4; }}
+.dp-studio.dp-dark .p-badge {{ border-color: #46666d; }}
+.tc-text, .tc-line {{ font-size: 13px; color: var(--dp-ink); line-height: 1.55; margin-top: 3px; }}
+.tc-kv-list {{ display: grid; gap: 5px; margin-top: 4px; }}
+.tc-kv {{ display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; line-height: 1.45; }}
+.tc-k {{ font: 600 11.5px/1.3 var(--cs-font-mono); color: var(--dp-accent); min-width: 72px; flex-shrink: 0; }}
+.tc-v {{ color: var(--dp-ink); }}
+.call-detail-row td.call-detail-cell {{ background: #f7f5ef; padding: 12px 14px 14px; border-bottom: 2px solid var(--dp-rule); }}
 .dp-studio.dp-dark .call-detail-row td.call-detail-cell {{ background: #15242d; }}
 .p-box {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; width: 100%; align-items: start; }}
 @media (max-width: 820px) {{ .p-box {{ grid-template-columns: 1fr; }} }}
 .p-sec {{ border: 1px solid var(--dp-rule); border-radius: 6px; padding: 10px 12px; background: var(--dp-surface); min-width: 0; }}
 .p-head {{ font-size: 12px; margin-bottom: 6px; display: flex; align-items: center; gap: 4px; border-bottom: 1px solid #eceae2; padding-bottom: 5px; }}
 .dp-studio.dp-dark .p-head {{ border-bottom-color: var(--dp-rule); }}
-.p-pre {{ margin: 0; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto; font-size: 12px; line-height: 1.5; font-family: var(--cs-font-mono); color: var(--dp-ink); }}
+.p-pre {{ margin: 0; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto; font-size: 12px; line-height: 1.55; font-family: var(--cs-font-mono); color: var(--dp-ink); }}
+.j-key {{ color: #1c5a60; font-weight: 600; }}
+.j-str {{ color: #25633f; }}
+.j-num {{ color: #9c5614; font-weight: 600; }}
+.j-kw {{ color: #684282; font-weight: 600; }}
+.md-h {{ color: var(--dp-accent); font-weight: 700; }}
+.dp-studio.dp-dark .j-key {{ color: #9ad4ce; }}
+.dp-studio.dp-dark .j-str {{ color: #a5dfb8; }}
+.dp-studio.dp-dark .j-num {{ color: #f2be7e; }}
+.dp-studio.dp-dark .j-kw {{ color: #d3b2f0; }}
 .finding {{ display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border-radius: 7px; border: 1px solid var(--dp-rule); margin-bottom: 10px; background: var(--dp-bg); }}
 .finding-body {{ font-size: 13px; }}
 .finding-body a {{ color: var(--dp-accent); font-size: 12px; font-weight: 600; display: inline-block; margin-top: 4px; }}
@@ -1969,9 +2274,9 @@ td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; white-s
             <table class="dp-table">
               <thead>
                 <tr>
-                  <th>Session &middot; Turn</th><th class="num">Calls</th>
-                  <th class="num">System Prompt</th><th class="num">Conv History</th><th class="num">User Prompt</th><th class="num">Tools &amp; Schema</th>
-                  <th class="num">Total Input</th><th class="num">Cached</th><th class="num">Output</th><th>Composition &amp; Prompt Preview</th>
+                  <th>Turn</th><th class="num">Calls</th>
+                  <th class="num">System</th><th class="num">History</th><th class="num">User</th><th class="num">Tools</th>
+                  <th class="num">Input</th><th class="num">Cached</th><th class="num">Out</th><th>Composition</th>
                 </tr>
               </thead>
               <tbody>{turn_html}</tbody>
@@ -2122,7 +2427,7 @@ td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; white-s
                             let sec_html = format!(
                                 r##"<div class="p-sec"><div class="p-head"><span class="dot" style="background:{col}"></span><strong>{label}</strong> <span class="sub">({} tokens)</span></div><pre class="p-pre">{}</pre></div>"##,
                                 fmt_num(tok_cnt),
-                                html_escape(val)
+                                format_prompt_html(val)
                             );
                             doc.push_str(&sec_html);
                             sec_cache.insert(ckey, sec_html);
@@ -2192,6 +2497,12 @@ function showEditionArea(area) {{
   document.querySelectorAll('[data-area-btn]').forEach(function(btn) {{
     btn.setAttribute('aria-pressed', btn.getAttribute('data-area-btn') === area ? 'true' : 'false');
   }});
+  var builder = document.getElementById('edition-builder');
+  var canvas = document.querySelector('.dp-edition-layout');
+  var cards = document.querySelector('.dp-edition-choice');
+  if (builder) builder.style.display = (area === 'all') ? '' : 'none';
+  if (canvas) canvas.style.display = (area === 'all') ? '' : 'none';
+  if (cards) cards.style.display = (area === 'all') ? '' : 'none';
   document.querySelectorAll('[data-area-sec]').forEach(function(sec) {{
     sec.style.display = (area === 'all' || sec.getAttribute('data-area-sec') === area) ? '' : 'none';
   }});

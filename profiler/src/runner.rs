@@ -392,14 +392,50 @@ pub fn run_profiled(
         );
     }
 
+    crate::session::clear_sig_stop();
     crate::session::install_signal_handlers();
     let mut command = Command::new(&cmd[0]);
     if cmd.len() > 1 {
         command.args(&cmd[1..]);
     }
     command.envs(&child_env);
-    let code = match command.status() {
-        Ok(st) => st.code().unwrap_or(1),
+    let code = match command.spawn() {
+        Ok(mut child) => {
+            let max_deadline =
+                std::time::Instant::now() + Duration::from_secs(crate::session::MAX_PROFILE_SECS);
+            let mut exit_code = 1;
+            loop {
+                match child.try_wait() {
+                    Ok(Some(st)) => {
+                        exit_code = st.code().unwrap_or(1);
+                        break;
+                    }
+                    Ok(None) => {
+                        if crate::session::sig_stop_requested() {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            exit_code = 130;
+                            break;
+                        }
+                        if std::time::Instant::now() >= max_deadline {
+                            if !quiet {
+                                eprintln!(
+                                    "tokprof: reached 3-minute ({}s) max profiling limit; stopping process and generating report",
+                                    crate::session::MAX_PROFILE_SECS
+                                );
+                            }
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            exit_code = 0;
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(_) => break,
+                }
+            }
+            exit_code
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             eprintln!("tokprof: command not found: {}", cmd[0]);
             127

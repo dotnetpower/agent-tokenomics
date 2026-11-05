@@ -330,6 +330,20 @@ mod tests {
         assert!(en.contains("Zero-Code LLM Agent Token Profiler"));
         let ko = help_text::render_detailed_help(Some("ko"), None);
         assert!(ko.contains("코드 수정 없는 LLM 에이전트 토큰 프로파일러"));
+
+        assert_eq!(session::parse_capped_duration_secs(None), 180);
+        assert_eq!(session::parse_capped_duration_secs(Some("45s")), 45);
+        assert_eq!(session::parse_capped_duration_secs(Some("2m")), 120);
+        assert_eq!(session::parse_capped_duration_secs(Some("600s")), 180);
+        assert_eq!(session::parse_capped_duration_secs(Some("10m")), 180);
+
+        let pretty_json = report::format_prompt_html(
+            r#"(response_schema) [NarratorSchema]
+{"type":"object","required":["summary","status"],"properties":{"summary":{"type":"string"}}}"#,
+        );
+        assert!(pretty_json.contains(r#"class="p-badge""#));
+        assert!(pretty_json.contains(r#"class="j-key""#));
+        assert!(pretty_json.contains(r#"class="j-str""#));
     }
 }
 

@@ -266,18 +266,27 @@ pub fn run_ebpf(
         None,
         false,
     );
+    let capped_secs = crate::session::parse_capped_duration_secs(duration);
+    let capped_dur_str = format!("{capped_secs}s");
+    let eff_duration = if duration.is_some() {
+        Some(capped_dur_str.as_str())
+    } else {
+        None
+    };
     let cmd = helper_command(
         &exe,
         pids,
         comms,
         everything,
-        duration,
+        eff_duration,
         use_sudo,
         plain,
         Some(std::process::id()),
     );
     if !quiet {
-        eprintln!("tokprof: profiling to {out_path} via eBPF; press Ctrl+C to stop");
+        eprintln!(
+            "tokprof: profiling to {out_path} via eBPF (max {capped_secs}s / 3m limit); press Ctrl+C to stop"
+        );
     }
     let mut child = match Command::new(&cmd[0])
         .args(&cmd[1..])
@@ -294,11 +303,16 @@ pub fn run_ebpf(
     };
     crate::session::clear_sig_stop();
     crate::session::install_signal_handlers();
-    let done_reading = Arc::new( std::sync::atomic::AtomicBool::new(false));
+    let done_reading = Arc::new(std::sync::atomic::AtomicBool::new(false));
     if let Some(mut stdin) = child.stdin.take() {
         let done_cl = done_reading.clone();
+        let max_deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(capped_secs);
         std::thread::spawn(move || {
-            while !crate::session::sig_stop_requested() && !done_cl.load(Ordering::SeqCst) {
+            while !crate::session::sig_stop_requested()
+                && !done_cl.load(Ordering::SeqCst)
+                && std::time::Instant::now() < max_deadline
+            {
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
             let _ = stdin.flush();
