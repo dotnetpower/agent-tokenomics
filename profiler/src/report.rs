@@ -1687,7 +1687,7 @@ body {{ margin: 0; background: var(--dp-bg); color: var(--dp-ink); font: 14px/1.
 .dp-studio button:hover, .dp-studio button[aria-pressed="true"] {{ background: var(--dp-tint); }}
 .dp-studio button[aria-pressed="true"] {{ border-color: var(--dp-accent); }}
 .dp-studio :focus-visible {{ outline: 3px solid var(--dp-accent); outline-offset: 3px; }}
-.dp-studio code, .dp-mono {{ font-family: var(--cs-font-mono); font-variant-numeric: tabular-nums; font-size: 12.5px; overflow-wrap: anywhere; }}
+.dp-studio code, .dp-mono {{ font-family: var(--cs-font-mono); font-variant-numeric: tabular-nums; font-size: 12.5px; }}
 .dp-masthead {{ padding: 18px 40px; display: flex; gap: 24px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--dp-rule); background: var(--dp-surface); flex-wrap: wrap; }}
 .dp-brand {{ display: flex; gap: 14px; align-items: center; text-decoration: none; color: var(--dp-ink) !important; font-size: 18px; font-weight: 650; }}
 .dp-brand-mark {{ width: 36px; height: 36px; border-radius: 7px; background: var(--dp-accent); color: #fffefa; display: inline-flex; align-items: center; justify-content: center; font: 400 20px/1 var(--dp-display); }}
@@ -1761,7 +1761,8 @@ body {{ margin: 0; background: var(--dp-bg); color: var(--dp-ink); font: 14px/1.
 .dp-table tr:last-child td, table tr:last-child td {{ border-bottom: 0; }}
 .dp-table tr:hover td {{ background: #faf8f2; }}
 .dp-studio.dp-dark .dp-table tr:hover td {{ background: #213440; }}
-td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
+.call-row td:nth-child(2), .call-row td:nth-child(3) {{ white-space: nowrap; }}
 .dot {{ display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 8px; vertical-align: middle; }}
 .mini-track {{ width: 140px; height: 8px; background: #e7e4dc; border-radius: 4px; overflow: hidden; }}
 .mini-fill {{ height: 100%; border-radius: 4px; }}
@@ -1787,13 +1788,16 @@ td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
   font-variant-numeric: tabular-nums; text-decoration: underline; text-underline-offset: 3px;
 }}
 .dp-studio button.dp-edition-version:hover {{ background: var(--dp-tint); }}
+.dp-edition-backdrop {{
+  display: none; position: fixed; inset: 0; z-index: 999; background: rgb(20 37 44 / 0.34);
+}}
+.dp-edition-backdrop.is-open {{ display: block; }}
 .dp-studio .dp-edition-drawer {{
-  position: fixed; inset: 0 0 0 auto; margin: 0; padding: 0; width: min(560px, 100vw); max-width: 100vw;
-  height: 100dvh; max-height: 100dvh; border: 0; border-left: 1px solid var(--dp-rule);
+  position: fixed; top: 0; right: 0; bottom: 0; margin: 0; padding: 0; width: min(580px, 100vw); max-width: 100vw;
+  height: 100vh; border: 0; border-left: 1px solid var(--dp-rule);
   background: var(--dp-surface); color: var(--dp-ink); overflow-y: auto;
   box-shadow: -16px 0 48px rgb(20 37 44 / 0.18);
 }}
-.dp-edition-drawer::backdrop {{ background: rgb(20 37 44 / 0.34); }}
 .dp-edition-drawer-head {{
   position: sticky; top: 0; z-index: 2; background: var(--dp-surface);
   border-bottom: 1px solid var(--dp-rule); padding: 14px 24px;
@@ -1912,13 +1916,15 @@ td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
         </section>
       </div>
 
-      <dialog id="call-dossier-drawer" class="dp-edition-drawer" aria-labelledby="edition-drawer-title" onclick="if(event.target===this)closeCallDossier()">
-        <header class="dp-edition-drawer-head">
-          <span id="edition-drawer-title">Call Dossier &middot; Prompt Inspector</span>
-          <button class="dp-edition-drawer-close" type="button" onclick="closeCallDossier()">Close</button>
-        </header>
-        <section class="dp-edition-dossier" id="call-dossier-body"></section>
-      </dialog>
+      <div id="call-dossier-backdrop" class="dp-edition-backdrop" onclick="if(event.target===this)closeCallDossier()">
+        <aside id="call-dossier-drawer" class="dp-edition-drawer" role="dialog" aria-modal="true" aria-labelledby="edition-drawer-title">
+          <header class="dp-edition-drawer-head">
+            <span id="edition-drawer-title">Call Dossier &middot; Prompt Inspector</span>
+            <button class="dp-edition-drawer-close" type="button" onclick="closeCallDossier()">Close</button>
+          </header>
+          <section class="dp-edition-dossier" id="call-dossier-body"></section>
+        </aside>
+      </div>
 
       <section class="dp-section dp-edition-workspace" id="edition-workspace" tabindex="-1">
         <div data-area-sec="sessions" id="sec-sessions">
@@ -2050,9 +2056,10 @@ td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
                 || !p.other.is_empty()
                 || !p.response.is_empty();
             if has_any_prompt {
+                let open_attr = if cd.index == 1 { " open" } else { "" };
                 let _ = write!(
                     doc,
-                    r##"<details class="p-details"><summary>View prompts &amp; response</summary><div class="p-box" id="call-prompts-{}">"##,
+                    r##"<details class="p-details"{open_attr}><summary>View prompts &amp; response</summary><div class="p-box" id="call-prompts-{}">"##,
                     cd.index
                 );
                 for (val, label, tok_cnt, col) in [
@@ -2179,11 +2186,11 @@ function filterCalls() {{
 }}
 function openCallDossier(idx) {{
   var row = document.querySelector('tr.call-row[data-call-idx="' + idx + '"]');
-  var dlg = document.getElementById('call-dossier-drawer');
+  var backdrop = document.getElementById('call-dossier-backdrop');
   var body = document.getElementById('call-dossier-body');
-  if (!row || !dlg || !body) return;
+  if (!row || !backdrop || !body) return;
   var promptsEl = document.getElementById('call-prompts-' + idx);
-  var promptsHtml = promptsEl ? promptsEl.innerHTML : '<p class="sub">No prompt text stored for this call.</p>';
+  var promptsHtml = promptsEl ? promptsEl.innerHTML : '<p class="sub">No prompt text stored in this JSONL record (captured before prompt-text storage was enabled or with --no-content).</p>';
   body.innerHTML =
     '<div class="dp-kicker">CALL DOSSIER / #' + idx + '</div>' +
     '<span class="dp-status dp-status-ready">' + row.getAttribute('data-turn') + '</span>' +
@@ -2195,12 +2202,13 @@ function openCallDossier(idx) {{
       '<div><dt>Latency</dt><dd class="dp-mono">' + row.getAttribute('data-latency') + '</dd></div>' +
     '</dl>' +
     '<div class="p-box" style="max-width:100%">' + promptsHtml + '</div>';
-  if (typeof dlg.showModal === 'function' && !dlg.open) dlg.showModal();
+  backdrop.classList.add('is-open');
 }}
 function closeCallDossier() {{
-  var dlg = document.getElementById('call-dossier-drawer');
-  if (dlg && dlg.open) dlg.close();
+  var backdrop = document.getElementById('call-dossier-backdrop');
+  if (backdrop) backdrop.classList.remove('is-open');
 }}
+document.addEventListener('keydown', function(e) {{ if (e.key === 'Escape') closeCallDossier(); }});
 </script>
 </body>
 </html>
