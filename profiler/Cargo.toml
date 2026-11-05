@@ -4,6 +4,9 @@ version = "0.2.0"
 edition = "2021"
 description = "Zero-code LLM agent token profiler (native Rust single-binary implementation)"
 license = "MIT"
+homepage = "https://github.com/dotnetpower/agent-tokenomics"
+repository = "https://github.com/dotnetpower/agent-tokenomics"
+readme = "README.md"
 
 [lib]
 name = "tokprof"

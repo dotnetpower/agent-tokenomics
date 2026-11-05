@@ -1,0 +1,179 @@
+name: release-profiler
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_to_pypi:
+        description: "Publish built wheels and sdist to PyPI"
+        required: false
+        default: true
+        type: boolean
+  push:
+    tags:
+      - "tokprof-v*"
+      - "v*"
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: linux (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: profiler/ebpf/go.mod
+      - name: Build static tokprof-ebpf helper
+        working-directory: profiler/ebpf
+        run: CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/tokprof-ebpf ./cmd/tokprof-ebpf
+      - name: Build Linux wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: profiler
+          target: ${{ matrix.target }}
+          args: --release --out dist
+          sccache: "true"
+          manylinux: auto
+      - name: Bundle tokprof-ebpf into Linux wheel
+        working-directory: profiler
+        run: |
+          sudo chown -R "$USER:$USER" dist
+          python3 - <<'PY'
+          import base64, glob, hashlib, os, tempfile, zipfile
+
+          helper = "ebpf/bin/tokprof-ebpf"
+          with open(helper, "rb") as f:
+              helper_bytes = f.read()
+          digest = base64.urlsafe_b64encode(hashlib.sha256(helper_bytes).digest()).rstrip(b"=").decode("ascii")
+
+          wheels = glob.glob("dist/tokprof-*linux*.whl")
+          assert wheels, "No Linux wheel found in dist/"
+          for whl in wheels:
+              with zipfile.ZipFile(whl, "r") as zin:
+                  names = zin.namelist()
+                  scripts_entry = next(n for n in names if n.endswith(".data/scripts/tokprof"))
+                  ebpf_entry = scripts_entry + "-ebpf"
+                  record_entry = next(n for n in names if n.endswith(".dist-info/RECORD"))
+                  fd, tmp_path = tempfile.mkstemp(suffix=".whl", dir=os.path.dirname(whl))
+                  os.close(fd)
+                  with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+                      for item in zin.infolist():
+                          if item.filename in (record_entry, ebpf_entry):
+                              continue
+                          zout.writestr(item, zin.read(item.filename))
+                      info = zipfile.ZipInfo(ebpf_entry, (1980, 1, 1, 0, 0, 0))
+                      info.external_attr = (0o100755 & 0xFFFF) << 16
+                      info.compress_type = zipfile.ZIP_DEFLATED
+                      zout.writestr(info, helper_bytes)
+                      rec_lines = [
+                          line for line in zin.read(record_entry).decode("utf-8").splitlines()
+                          if line and not line.startswith(ebpf_entry + ",") and not line.startswith(record_entry + ",")
+                      ]
+                      rec_lines.append(f"{ebpf_entry},sha256={digest},{len(helper_bytes)}")
+                      rec_lines.append(f"{record_entry},,")
+                      zout.writestr(record_entry, ("\n".join(rec_lines) + "\n").encode("utf-8"))
+                  os.chmod(tmp_path, 0o644)
+                  os.replace(tmp_path, whl)
+              print("Bundled tokprof-ebpf into", whl)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.target }}
+          path: profiler/dist/*.whl
+
+  macos:
+    name: macos (${{ matrix.target }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build macOS wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: profiler
+          target: ${{ matrix.target }}
+          args: --release --out dist
+          sccache: "true"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-${{ matrix.target }}
+          path: profiler/dist/*.whl
+
+  windows:
+    name: windows (${{ matrix.target }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Windows wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: profiler
+          target: ${{ matrix.target }}
+          args: --release --out dist
+          sccache: "true"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-${{ matrix.target }}
+          path: profiler/dist/*.whl
+
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build source distribution
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: profiler
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: profiler/dist/*.tar.gz
+
+  publish:
+    name: publish to PyPI
+    needs: [linux, macos, windows, sdist]
+    if: github.event_name != 'workflow_dispatch' || inputs.publish_to_pypi
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/tokprof
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: List built distributions
+        run: ls -lh dist/
+      - name: Publish to PyPI (Trusted Publisher OIDC)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: true

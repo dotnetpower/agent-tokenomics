@@ -46,10 +46,15 @@ pub fn find_helper(explicit: Option<&str>, auto_build: bool) -> Option<PathBuf> 
         return Some(w);
     }
     if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(dir) = exe_path.parent() {
-            let sibling = dir.join(HELPER_NAME);
-            if sibling.is_file() {
-                return Some(sibling);
+        for cand_exe in [Some(exe_path.clone()), fs::canonicalize(&exe_path).ok()]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(dir) = cand_exe.parent() {
+                let sibling = dir.join(HELPER_NAME);
+                if sibling.is_file() {
+                    return Some(sibling);
+                }
             }
         }
     }

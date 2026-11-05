@@ -32,6 +32,6 @@ bindings = "bin"
 manifest-path = "Cargo.toml"
 strip = true
 include = [
-  "boot/*",
-  "README.md",
+  { path = "boot/*", format = "sdist" },
+  { path = "README.md", format = "sdist" },
 ]
