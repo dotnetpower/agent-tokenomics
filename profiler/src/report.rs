@@ -1520,7 +1520,7 @@ pub fn render_html(
             ));
         }
         breakdown_rows.push(format!(
-            r#"<tr><td><span class="dot" style="background:{col}"></span><strong>{label}</strong></td><td class="num dp-mono">{}</td><td class="num dp-mono">{pct:.1}%</td><td><div class="mini-track"><div class="mini-fill" style="width:{:.1}%;background:{col}"></div></div></td></tr>"#,
+            r#"<tr><td><strong style="color:{col}">{label}</strong></td><td class="num dp-mono">{}</td><td class="num dp-mono">{pct:.1}%</td><td><div class="mini-track"><div class="mini-fill" style="width:{:.1}%;background:{col}"></div></div></td></tr>"#,
             fmt_num(v),
             pct.clamp(0.0, 100.0)
         ));
@@ -1599,8 +1599,7 @@ pub fn render_html(
         let mut previews = Vec::new();
         if !t.user_text.is_empty() {
             previews.push(format!(
-                r#"<div class="turn-card" style="border-left-color:{}"><div class="tc-head"><span class="tc-kicker" style="color:{}">USER PROMPT</span><span class="tc-tok dp-mono">{} tok ({t_usr_pct:.0}%)</span></div>{}</div>"#,
-                kind_color_hex("user_prompt"),
+                r#"<div class="turn-card"><div class="tc-head"><strong class="tc-kicker" style="color:{}">USER PROMPT</strong><span class="tc-tok dp-mono">{} tok ({t_usr_pct:.0}%)</span></div>{}</div>"#,
                 kind_color_hex("user_prompt"),
                 fmt_num(t.user_prompt),
                 format_turn_card_body_html(&t.user_text, 180)
@@ -1608,8 +1607,7 @@ pub fn render_html(
         }
         if !t.history_text.is_empty() {
             previews.push(format!(
-                r#"<div class="turn-card" style="border-left-color:{}"><div class="tc-head"><span class="tc-kicker" style="color:{}">CONVERSATION HISTORY</span><span class="tc-tok dp-mono">{} tok ({t_his_pct:.0}%)</span></div>{}</div>"#,
-                kind_color_hex("history_user"),
+                r#"<div class="turn-card"><div class="tc-head"><strong class="tc-kicker" style="color:{}">CONVERSATION HISTORY</strong><span class="tc-tok dp-mono">{} tok ({t_his_pct:.0}%)</span></div>{}</div>"#,
                 kind_color_hex("history_user"),
                 fmt_num(t.history),
                 format_turn_card_body_html(&t.history_text, 180)
@@ -1617,7 +1615,7 @@ pub fn render_html(
         }
         if !t.response_text.is_empty() {
             previews.push(format!(
-                r#"<div class="turn-card" style="border-left-color:#296e48"><div class="tc-head"><span class="tc-kicker" style="color:#296e48">ASSISTANT OUTPUT</span><span class="tc-tok dp-mono">{} tok</span></div>{}</div>"#,
+                r#"<div class="turn-card"><div class="tc-head"><strong class="tc-kicker" style="color:#296e48">ASSISTANT OUTPUT</strong><span class="tc-tok dp-mono">{} tok</span></div>{}</div>"#,
                 fmt_num(t.output_total),
                 format_turn_card_body_html(&t.response_text, 180)
             ));
@@ -1969,7 +1967,7 @@ body {{ margin: 0; background: var(--dp-bg); color: var(--dp-ink); font: 14px/1.
 .dp-studio code, .dp-mono {{ font-family: var(--cs-font-mono); font-variant-numeric: tabular-nums; font-size: 12.5px; }}
 .dp-masthead {{ padding: 12px 28px; display: flex; gap: 14px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--dp-rule); background: var(--dp-surface); flex-wrap: nowrap; }}
 .dp-brand {{ display: flex; gap: 12px; align-items: center; text-decoration: none; color: var(--dp-ink) !important; font-size: 17px; font-weight: 650; white-space: nowrap; }}
-.dp-brand-mark {{ width: 32px; height: 32px; border-radius: 6px; background: var(--dp-accent); color: #fffefa; display: inline-flex; align-items: center; justify-content: center; font: 400 18px/1 var(--dp-display); }}
+.dp-brand-mark {{ width: 32px; height: 32px; border-radius: 6px; background: transparent; border: 1px solid var(--dp-accent); color: var(--dp-accent); display: inline-flex; align-items: center; justify-content: center; font: 400 18px/1 var(--dp-display); }}
 .dp-brand small {{ display: block; font-size: 11.5px; font-weight: 400; color: var(--dp-muted); }}
 .dp-switcher {{ display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }}
 .dp-switcher a {{ padding: 5px 10px; border: 1px solid transparent; border-radius: 6px; text-decoration: none; color: var(--dp-muted); font-size: 12.5px; white-space: nowrap; }}
@@ -2021,11 +2019,11 @@ body {{ margin: 0; background: var(--dp-bg); color: var(--dp-ink); font: 14px/1.
 .dp-edition-node strong {{ font: 400 26px/1.1 var(--dp-display); }}
 .dp-edition-node-title {{ font-size: 11px; color: #52616a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }}
 .dp-edition-node .dp-status {{ margin-top: auto; padding: 1px 6px; font-size: 10px; }}
-.dp-status {{ display: inline-block; padding: 2px 8px; border: 1px solid var(--dp-rule); border-radius: 4px; font-size: 11.5px; font-weight: 600; width: fit-content; white-space: nowrap; }}
-.dp-status-ready {{ background: #e6eee7; color: #294c36; border-color: #c5d6c8; }}
-.dp-status-waiting {{ background: #eee6d8; color: #62471e; border-color: #dfd0b6; }}
-.dp-status-held {{ background: #f0e3e2; color: #793c3c; border-color: #e2c5c3; }}
-.dp-status-unknown {{ background: #e7e9eb; color: #424d57; border-color: #cfd4d8; }}
+.dp-status {{ display: inline-block; padding: 1px 7px; border: 1px solid var(--dp-rule); border-radius: 4px; font-size: 11px; font-weight: 600; width: fit-content; white-space: nowrap; background: transparent; }}
+.dp-status-ready {{ color: #294c36; border-color: #a8c4ae; }}
+.dp-status-waiting {{ color: #62471e; border-color: #cfb78c; }}
+.dp-status-held {{ color: #793c3c; border-color: #d4a6a3; }}
+.dp-status-unknown {{ color: #424d57; border-color: #b8c0c7; }}
 .dp-edition-workspace {{ border-top: 1px solid var(--dp-rule); padding-top: 22px; margin-top: 28px; }}
 .dp-edition-section-title {{ display: flex; justify-content: space-between; gap: 18px; align-items: baseline; margin: 28px 0 14px; flex-wrap: wrap; }}
 .dp-edition-section-title:first-child {{ margin-top: 4px; }}
@@ -2055,34 +2053,34 @@ td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; white-s
 }}
 .dp-studio button.dp-inline-btn:hover {{ background: var(--dp-tint); border-color: var(--dp-accent); }}
 .turn-main-row td {{ background: var(--dp-surface); font-size: 13.5px; padding-block: 10px; }}
-.turn-pill {{ display: inline-block; padding: 3px 10px; border-radius: 5px; background: var(--dp-tint); color: var(--dp-accent); font: 700 12.5px/1.3 var(--cs-font-mono); border: 1px solid #bfd1cf; white-space: nowrap; }}
-.dp-studio.dp-dark .turn-pill {{ border-color: #46666d; }}
+.turn-pill {{ display: inline-block; padding: 2px 9px; border-radius: 5px; background: transparent; color: var(--dp-accent); font: 700 12.5px/1.3 var(--cs-font-mono); border: 1px solid var(--dp-rule); white-space: nowrap; }}
+.dp-studio.dp-dark .turn-pill {{ border-color: var(--dp-rule); }}
 .cell-pct {{ display: inline-block; font-size: 11px; color: var(--dp-muted); font-weight: 500; margin-left: 2px; }}
 .tot-num {{ font-size: 14px; color: var(--dp-ink); }}
 .turn-bar {{ display: flex; height: 11px; width: 84px; background: #e7e4dc; border-radius: 4px; overflow: hidden; border: 1px solid #d5d2c8; }}
 .turn-bar span {{ display: block; height: 100%; }}
-.turn-preview-row td {{ background: #f7f5ef; padding: 10px 14px 14px; border-bottom: 2px solid var(--dp-rule); }}
+.turn-preview-row td {{ background: #f7f5ef; padding: 10px 14px 14px; border-bottom: 1px solid var(--dp-rule); }}
 .dp-studio.dp-dark .turn-preview-row td {{ background: #15242d; }}
 .turn-preview {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }}
-.turn-card {{ background: var(--dp-surface); border: 1px solid var(--dp-rule); border-left: 4px solid var(--dp-accent); border-radius: 6px; padding: 10px 12px; box-shadow: 0 2px 8px rgb(34 45 52 / 0.03); }}
-.tc-head {{ display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid #edeae2; }}
+.turn-card {{ background: var(--dp-surface); border: 1px solid var(--dp-rule); border-radius: 6px; padding: 10px 12px; }}
+.tc-head {{ display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; padding-bottom: 5px; border-bottom: 1px solid #edeae2; }}
 .dp-studio.dp-dark .tc-head {{ border-bottom-color: var(--dp-rule); }}
-.tc-kicker {{ font: 700 11px/1.2 var(--cs-font-mono); letter-spacing: 0.08em; }}
-.tc-tok {{ font-size: 11.5px; color: var(--dp-muted); font-weight: 600; }}
+.tc-kicker {{ font: 700 11.5px/1.2 var(--cs-font-mono); letter-spacing: 0.06em; }}
+.tc-tok {{ font-size: 11.5px; color: var(--dp-muted); font-weight: 500; }}
 .tc-badges, .p-badges {{ display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }}
-.p-badge {{ display: inline-block; padding: 1px 7px; border-radius: 4px; background: var(--dp-tint); color: var(--dp-accent); font: 600 11px/1.4 var(--cs-font-mono); border: 1px solid #c7d6d4; }}
-.dp-studio.dp-dark .p-badge {{ border-color: #46666d; }}
+.p-badge {{ display: inline-block; padding: 1px 7px; border-radius: 4px; background: transparent; color: var(--dp-accent); font: 600 11px/1.4 var(--cs-font-mono); border: 1px solid var(--dp-rule); }}
+.dp-studio.dp-dark .p-badge {{ border-color: var(--dp-rule); }}
 .tc-text, .tc-line {{ font-size: 13px; color: var(--dp-ink); line-height: 1.55; margin-top: 3px; }}
 .tc-kv-list {{ display: grid; gap: 5px; margin-top: 4px; }}
 .tc-kv {{ display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; line-height: 1.45; }}
 .tc-k {{ font: 600 11.5px/1.3 var(--cs-font-mono); color: var(--dp-accent); min-width: 72px; flex-shrink: 0; }}
 .tc-v {{ color: var(--dp-ink); }}
-.call-detail-row td.call-detail-cell {{ background: #f7f5ef; padding: 12px 14px 14px; border-bottom: 2px solid var(--dp-rule); }}
+.call-detail-row td.call-detail-cell {{ background: #f7f5ef; padding: 12px 14px 14px; border-bottom: 1px solid var(--dp-rule); }}
 .dp-studio.dp-dark .call-detail-row td.call-detail-cell {{ background: #15242d; }}
 .p-box {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; width: 100%; align-items: start; }}
 @media (max-width: 820px) {{ .p-box {{ grid-template-columns: 1fr; }} }}
 .p-sec {{ border: 1px solid var(--dp-rule); border-radius: 6px; padding: 10px 12px; background: var(--dp-surface); min-width: 0; }}
-.p-head {{ font-size: 12px; margin-bottom: 6px; display: flex; align-items: center; gap: 4px; border-bottom: 1px solid #eceae2; padding-bottom: 5px; }}
+.p-head {{ font-size: 12px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; gap: 6px; border-bottom: 1px solid #eceae2; padding-bottom: 5px; }}
 .dp-studio.dp-dark .p-head {{ border-bottom-color: var(--dp-rule); }}
 .p-pre {{ margin: 0; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto; font-size: 12px; line-height: 1.55; font-family: var(--cs-font-mono); color: var(--dp-ink); }}
 .j-key {{ color: #1c5a60; font-weight: 600; }}
@@ -2425,7 +2423,7 @@ td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; white-s
                             doc.push_str(cached_sec);
                         } else {
                             let sec_html = format!(
-                                r##"<div class="p-sec"><div class="p-head"><span class="dot" style="background:{col}"></span><strong>{label}</strong> <span class="sub">({} tokens)</span></div><pre class="p-pre">{}</pre></div>"##,
+                                r##"<div class="p-sec"><div class="p-head"><strong style="color:{col}">{label}</strong><span class="sub dp-mono">{} tokens</span></div><pre class="p-pre">{}</pre></div>"##,
                                 fmt_num(tok_cnt),
                                 format_prompt_html(val)
                             );
