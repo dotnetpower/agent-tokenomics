@@ -30,6 +30,16 @@ costs the most.
    your recent activity.
 7. **Model cost** — the model picker's hover shows cost per token type and a Low / Medium / High tier.
 
+<figure class="at-doc-figure">
+  <div class="at-doc-figure-grid">
+    <img src="https://code.visualstudio.com/assets/docs/agents/chat-debug-view/agent-logs-summary-v3.png" alt="VS Code Agent Logs Summary view showing aggregate token usage and tool call counts" loading="lazy" />
+    <img src="https://code.visualstudio.com/assets/docs/agents/cache-explorer/cache-explorer.png" alt="VS Code Cache Explorer side-by-side comparison showing cached prefix tokens and the first divergence point" loading="lazy" />
+  </div>
+  <figcaption>
+    VS Code Agent Debug Logs Summary view (left) and Cache Explorer side-by-side prompt prefix comparison (right). Sources: <a href="https://code.visualstudio.com/docs/copilot/chat/chat-debug-view">VS Code Docs — Agent Debug View</a> and <a href="https://code.visualstudio.com/docs/agents/agent-troubleshooting/cache-explorer">Cache Explorer</a>.
+  </figcaption>
+</figure>
+
 ## How to verify
 
 Pick one representative task and run it twice with the same model. Record per-request credits, session

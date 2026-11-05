@@ -30,6 +30,11 @@ different habits.
 
 Check which plan you are on in your GitHub Copilot billing settings before choosing tactics.
 
+<figure class="at-doc-figure">
+  <img src="https://code.visualstudio.com/assets/docs/agents/optimize-usage-guide/copilot-status-dashboard.png" alt="VS Code Copilot status dashboard displaying usage" loading="lazy" />
+  <figcaption>Use the Copilot status dashboard to review usage. Source: <a href="https://code.visualstudio.com/docs/agents/guides/optimize-usage">VS Code Docs — Optimize AI credit usage in VS Code</a>.</figcaption>
+</figure>
+
 ## Why tokens matter for every request
 
 Each request sends **input tokens** (system prompt, instructions, tool definitions, the whole

@@ -1,6 +1,6 @@
 ---
 title: MCP 감사
-description: 활성화된 도구는 모두 요청마다 부과되는 세금입니다. 사용량을 기준으로 서버를 감사하고 작업 영역별로 범위를 제한합니다.
+description: 사용량을 기준으로 MCP 서버를 점검하고 작업 영역별로 필요한 도구만 사용합니다.
 track: copilot
 verified: 2026-11-03
 sidebar:
@@ -15,7 +15,23 @@ sidebar:
 tokens per task ≈ (tool schema tokens × steps) + accumulated conversation + tool responses
 ```
 
-사용하지 않는 서버도 매 단계마다 토큰을 소비합니다. 에이전트가 거치는 단계가 많을수록 세금이 커집니다.
+사용하지 않는 서버도 단계마다 토큰을 소비합니다. 에이전트가 거치는 단계가 많을수록 비용도 커집니다.
+
+<figure class="at-doc-figure">
+  <div class="at-diag-stack">
+    <div class="at-diag-row" aria-label="MCP 서버 5개 사용: 도구 정의 65%, 나머지 접두부 35%">
+      <span>MCP 서버 5개</span>
+      <div class="at-diag-bar"><div class="at-diag-seg seg-tool" style="width:65%">도구 65%</div><div class="at-diag-seg seg-prefix" style="width:35%">기타 35%</div></div>
+      <span>100%</span>
+    </div>
+    <div class="at-diag-row" aria-label="작업에 필요한 MCP 서버 1개 사용: 도구 정의 15%, 나머지 접두부 35%">
+      <span>필요한 서버 1개</span>
+      <div class="at-diag-bar"><div class="at-diag-seg seg-hit" style="width:15%">도구 15%</div><div class="at-diag-seg seg-prefix" style="width:35%">기타 35%</div></div>
+      <span>50%</span>
+    </div>
+  </div>
+  <figcaption>측정 결과가 아닌 가상의 예시입니다. 변경 전 접두부를 기준으로 도구 정의는 65%에서 15%로 줄고 나머지는 35%로 유지되어, 변경 후 접두부는 기존의 50%가 됩니다. 필요한 서버 하나만 남기면 매 턴 전송하는 도구 정의가 줄어들지만, 실제 절감량은 다릅니다. 초록색은 도구를 줄인 구성일 뿐 캐시 적중을 뜻하지 않습니다.</figcaption>
+</figure>
 
 ## 조치
 
@@ -28,9 +44,9 @@ tokens per task ≈ (tool schema tokens × steps) + accumulated conversation + t
 | 사용량 | 결정 |
 |-------|----------|
 | 거의 매일 사용 | 유지 |
-| 가끔 사용 | 기본적으로 **비활성화**하고 작업별로 활성화 |
+| 가끔 사용 | 기본적으로 **비활성화**, 필요한 작업에서만 활성화 |
 | 거의 또는 전혀 사용하지 않음, 또는 다른 도구와 중복 | 제거 |
-| 필요한 도구는 두 개뿐인 대형 서버 | 더 작은 서버나, 에이전트가 터미널에서 호출하는 작은 CLI를 사용 |
+| 필요한 도구는 두 개뿐인 대형 서버 | 더 작은 서버 또는 터미널에서 호출하는 CLI 사용 |
 
 4. 첫 요청의 입력 크기와 기준선 작업을 다시 측정합니다([사용량 측정하기](../02-measure-usage/)).
 
@@ -40,7 +56,7 @@ MCP 구성을 리포지토리(`.vscode/mcp.json`)에 두면 프로젝트마다 �
 
 ### 긴 지식은 스킬로 대체합니다
 
-반복되거나 분량이 큰 참고 자료(사내 스타일 가이드, 런북, API 메모)는 상시 로드되는 지침에 두는 대신 필요할 때 로드되는 **에이전트 스킬**로 패키징할 수 있습니다. 반복 입력이 줄고, 한 곳에서 업데이트하며, 결과가 일관됩니다.
+반복되거나 분량이 큰 참고 자료(사내 스타일 가이드, 런북, API 메모)는 상시 로드되는 지침에 두는 대신 필요할 때 로드되는 **에이전트 스킬**로 패키징할 수 있습니다. 반복해서 전송하는 입력을 줄이고 한 곳에서 내용을 관리할 수 있습니다.
 
 ### 도구 출력을 작게 유지합니다
 
@@ -52,7 +68,7 @@ MCP 구성을 리포지토리(`.vscode/mcp.json`)에 두면 프로젝트마다 �
 
 ## 트레이드오프
 
-작업에 필요한 도구를 가지치기하면 우회 방법을 찾느라 단계가 늘어납니다. 도구를 빠르게 다시 활성화할 방법을 마련해 두고, 추측이 아니라 사용량이라는 근거를 바탕으로 가지치기합니다.
+작업에 필요한 도구를 가지치기하면 우회 방법을 찾느라 단계가 늘어납니다. 도구를 빠르게 다시 활성화할 방법을 마련해 두고, 추측이 아닌 사용량을 근거로 도구를 가지치기합니다.
 
 ## 참고용 수치
 

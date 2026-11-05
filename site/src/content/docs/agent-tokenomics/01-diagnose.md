@@ -174,6 +174,13 @@ Diagnosis often involves a vendor, a platform team, or a customer. Share what is
 - Agree up front who decides what: the platform or vendor team proposes structure and settings; the domain
   owner decides which facts must survive a summary; the security owner approves retention or data-handling changes.
 
+<figure class="at-doc-figure">
+<div class="at-diag-stack">
+<div class="at-diag-row"><span>Input mix</span><div class="at-diag-bar"><span class="at-diag-seg seg-prefix" style="width: 61.4%"></span><span class="at-diag-seg seg-tool" style="width: 23.0%"></span><span class="at-diag-seg seg-hist" style="width: 6.3%"></span><span class="at-diag-seg seg-user" style="width: 9.3%"></span></div><span>100%</span></div>
+</div>
+<figcaption>Illustrative mix: system prompt 61.4%, tool definitions 23.0%, tool results 6.3%, history and user input 9.3%. In the <a href="https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/sample-requests.jsonl">sample log</a>, tool definitions account for 16,800 / 73,000 input tokens across seven requests, or 23.0%. The other segments are hypothetical: the log does not record that breakdown. See <a href="https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler">tokprof</a> for estimated segments and <a href="https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/token_report.py">token_report.py</a> for the aggregate.</figcaption>
+</figure>
+
 ## Worked example
 
 On the sample log, `s1` shows 9,200 tokens of overhead on its first request, of which two tool definitions

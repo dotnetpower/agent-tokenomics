@@ -38,6 +38,14 @@ sidebar:
 Compaction and prompt caching pull in opposite directions: rewriting the *beginning* of the history changes the
 request prefix, so the provider can no longer reuse its cache and you pay full input price again.
 
+<figure class="at-doc-figure">
+<div class="at-diag-stack">
+<div class="at-diag-row"><span>Stable prefix</span><div class="at-diag-bar"><span class="at-diag-seg seg-prefix" style="width: 40%">Stable prefix</span><span class="at-diag-seg seg-hist" style="width: 30%">Summary</span><span class="at-diag-seg seg-user" style="width: 30%">Recent turns</span></div><span>CACHE HIT</span></div>
+<div class="at-diag-row"><span>Full rewrite</span><div class="at-diag-bar"><span class="at-diag-seg seg-miss" style="width: 100%">Rewritten prefix</span></div><span>CACHE MISS</span></div>
+</div>
+<figcaption>Conceptual comparison: placing a summary and recent turns after a stable prefix can preserve prefix cache reuse; rewriting the prefix invalidates the old match. Actual hits depend on provider minimum length, retention, and other cache conditions.</figcaption>
+</figure>
+
 - **Keep the prefix stable.** System prompt, instructions, and tool definitions first and unchanged; keep the
   history append-only between compactions.
 - **Compact rarely, in one batch,** when a threshold is reached (for example, a fraction of the context window)

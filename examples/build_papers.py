@@ -95,14 +95,14 @@ LINK_TEXT_KO = {
     "Prompt and output style": "프롬프트와 출력 스타일",
     "Instructions and tools": "지침과 도구",
     "Models, planning, delegation": "모델, 계획, 위임",
-    "Agent modes and budget guards": "에이전트 모드와 예산 보호 장치",
-    "Isolate": "격리",
+    "Agent modes and budget guards": "에이전트 모드와 예산 가드",
+    "Isolate": "원인 분리",
     "TokenEconomizer case study": "TokenEconomizer 사례 연구",
     "MCP audit": "MCP 감사",
-    "Prove": "증명",
+    "Prove": "원인 입증",
     "Improve: compaction": "개선: 컨텍스트 압축",
     "Result": "결과",
-    "Resources": "리소스",
+    "Resources": "참고 자료",
 }
 
 
@@ -276,7 +276,7 @@ def page_ko(rows: list[dict], retrieved: str, ko: dict) -> str:
         "  order: 91",
         "---",
         "",
-        f"토큰 절약과 관련된 논문 {n}편을 **{retrieved}** 기준으로 모아 공개된 권위 지표로 순위를 매겼습니다.",
+        f"토큰 절약과 관련된 논문 {n}편을 **{retrieved}** 기준으로 모아 학회 등급과 인용 수 순으로 정리했습니다.",
         "각 항목은 arXiv 페이지로 연결되며, 핵심 내용은 직접 작성한 한 줄 요약입니다.",
         "",
         "## 순위 기준",

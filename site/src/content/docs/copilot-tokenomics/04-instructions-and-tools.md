@@ -12,6 +12,22 @@ sidebar:
 Some content is paid for on **every request**: custom instructions and the definitions of every enabled
 tool (including each MCP server's tools). Unused or bloated items are a fixed tax.
 
+<figure class="at-doc-figure">
+  <div class="at-diag-stack">
+    <div class="at-diag-row" aria-label="Unscoped instructions and 40 tools: fixed overhead 82%, task 18%">
+      <span>Unscoped instructions + 40 tools</span>
+      <div class="at-diag-bar"><div class="at-diag-seg seg-miss" style="width:82%">Fixed 82%</div><div class="at-diag-seg seg-user" style="width:18%">Task 18%</div></div>
+      <span>100%</span>
+    </div>
+    <div class="at-diag-row" aria-label="applyTo scoped and pruned tools: fixed overhead 22%, task 18%">
+      <span>applyTo scoped + pruned tools</span>
+      <div class="at-diag-bar"><div class="at-diag-seg seg-hit" style="width:22%">Fixed 22%</div><div class="at-diag-seg seg-user" style="width:18%">Task 18%</div></div>
+      <span>40%</span>
+    </div>
+  </div>
+  <figcaption>Synthetic illustration, not a measured result: against the original input, fixed overhead falls from 82% to 22%, and the task remains at 18%; the new total is 40% of the original. Scoping and pruning reduce fixed overhead while the task stays the same; actual savings vary. Colors distinguish configurations, not cache hits or misses.</figcaption>
+</figure>
+
 ## Actions
 
 **Custom instructions** (`.github/copilot-instructions.md`, `*.instructions.md`, `AGENTS.md`)

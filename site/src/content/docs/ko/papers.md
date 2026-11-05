@@ -5,7 +5,7 @@ sidebar:
   order: 91
 ---
 
-토큰 절약과 관련된 논문 75편을 **2026-11-03** 기준으로 모아 공개된 권위 지표로 순위를 매겼습니다.
+토큰 절약과 관련된 논문 75편을 **2026-11-03** 기준으로 모아 학회 등급과 인용 수 순으로 정리했습니다.
 각 항목은 arXiv 페이지로 연결되며, 핵심 내용은 직접 작성한 한 줄 요약입니다.
 
 ## 순위 기준
@@ -38,13 +38,13 @@ sidebar:
 | 출력 형식 | 1 | [프롬프트와 출력 스타일](../copilot-tokenomics/06-prompt-and-output-style/) |
 | 배치 처리 | 1 | [지침과 도구](../copilot-tokenomics/04-instructions-and-tools/), [개선](../agent-tokenomics/04-improve/) |
 | 모델 라우팅과 캐스케이드 | 5 | [모델, 계획, 위임](../copilot-tokenomics/05-models-and-planning/), [개선](../agent-tokenomics/04-improve/) |
-| 효율적인 추론/출력 길이 | 6 | [에이전트 모드와 예산 보호 장치](../copilot-tokenomics/08-agent-modes-and-budget/), [개선](../agent-tokenomics/04-improve/) |
-| 에이전트 비용과 컨텍스트 관리 | 9 | [격리](../agent-tokenomics/02-isolate/), [개선](../agent-tokenomics/04-improve/), [TokenEconomizer 사례 연구](../agent-tokenomics/case-tokeneconomizer/) |
+| 효율적인 추론/출력 길이 | 6 | [에이전트 모드와 예산 가드](../copilot-tokenomics/08-agent-modes-and-budget/), [개선](../agent-tokenomics/04-improve/) |
+| 에이전트 비용과 컨텍스트 관리 | 9 | [원인 분리](../agent-tokenomics/02-isolate/), [개선](../agent-tokenomics/04-improve/), [TokenEconomizer 사례 연구](../agent-tokenomics/case-tokeneconomizer/) |
 | 도구 선택과 스키마 크기 | 3 | [MCP 감사](../copilot-tokenomics/09-mcp-audit/), [개선](../agent-tokenomics/04-improve/) |
 | 지침/컨텍스트 파일 | 1 | [지침과 도구](../copilot-tokenomics/04-instructions-and-tools/) |
-| 메모리와 요약 | 4 | [증명](../agent-tokenomics/03-prove/), [개선: 컨텍스트 압축](../agent-tokenomics/04-improve/#compaction-without-losing-the-cache) |
-| 평가와 통계 | 5 | [증명](../agent-tokenomics/03-prove/), [결과](../agent-tokenomics/05-result/) |
-| 서베이 | 5 | [리소스](../resources/) |
+| 메모리와 요약 | 4 | [원인 입증](../agent-tokenomics/03-prove/), [개선: 컨텍스트 압축](../agent-tokenomics/04-improve/#compaction-without-losing-the-cache) |
+| 평가와 통계 | 5 | [원인 입증](../agent-tokenomics/03-prove/), [결과](../agent-tokenomics/05-result/) |
+| 서베이 | 5 | [참고 자료](../resources/) |
 
 ## 순위표
 

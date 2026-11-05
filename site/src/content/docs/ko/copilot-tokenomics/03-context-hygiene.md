@@ -1,6 +1,6 @@
 ---
 title: "컨텍스트를 가볍게 유지하기"
-description: "새 채팅, 포크, 컨텍스트 압축, 집중된 첨부, 제외 설정을 활용합니다."
+description: "새 채팅, 포크, 컨텍스트 압축, 필요한 항목만 첨부, 제외 설정을 활용합니다."
 track: copilot
 verified: 2026-11-03
 sidebar:
@@ -9,8 +9,20 @@ sidebar:
 
 ## 문제
 
-대화에는 메시지, 도구 출력, 파일 내용이 쌓입니다. 새 요청을 보낼 때마다 이 기록이 입력으로 다시 전송되므로,
-관련 없는 지난 주제도 답변 품질에는 도움이 되지 않으면서 계속 토큰을 소비합니다.
+대화가 이어지면 메시지, 도구 출력, 파일 내용이 쌓입니다. 새 요청을 보낼 때마다 이 기록이 입력으로 다시 전송되므로,
+관련 없는 이전 주제에도 토큰이 계속 소비됩니다.
+
+### 컨텍스트 윈도우와 컨텍스트 열화
+
+**컨텍스트 윈도우**는 모델이 한 요청에서 처리할 수 있는 최대 범위이며, 입력과 출력이 이 범위를 함께 사용합니다. 컨텍스트 윈도우에는 최대 한도가 있지만, 그 한도에 도달하기 훨씬 전부터 답변 품질이 떨어질 수 있습니다. 모델이 긴 컨텍스트의 중간에 있는 정보를 처음이나 끝에 있는 정보보다 덜 안정적으로 활용하기 때문입니다([Lost in the Middle](https://arxiv.org/abs/2307.03172)). 따라서 비용과 품질을 모두 고려해 작업에 필요한 정보는 충분히 제공하되 불필요한 컨텍스트는 제거해야 합니다.
+
+<figure class="at-doc-figure">
+  <div class="at-doc-figure-grid">
+    <img src="https://code.visualstudio.com/assets/docs/chat/copilot-chat/chat-context-window-control.png" alt="VS Code 채팅에서 항목별 토큰 사용량을 보여 주는 컨텍스트 윈도우 컨트롤" loading="lazy" />
+    <img src="https://code.visualstudio.com/assets/docs/chat/copilot-chat/copilot-chat-view-chat-variables.png" alt="VS Code 채팅에서 필요한 컨텍스트를 추가하는 선택기" loading="lazy" />
+  </div>
+  <figcaption>컨텍스트 사용량을 확인하고(왼쪽) 필요한 컨텍스트를 추가합니다(오른쪽). 출처: <a href="https://code.visualstudio.com/docs/copilot/chat/copilot-chat-context">VS Code Docs — Add context to chat</a> 및 <a href="https://code.visualstudio.com/docs/agents/guides/optimize-usage">Optimize AI credit usage</a>.</figcaption>
+</figure>
 
 ## 조치
 
@@ -18,10 +30,10 @@ sidebar:
 |-----------|--------|
 | 관련 없는 작업으로 전환할 때 | **새 채팅 세션**을 시작합니다(`Ctrl+N` / `⌘N`). |
 | 다른 방법을 시도하거나 곁가지 질문을 하고 싶을 때 | 다시 설명하는 대신 대화를 **포크**합니다(`/fork` 또는 메시지에 마우스를 올린 뒤 *Fork Conversation*). |
-| 계속 필요한 긴 세션일 때 | `/compact`를 실행해 이전 턴을 요약합니다(`/compact focus on the API design decisions`처럼 초점을 지정할 수도 있습니다). |
+| 긴 세션을 계속 사용해야 할 때 | `/compact`를 실행해 이전 턴을 요약합니다(`/compact focus on the API design decisions`처럼 초점을 지정할 수도 있습니다). |
 | 관련 코드를 알고 있을 때 | 에이전트가 넓게 검색하도록 두지 말고 파일, 폴더, 심볼을 **#으로 직접 지정**합니다. |
 | 코드베이스 검색이 필요할 때 | `#codebase`는 검색을 실행합니다. 코드베이스 전체를 컨텍스트에 추가하지는 **않습니다**. |
-| 검색 결과에 노이즈가 많을 때(로그, 빌드 출력, 생성된 파일) | 제외합니다. `.gitignore`(인덱스와 에이전트 검색), `files.exclude`(완전히 숨김), `search.exclude`(에이전트 검색에서만 숨김)를 사용합니다. |
+| 검색 결과에 로그, 빌드 출력, 생성된 파일이 많이 섞일 때 | 제외합니다. `.gitignore`(인덱스와 에이전트 검색), `files.exclude`(완전히 숨김), `search.exclude`(에이전트 검색에서만 숨김)를 사용합니다. |
 | 웹 참조가 필요할 때 | URL과 함께 `#fetch`는 필요할 때만 사용합니다. 가져온 페이지는 컨텍스트에 들어갑니다. |
 | 독립적인 조사가 필요할 때 | **서브에이전트**에 위임해 탐색 과정이 메인 대화에 남지 않게 합니다. |
 
@@ -31,11 +43,11 @@ sidebar:
 ## 확인 방법
 
 변경 후 [사용량 측정](../02-measure-usage/)의 기준선 작업을 다시 실행하고, 세션 크레딧과 컨텍스트 윈도우 토큰 수를 비교합니다.
-답변 품질이 그대로인지도 확인합니다.
+답변 품질이 유지되는지도 확인합니다.
 
 ## 트레이드오프
 
-- `/compact`는 손실이 있는 방식입니다. 계속 필요한 세부 정보가 요약 과정에서 사라질 수 있습니다. 초점 지시를 추가하고,
+- `/compact`로 요약하면 일부 정보가 사라질 수 있습니다. 계속 필요한 세부 정보가 요약 과정에서 사라질 수 있습니다. 초점 지시를 추가하고,
   반드시 남겨야 할 내용(결정 사항, 제약 조건, 파일 경로, 미해결 항목)을 명시합니다.
 - 컨텍스트 압축은 기록의 시작 부분을 바꾸므로 해당 접두부에 대한 제공자의 프롬프트 캐시가 다시 만들어집니다. 반복하지 말고
   작업이 자연스럽게 끊기는 시점에 한 번만 압축합니다. 남은 작업이 짧다면 그냥 끝내는 편이 더 저렴한 경우가 많습니다.

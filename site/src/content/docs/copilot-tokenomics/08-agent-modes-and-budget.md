@@ -12,6 +12,11 @@ sidebar:
 An agent run is a **loop**: each step is a model call, and each call re-sends the instructions, tool definitions,
 and conversation so far. A vague prompt can trigger a long exploration that ends in a misunderstanding and a restart.
 
+<figure class="at-doc-figure">
+  <img src="https://code.visualstudio.com/assets/docs/agents/chat-debug-view/agent-flow-chart-v2.png" alt="Agent Debug View flow chart showing model requests and tool calls" loading="lazy" />
+  <figcaption>Agent Debug View visualizes the steps in an agent run. Source: <a href="https://code.visualstudio.com/docs/copilot/chat/chat-debug-view">VS Code Docs — Agent Debug View</a>.</figcaption>
+</figure>
+
 ## Actions
 
 ### Pick the cheapest mode that fits

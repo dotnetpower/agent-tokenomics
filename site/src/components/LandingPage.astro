@@ -1,0 +1,867 @@
+---
+interface Props {
+  locale?: "en" | "ko";
+}
+
+const { locale = "en" } = Astro.props;
+const isKo = locale === "ko";
+const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+const prefix = isKo ? `${base}ko/` : base;
+const docUrl = (slug: string) => `${prefix}${slug.replace(/^\/+/, "")}`;
+const demoReportUrl = `${base}demo/tokprof-sample.html`;
+---
+
+<div class="at-landing not-content">
+  <!-- 1. PyHookKit-inspired Responsive Hero + 3-Step Stage -->
+  <section class="at-hero" aria-labelledby="_top">
+    <div class="at-hero-copy">
+      <span class="at-eyebrow">
+        <i class="at-eyebrow-dot" aria-hidden="true"></i>
+        {isKo
+          ? "LLM 토큰 절약 가이드 · 두 가지 트랙과 코드 수정 없는 프로파일러"
+          : "PRACTICAL LLM TOKEN GUIDE · TWO TRACKS & ZERO-CODE PROFILER"}
+      </span>
+      <h1 id="_top" data-page-title="" class="at-hero-title">
+        {isKo ? (
+          <>
+            AI 도구의 품질은 유지하면서,<br />
+            <span class="at-accent-text">불필요한 토큰 사용을 줄이세요.</span>
+          </>
+        ) : (
+          <>
+            Spend fewer tokens,<br />
+            <span class="at-accent-text">without making your AI tools worse.</span>
+          </>
+        )}
+      </h1>
+      <p class="at-hero-subtitle">
+        {isKo
+          ? "VS Code에서 GitHub Copilot을 사용하는 개발자와 LLM 에이전트를 개발하거나 운영하는 엔지니어를 위한 가이드입니다. 토큰 사용량을 측정하고 낭비 원인을 찾아 개선하는 방법을 안내합니다. 함께 제공되는 독립 실행형 도구 tokprof로 LLM 요청을 분석하고 HTML 리포트를 확인할 수 있습니다."
+          : "A practical guide for developers using GitHub Copilot in VS Code (Track A) and engineers who build or operate LLM agents (Track B). Measure where tokens go, isolate the cause of waste, and verify fixes with tokprof — a standalone profiler that inspects LLM requests and generates an HTML report without changing agent code."}
+      </p>
+      <div class="at-hero-actions">
+        <a class="at-btn at-btn-primary" href={docUrl("copilot-tokenomics/")}>
+          {isKo ? "트랙 A: Copilot 토큰 절약 →" : "Track A: Copilot Tokenomics →"}
+        </a>
+        <a class="at-btn at-btn-secondary" href={docUrl("agent-tokenomics/")}>
+          {isKo ? "트랙 B: 에이전트 토큰 절약 →" : "Track B: Agent Tokenomics →"}
+        </a>
+        <a class="at-btn at-btn-ghost" href="#tokprof-showcase">
+          {isKo ? "tokprof 실행 화면과 HTML 예시 보기 ↓" : "See tokprof start & HTML Report ↓"}
+        </a>
+      </div>
+    </div>
+
+    <div class="at-stage" aria-label={isKo ? "토큰 사용량을 줄이는 3단계" : "Three steps to reduce token usage"}>
+      <div class="at-stage-grid" aria-hidden="true"></div>
+      <div class="at-stage-kicker">
+        <span>{isKo ? "측정하고 개선하기" : "MEASURE THEN IMPROVE"}</span>
+        <span>{isKo ? "트랙 A와 트랙 B 공통" : "TRACK A & TRACK B"}</span>
+      </div>
+      <div class="at-stage-steps">
+        <article class="at-stage-step s-measure">
+          <span class="at-stage-num">01</span>
+          <span class="at-stage-icon">M</span>
+          <strong>{isKo ? "먼저 측정하기" : "Measure First"}</strong>
+          <small>
+            {isKo
+              ? "tokprof start 또는 Copilot 디버그 로그로 토큰 사용량과 캐시 적중률을 확인하세요."
+              : "Check token usage and cache hit rate with tokprof start or Copilot Debug Logs."}
+          </small>
+          <span class="at-stage-check" aria-hidden="true">✓</span>
+        </article>
+        <span class="at-stage-conn" aria-hidden="true">→</span>
+        <article class="at-stage-step s-isolate">
+          <span class="at-stage-num">02</span>
+          <span class="at-stage-icon">I</span>
+          <strong>{isKo ? "낭비 원인 확인하기" : "Isolate the Cause"}</strong>
+          <small>
+            {isKo
+              ? "사용하지 않는 도구, 반복 실패, 대화 기록 증가가 토큰 사용량에 미치는 영향을 확인하세요."
+              : "See how unused tools, repeated errors, and history growth drive token cost."}
+          </small>
+          <span class="at-stage-check" aria-hidden="true">✓</span>
+        </article>
+        <span class="at-stage-conn" aria-hidden="true">→</span>
+        <article class="at-stage-step s-improve">
+          <span class="at-stage-num">03</span>
+          <span class="at-stage-icon">G</span>
+          <strong>{isKo ? "개선하고 품질 확인하기" : "Improve & Verify"}</strong>
+          <small>
+            {isKo
+              ? "도구 가지치기, 루프 가드, 프롬프트 캐싱을 적용한 뒤 작업 성공률을 확인하세요."
+              : "Apply tool pruning, loop guards, and prompt caching while checking pass rate."}
+          </small>
+          <span class="at-stage-check" aria-hidden="true">✓</span>
+        </article>
+      </div>
+      <div class="at-stage-result">
+        <span class="at-stage-badge">T</span>
+        <div class="at-stage-result-body">
+          <small>{isKo ? "TokenEconomizer에서 보고한 결과" : "Reported in TokenEconomizer"}</small>
+          <strong>
+            {isKo
+              ? "SWE-Bench에서 에이전트와 모델 조합 5개의 평균 비용이 18.4~30.9% 감소했습니다."
+              : "18.4–30.9% lower mean cost on SWE-Bench across 5 agent–model pairs (as reported)."}
+          </strong>
+        </div>
+        <span class="at-stage-live"><i></i>{isKo ? "연구 결과" : "Reported"}</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. Real tokprof CLI Execution & HTML Report Preview -->
+  <section id="tokprof-showcase" class="at-tokprof-section" aria-labelledby="tokprof-showcase-title">
+    <div class="at-sec-head">
+      <span class="at-eyebrow">
+        <i class="at-eyebrow-dot" aria-hidden="true"></i>
+        {isKo ? "코드 수정 없이 사용하는 LLM 토큰 프로파일러 · tokprof" : "ZERO-CODE LLM TOKEN PROFILER · TOKPROF"}
+      </span>
+      <h2 id="tokprof-showcase-title">
+        {isKo
+          ? "tokprof start로 토큰 사용량을 측정하고 HTML 리포트로 살펴보세요"
+          : "Run tokprof start to measure token usage and inspect the HTML report"}
+      </h2>
+      <p>
+        {isKo ? (
+          <>
+            <code>tokprof</code>는 로컬 게이트웨이, 프로세스 내부 훅 또는 Linux eBPF를 사용해 지원되는 LLM 요청을 수집합니다. 수집 가능한 요청은 실행 환경과 선택한 방식에 따라 달라집니다(eBPF를 사용할 수 없는 환경에서는 <code>eval "$(tokprof env)"</code>로 새 프로세스의 요청을 게이트웨이로 전달합니다). 아래 화면은 합성 데이터(<a href="https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/sample-requests.jsonl"><code>examples/sample-requests.jsonl</code></a>, 7개 호출)를 사용한 실행 예시입니다.
+          </>
+        ) : (
+          <>
+            <code>tokprof</code> captures supported LLM requests via a local gateway, in-process hooks, or Linux eBPF depending on your environment (when eBPF is unavailable, run <code>eval "$(tokprof env)"</code> so new processes route through the gateway). The terminal session and HTML report preview below are a synthetic example based on <a href="https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/sample-requests.jsonl"><code>examples/sample-requests.jsonl</code></a> (7 calls).
+          </>
+        )}
+      </p>
+    </div>
+
+    <div class="at-cmd-strip">
+      <div class="at-cmd-card">
+        <div class="at-cmd-card-top">
+          <span>{isKo ? "01 / 측정 시작" : "01 / START SESSION"}</span>
+          <span>Background</span>
+        </div>
+        <code>tokprof start</code>
+        <span>
+          {isKo
+            ? "백그라운드 측정 세션을 시작합니다. 지원되는 Linux 환경에서는 eBPF로 실행 중인 프로세스의 요청을 수집할 수 있습니다."
+            : "Starts a background profiling session. On supported Linux hosts, eBPF captures requests from running processes."}
+        </span>
+      </div>
+      <div class="at-cmd-card">
+        <div class="at-cmd-card-top">
+          <span>{isKo ? "02 / 수집 상태 확인" : "02 / CHECK STATUS"}</span>
+          <span>Live Count</span>
+        </div>
+        <code>tokprof status</code>
+        <span>
+          {isKo
+            ? "에이전트에서 측정할 작업을 실행한 뒤, 활성 세션과 지금까지 수집된 LLM 호출 수를 확인합니다."
+            : "Run the agent task you want to measure, then check the active session and recorded LLM call count."}
+        </span>
+      </div>
+      <div class="at-cmd-card">
+        <div class="at-cmd-card-top">
+          <span>{isKo ? "03 / 측정 종료" : "03 / STOP & REPORT"}</span>
+          <span>CLI + HTML</span>
+        </div>
+        <code>tokprof stop</code>
+        <span>
+          {isKo
+            ? "측정을 종료하고 터미널 요약표와 대화형 HTML 리포트(.tokprof/latest.html)를 확인합니다."
+            : "Stops the session, prints the terminal breakdown, and writes the HTML report (.tokprof/latest.html)."}
+        </span>
+      </div>
+    </div>
+
+    <div class="at-showcase-split">
+      <!-- 2A. Terminal Execution Window -->
+      <div class="tp-term" role="region" aria-label={isKo ? "tokprof 명령 실행 예시" : "tokprof command execution example"}>
+        <div class="tp-term-bar">
+          <div class="tp-term-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+          <span class="tp-term-title">
+            bash — tokprof start → tokprof status → tokprof stop (synthetic example)
+          </span>
+          <span class="tp-term-pill">
+            {isKo ? "합성 데이터를 사용한 실행 예시" : "Synthetic 7-call session example"}
+          </span>
+        </div>
+        <div class="tp-term-body">
+          <pre class="tp-term-pre"><code><span class="tp-c-prompt">$</span> <span class="tp-c-cmd">tokprof start</span>
+<span class="tp-c-dim">tokprof: session started (pid 48210, gateway 127.0.0.1:41932, eBPF: all processes &amp; Docker containers, max 3m/180s)</span>
+<span class="tp-c-dim">  recording to: /workspace/.tokprof/20261106-synthetic.jsonl</span>
+<span class="tp-c-dim">  Running host processes, background services, and Docker containers are captured automatically.</span>
+<span class="tp-c-dim">  Check progress: tokprof status   |   Live view: tokprof report --watch   |   Finish &amp; report: tokprof stop</span>
+
+<span class="tp-c-dim"># {isKo ? "에이전트에서 측정할 작업을 실행합니다." : "Run the agent task you want to profile."}</span>
+<span class="tp-c-prompt">$</span> <span class="tp-c-cmd">tokprof status</span>
+<span class="tp-c-dim">tokprof: active session pid 48210, gateway 127.0.0.1:41932, eBPF: all processes &amp; Docker containers</span>
+<span class="tp-c-dim">  requests seen: 7, LLM calls recorded: 7, errors: 0</span>
+
+<span class="tp-c-prompt">$</span> <span class="tp-c-cmd">tokprof stop</span>
+<span class="tp-c-dim">tokprof: session stopped (recorded 7 call(s) in /workspace/.tokprof/20261106-synthetic.jsonl)</span>
+<span class="tp-c-bold">╭──────────────────────────────────────────────────────────────────────────────────────────╮</span>
+<span class="tp-c-bold">│  tokprof — LLM Token Profile (Per-Session · Per-Turn · Prompt Inspector)                 │</span>
+<span class="tp-c-bold">╰──────────────────────────────────────────────────────────────────────────────────────────╯</span>
+  Sessions: <span class="tp-c-bold">1</span>   Turns: <span class="tp-c-bold">3</span>   Calls: <span class="tp-c-bold">7</span>   Input: <span class="tp-c-bold">73,000</span>   Output: <span class="tp-c-bold">1,580</span>   Cached: <span class="tp-c-bold">47,700</span> (65.3%)
+  First-call overhead: 9,200 tok   Median input/call: 9,600 tok   Fan-out: median 2, max 4 calls/turn
+
+  <span class="tp-c-bold">1. Input token breakdown (total)</span>
+  ────────────────────────────────────────────────────────────────────────────────────────────
+  System prompt                         44,800   61.4%  <span class="tp-c-sys">████████████████░░░░░░░░░░</span>
+  Tools: definitions                    16,800   23.0%  <span class="tp-c-tdef">██████░░░░░░░░░░░░░░░░░░░░</span>
+  Tools: results                         4,620    6.3%  <span class="tp-c-tres">█▋░░░░░░░░░░░░░░░░░░░░░░░░</span>
+  History: user turns                    2,670    3.7%  <span class="tp-c-hist">█░░░░░░░░░░░░░░░░░░░░░░░░░</span>
+  Current user prompt                    1,870    2.6%  <span class="tp-c-user">▋░░░░░░░░░░░░░░░░░░░░░░░░░</span>
+  History: assistant turns               1,400    1.9%  <span class="tp-c-hist">▌░░░░░░░░░░░░░░░░░░░░░░░░░</span>
+  Unattributed (template/hidden)           840    1.2%  <span class="tp-c-dim">▎░░░░░░░░░░░░░░░░░░░░░░░░░</span>
+
+  <span class="tp-c-bold">3. Per-Turn breakdown &amp; prompt summary (System / History / User Prompt / Tools &amp; Schema)</span>
+  ────────────────────────────────────────────────────────────────────────────────────────────
+  turn       calls     system    history  user_prompt  tools/schema    total_in    cached  output
+  S1·T1          4     25,600      2,230          930         9,960      39,200    28,400     680
+     <span class="tp-c-user">User prompt:</span> Fix the failing discount boundary test in checkout.py
+     <span class="tp-c-dim">Assistant:</span> &#123;"tool":"read_file","path":"src/checkout.py"&#125;
+  S1·T2          1      6,400      1,440          540         6,600      15,100    10,300     420
+     <span class="tp-c-user">User prompt:</span> Patch &gt;= 100 boundary and verify with .venv/bin/pytest -q
+     <span class="tp-c-dim">Assistant:</span> Patched boundary check (`&gt;= 100`) and verified with `.venv/bin/pytest -q` (14 passed).
+  S1·T3          2     12,800        400          400         4,860      18,700     9,000     480
+     <span class="tp-c-user">User prompt:</span> Run test suite for currency rounding module
+     <span class="tp-c-dim">Assistant:</span> All 8 rounding tests passed in 0.09s.
+
+  <span class="tp-c-bold">Findings &amp; recommendations</span>
+  ────────────────────────────────────────────────────────────────────────────────────────────
+  <span class="tp-c-high">[HIGH]</span> 2 tool definition(s) were sent but never called (14,000 tokens, 19.2% of input): browser_open, notebook_edit
+  <span class="tp-c-high">[HIGH]</span> Tool call 'run_tests' was repeated 3 times in a row (28,800 input tokens): add a loop guard
+  <span class="tp-c-med">[MEDIUM]</span> Unfiltered read_file tool output (4,200 tokens) pushed Turn 2 input to 15,100 tokens
+
+<span class="tp-c-ok">tokprof: HTML dashboard written to .tokprof/latest.html</span>
+<span class="tp-c-ok">tokprof: Report server live at http://127.0.0.1:18765/latest.html</span></code></pre>
+        </div>
+      </div>
+
+      <!-- 2B. Embedded Result HTML Report Excerpt (.tokprof/latest.html) -->
+      <div
+        class="tp-browser-frame"
+        id="tokprof-html-preview"
+        role="region"
+        aria-label={isKo ? "tokprof HTML 리포트 미리보기" : "tokprof HTML report preview"}
+      >
+        <div class="tp-browser-chrome">
+          <div class="tp-term-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+          <div class="tp-browser-url">
+            <span aria-hidden="true">🔒</span>
+            <span>http://127.0.0.1:18765/latest.html</span>
+            <span style="opacity:0.65">(.tokprof/latest.html — Edition Dossier)</span>
+          </div>
+          <div class="tp-browser-actions">
+            <button
+              type="button"
+              class="tp-ed-theme-btn"
+              onclick="document.getElementById('tokprof-html-preview').classList.toggle('is-dark')"
+            >
+              {isKo ? "Paper / Night 테마 전환" : "Toggle Paper / Night"}
+            </button>
+            <a class="tp-report-link" href={demoReportUrl} target="_blank" rel="noopener">
+              {isKo ? "전체 HTML 예시 열기 ↗" : "Open full HTML sample ↗"}
+            </a>
+          </div>
+        </div>
+
+        <div class="tp-edition-preview">
+          <header class="tp-ed-masthead">
+            <div class="tp-ed-brand">
+              <span class="tp-ed-mark">T</span>
+              <div>
+                tokprof
+                <small>
+                  {isKo
+                    ? "Edition 리포트 · LLM 토큰 구성과 프롬프트 확인 예시"
+                    : "Edition Report · LLM Token Composition & Prompt Inspector Example"}
+                </small>
+              </div>
+            </div>
+            <div class="tp-ed-tabs" role="tablist" aria-label={isKo ? "리포트 보기 선택" : "Report view selection"}>
+              <button
+                type="button"
+                role="tab"
+                class="tp-ed-tab"
+                data-tp-tab="all"
+                aria-selected="true"
+                onclick="window.__setTpTab && window.__setTpTab('all')"
+              >
+                {isKo ? "전체 보기" : "All Views"}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                class="tp-ed-tab"
+                data-tp-tab="composition"
+                aria-selected="false"
+                onclick="window.__setTpTab && window.__setTpTab('composition')"
+              >
+                {isKo ? "01 토큰 구성과 진단" : "01 Composition & Findings"}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                class="tp-ed-tab"
+                data-tp-tab="lineage"
+                aria-selected="false"
+                onclick="window.__setTpTab && window.__setTpTab('lineage')"
+              >
+                {isKo ? "02 토큰 흐름" : "02 Token Flow"}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                class="tp-ed-tab"
+                data-tp-tab="turns"
+                aria-selected="false"
+                onclick="window.__setTpTab && window.__setTpTab('turns')"
+              >
+                {isKo ? "03 턴별 내역과 프롬프트" : "03 Turns & Prompts"}
+              </button>
+            </div>
+          </header>
+
+          <div class="tp-ed-notice">
+            <strong>SYNTHETIC REPORT EXAMPLE</strong>
+            <span>
+              Sessions: 1 &middot; Turns: 3 &middot; Calls: 7 &middot; Total Input: 73,000 tok &middot; Cached: 47,700 (65.3%) &middot; Output: 1,580 tok
+            </span>
+          </div>
+
+          <div class="tp-ed-body">
+            <!-- 6 KPI Cards -->
+            <div class="tp-ed-kpis">
+              <div class="tp-ed-card">
+                <span class="tp-ed-kicker">01 / SESSIONS &amp; TURNS</span>
+                <strong class="tp-ed-val">1 / 3</strong>
+                <span class="tp-ed-sub">7 total LLM calls</span>
+              </div>
+              <div class="tp-ed-card">
+                <span class="tp-ed-kicker">02 / INPUT TOKENS</span>
+                <strong class="tp-ed-val">73,000</strong>
+                <span class="tp-ed-sub">median 9,600 / call</span>
+              </div>
+              <div class="tp-ed-card">
+                <span class="tp-ed-kicker">03 / CACHED INPUT</span>
+                <strong class="tp-ed-val">47,700</strong>
+                <span class="tp-ed-sub">65.3% cache hit rate</span>
+              </div>
+              <div class="tp-ed-card">
+                <span class="tp-ed-kicker">04 / OUTPUT TOKENS</span>
+                <strong class="tp-ed-val">1,580</strong>
+                <span class="tp-ed-sub">generated by model</span>
+              </div>
+              <div class="tp-ed-card">
+                <span class="tp-ed-kicker">05 / FIXED OVERHEAD</span>
+                <strong class="tp-ed-val">9,200</strong>
+                <span class="tp-ed-sub">first call input</span>
+              </div>
+              <div class="tp-ed-card">
+                <span class="tp-ed-kicker">06 / FAN-OUT</span>
+                <strong class="tp-ed-val">2</strong>
+                <span class="tp-ed-sub">median calls/turn (max 4)</span>
+              </div>
+            </div>
+
+            <!-- Panel 1: Stacked Bar + Composition Table + Diagnostic Dossier -->
+            <div data-tp-panel="composition" style="display:flex;flex-direction:column;gap:0.85rem">
+              <div class="tp-ed-stack" title="Input token share by segment kind">
+                <div style="width:61.4%;background:#245e63" title="System prompt: 44,800 tok (61.4%)"></div>
+                <div style="width:23.0%;background:#5b4b8a" title="Tools: definitions: 16,800 tok (23.0%)"></div>
+                <div style="width:6.3%;background:#a84268" title="Tools: results: 4,620 tok (6.3%)"></div>
+                <div style="width:3.7%;background:#2b6cb0" title="History: user turns: 2,670 tok (3.7%)"></div>
+                <div style="width:2.6%;background:#296e48" title="Current user prompt: 1,870 tok (2.6%)"></div>
+                <div style="width:1.9%;background:#4a89bd" title="History: assistant turns: 1,400 tok (1.9%)"></div>
+                <div style="width:1.1%;background:#b8b4a9" title="Unattributed: 840 tok (1.2%)"></div>
+              </div>
+
+              <div class="tp-ed-grid2">
+                <section class="tp-ed-panel">
+                  <span class="tp-ed-kicker">01 / COMPOSITION</span>
+                  <h3>{isKo ? "1. 전체 입력 토큰 구성" : "1. Input Token Breakdown (Total)"}</h3>
+                  <div class="tp-ed-table-wrap">
+                    <table class="tp-ed-table">
+                      <thead>
+                        <tr>
+                          <th>{isKo ? "구성 요소" : "Component"}</th>
+                          <th class="num">{isKo ? "토큰" : "Tokens"}</th>
+                          <th class="num">{isKo ? "비중" : "Share"}</th>
+                          <th>{isKo ? "분포" : "Distribution"}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <td><strong style="color:#245e63">System prompt</strong></td>
+                          <td class="num">44,800</td>
+                          <td class="num">61.4%</td>
+                          <td><div class="tp-mini-track"><div class="tp-mini-fill" style="width:61.4%;background:#245e63"></div></div></td>
+                        </tr>
+                        <tr>
+                          <td><strong style="color:#5b4b8a">Tools: definitions</strong></td>
+                          <td class="num">16,800</td>
+                          <td class="num">23.0%</td>
+                          <td><div class="tp-mini-track"><div class="tp-mini-fill" style="width:23.0%;background:#5b4b8a"></div></div></td>
+                        </tr>
+                        <tr>
+                          <td><strong style="color:#a84268">Tools: results</strong></td>
+                          <td class="num">4,620</td>
+                          <td class="num">6.3%</td>
+                          <td><div class="tp-mini-track"><div class="tp-mini-fill" style="width:6.3%;background:#a84268"></div></div></td>
+                        </tr>
+                        <tr>
+                          <td><strong style="color:#2b6cb0">History: user turns</strong></td>
+                          <td class="num">2,670</td>
+                          <td class="num">3.7%</td>
+                          <td><div class="tp-mini-track"><div class="tp-mini-fill" style="width:3.7%;background:#2b6cb0"></div></div></td>
+                        </tr>
+                        <tr>
+                          <td><strong style="color:#296e48">Current user prompt</strong></td>
+                          <td class="num">1,870</td>
+                          <td class="num">2.6%</td>
+                          <td><div class="tp-mini-track"><div class="tp-mini-fill" style="width:2.6%;background:#296e48"></div></div></td>
+                        </tr>
+                        <tr>
+                          <td><strong style="color:#4a89bd">History: assistant turns</strong></td>
+                          <td class="num">1,400</td>
+                          <td class="num">1.9%</td>
+                          <td><div class="tp-mini-track"><div class="tp-mini-fill" style="width:1.9%;background:#4a89bd"></div></div></td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+
+                <section class="tp-ed-panel">
+                  <span class="tp-ed-kicker">DIAGNOSTIC DOSSIER / FINDINGS</span>
+                  <h3>{isKo ? "발견된 토큰 낭비와 권장 조치" : "Detected Token Waste & Next Steps"}</h3>
+                  <div class="tp-finding">
+                    <span class="tp-badge tp-badge-high">HIGH</span>
+                    <div>
+                      <div>
+                        {isKo
+                          ? "호출되지 않은 도구 정의 2개(browser_open, notebook_edit)가 매번 전송되었습니다. 총 14,000토큰으로 전체 입력의 19.2%입니다."
+                          : "2 tool definitions (browser_open, notebook_edit) were sent on every call but never used — 14,000 tokens (19.2% of total input)."}
+                      </div>
+                      <a href={docUrl("agent-tokenomics/02-isolate/")} style="font-weight:600;font-size:0.74rem">
+                        {isKo ? "2단계: 사용하지 않는 도구 확인하기 →" : "Stage 2: Isolate unused tools →"}
+                      </a>
+                    </div>
+                  </div>
+                  <div class="tp-finding">
+                    <span class="tp-badge tp-badge-high">HIGH</span>
+                    <div>
+                      <div>
+                        {isKo
+                          ? "run_tests 호출이 같은 오류(pytest: command not found)와 함께 세 번 연속 반복되었습니다. 이 구간에 입력 토큰 28,800개가 사용되었습니다."
+                          : "Tool call 'run_tests' repeated 3 times in a row with the same error (pytest: command not found), consuming 28,800 input tokens."}
+                      </div>
+                      <a href={docUrl("agent-tokenomics/04-improve/")} style="font-weight:600;font-size:0.74rem">
+                        {isKo ? "4단계: 루프 가드 추가하기 →" : "Stage 4: Add a loop guard →"}
+                      </a>
+                    </div>
+                  </div>
+                  <div class="tp-finding">
+                    <span class="tp-badge tp-badge-med">MEDIUM</span>
+                    <div>
+                      <div>
+                        {isKo
+                          ? "1턴에서 전체 파일을 읽은 결과가 4,200토큰이었고, 2턴의 입력은 15,100토큰으로 늘어났습니다."
+                          : "Reading the full file in Turn 1 added 4,200 tool-result tokens and pushed Turn 2 input to 15,100 tokens."}
+                      </div>
+                      <a href={docUrl("agent-tokenomics/04-improve/")} style="font-weight:600;font-size:0.74rem">
+                        {isKo ? "4단계: 도구 출력 줄이기 →" : "Stage 4: Trim tool output →"}
+                      </a>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </div>
+
+            <!-- Panel 2: Edition Lineage Dot-Grid Canvas -->
+            <div data-tp-panel="lineage" class="tp-lineage-box">
+              <div class="tp-lineage-head">
+                <div>
+                  <span class="tp-ed-kicker">EDITION LINEAGE / TOKEN FLOW CANVAS</span>
+                  <h4>{isKo ? "기준 상태 → 턴별 변화 → 개별 호출" : "Baseline → Turn Progression → Individual Calls"}</h4>
+                </div>
+                <span class="tp-badge tp-badge-ready">
+                  {isKo ? "토큰 흐름 예시" : "Token flow example"}
+                </span>
+              </div>
+              <div class="tp-lineage-canvas">
+                <div class="tp-lineage-flow">
+                  <div class="tp-lineage-col">
+                    <span class="tp-lineage-col-label">ORIGIN / 01</span>
+                    <div class="tp-node-card is-active">
+                      <div class="tp-node-meta"><span>BASELINE</span><span>↗</span></div>
+                      <strong>8,800 tok</strong>
+                      <span class="tp-node-desc">System (6,400) + Tools (2,400)</span>
+                      <span class="tp-badge tp-badge-ready">First call: 9,200 tok</span>
+                    </div>
+                  </div>
+                  <div class="tp-lineage-arrow" aria-hidden="true">───▸</div>
+                  <div class="tp-lineage-col">
+                    <span class="tp-lineage-col-label">TURNS / 02</span>
+                    <div class="tp-node-card is-active">
+                      <div class="tp-node-meta"><span>s1 · T1</span><span>↗</span></div>
+                      <strong>39,200 tok</strong>
+                      <span class="tp-node-desc">Hist 2,230 · User 930 · Tools 9,960</span>
+                      <span class="tp-badge tp-badge-ready">4 calls · Cached 28,400</span>
+                    </div>
+                    <div class="tp-node-card">
+                      <div class="tp-node-meta"><span>s1 · T2</span><span>↗</span></div>
+                      <strong>15,100 tok</strong>
+                      <span class="tp-node-desc">Hist 1,440 · Tool Result 4,200</span>
+                      <span class="tp-badge tp-badge-ready">1 call · Cached 10,300</span>
+                    </div>
+                  </div>
+                  <div class="tp-lineage-arrow" aria-hidden="true">───▸</div>
+                  <div class="tp-lineage-col">
+                    <span class="tp-lineage-col-label">EXECUTION / 03</span>
+                    <div class="tp-node-card is-active">
+                      <div class="tp-node-meta"><span>CALL #1</span><span>↗</span></div>
+                      <strong>9,200 tok</strong>
+                      <span class="tp-node-desc">m-large · Cold prefix (0 cached)</span>
+                      <span class="tp-badge tp-badge-med">Cached 0 · Out 310</span>
+                    </div>
+                    <div class="tp-node-card">
+                      <div class="tp-node-meta"><span>CALL #5</span><span>↗</span></div>
+                      <strong>15,100 tok</strong>
+                      <span class="tp-node-desc">m-large · +4,200 read_file result</span>
+                      <span class="tp-badge tp-badge-ready">Cached 10,300 · Out 420</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Panel 3: Turn Breakdown & Prompt Inspector Excerpt -->
+            <div data-tp-panel="turns" class="tp-ed-panel">
+              <span class="tp-ed-kicker">03 / TURN LINEAGE &amp; PROMPT INSPECTOR</span>
+              <h3>
+                {isKo
+                  ? "3. 턴별 토큰 사용량과 수집된 프롬프트·도구 스키마"
+                  : "3. Per-Turn Token Usage & Captured Prompts / Tool Schemas"}
+              </h3>
+              <div class="tp-ed-table-wrap">
+                <table class="tp-ed-table">
+                  <thead>
+                    <tr>
+                      <th>Turn</th>
+                      <th class="num">Calls</th>
+                      <th class="num">System</th>
+                      <th class="num">History</th>
+                      <th class="num">User</th>
+                      <th class="num">Tools</th>
+                      <th class="num">Input</th>
+                      <th class="num">Cached</th>
+                      <th class="num">Out</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><span class="tp-badge tp-badge-ready">s1 · Turn 1</span></td>
+                      <td class="num">4</td>
+                      <td class="num"><strong>25,600</strong> (65%)</td>
+                      <td class="num"><strong>2,230</strong> (6%)</td>
+                      <td class="num"><strong>930</strong> (2%)</td>
+                      <td class="num"><strong>9,960</strong> (25%)</td>
+                      <td class="num"><strong>39,200</strong></td>
+                      <td class="num">28,400 <span class="tp-badge tp-badge-ready">72%</span></td>
+                      <td class="num">680</td>
+                    </tr>
+                    <tr>
+                      <td><span class="tp-badge tp-badge-ready">s1 · Turn 2</span></td>
+                      <td class="num">1</td>
+                      <td class="num"><strong>6,400</strong> (42%)</td>
+                      <td class="num"><strong>1,440</strong> (10%)</td>
+                      <td class="num"><strong>540</strong> (4%)</td>
+                      <td class="num"><strong>6,600</strong> (44%)</td>
+                      <td class="num"><strong>15,100</strong></td>
+                      <td class="num">10,300 <span class="tp-badge tp-badge-ready">68%</span></td>
+                      <td class="num">420</td>
+                    </tr>
+                    <tr>
+                      <td><span class="tp-badge tp-badge-ready">s1 · Turn 3</span></td>
+                      <td class="num">2</td>
+                      <td class="num"><strong>12,800</strong> (68%)</td>
+                      <td class="num"><strong>400</strong> (2%)</td>
+                      <td class="num"><strong>400</strong> (2%)</td>
+                      <td class="num"><strong>4,860</strong> (26%)</td>
+                      <td class="num"><strong>18,700</strong></td>
+                      <td class="num">9,000 <span class="tp-badge tp-badge-ready">48%</span></td>
+                      <td class="num">480</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="tp-turn-cards">
+                <div class="tp-turn-card">
+                  <div class="tp-turn-card-head">
+                    <span style="color:#245e63">SYSTEM PROMPT (CALL #1)</span>
+                    <span>6,400 tok</span>
+                  </div>
+                  <pre>[system#agent-rules]
+# Coding Agent System Prompt
+1. Inspect target files before editing.
+2. Run focused tests to verify every fix.</pre>
+                </div>
+                <div class="tp-turn-card">
+                  <div class="tp-turn-card-head">
+                    <span style="color:#5b4b8a">TOOLS &amp; SCHEMA (4 DEFINED)</span>
+                    <span>2,400 tok</span>
+                  </div>
+                  <pre>[read_file: 220 tok] [run_tests: 180 tok]
+[notebook_edit: 900 tok — UNUSED]
+[browser_open: 1,100 tok — UNUSED]</pre>
+                </div>
+                <div class="tp-turn-card">
+                  <div class="tp-turn-card-head">
+                    <span style="color:#296e48">USER PROMPT &amp; OUTPUT (T2)</span>
+                    <span>540 + 420 tok</span>
+                  </div>
+                  <pre>User: Patch &gt;= 100 boundary and verify with .venv/bin/pytest -q
+Assistant: Patched boundary check (&gt;= 100); 14 passed.</pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. Two Tracks Overview + PyHookKit DeliveryArchitecture-style Blueprint -->
+  <section aria-labelledby="tracks-title">
+    <div class="at-sec-head">
+      <span class="at-eyebrow">
+        <i class="at-eyebrow-dot" aria-hidden="true"></i>
+        {isKo ? "역할에 맞는 두 가지 트랙" : "TWO TRACKS FOR DEVELOPERS & AGENT ENGINEERS"}
+      </span>
+      <h2 id="tracks-title">
+        {isKo
+          ? "사용 환경에 맞는 트랙을 선택하세요"
+          : "Choose your track: everyday VS Code Copilot or LLM agent engineering"}
+      </h2>
+      <p>
+        {isKo
+          ? "각 가이드는 문제, 조치 방법, 효과 확인 방법, 고려할 점을 순서대로 설명합니다."
+          : "Each guide walks through the problem, what to change, how to verify the effect, and the trade-offs."}
+      </p>
+    </div>
+
+    <div class="at-tracks-grid">
+      <article class="at-track-card">
+        <div class="at-track-head">
+          <span class="at-eyebrow">{isKo ? "트랙 A · VS Code GitHub Copilot" : "TRACK A · VS CODE GITHUB COPILOT"}</span>
+          <h3>{isKo ? "트랙 A — Copilot 토큰 절약" : "Track A — Copilot Tokenomics"}</h3>
+          <p>
+            {isKo
+              ? "VS Code에서 GitHub Copilot을 사용하는 개발자를 위한 가이드입니다. AI Credits와 프리미엄 요청 배수를 이해하고, Agent Debug Logs로 사용량을 확인하며, 컨텍스트와 지침 파일, MCP 도구를 정리하는 방법을 다룹니다."
+              : "For developers using GitHub Copilot in VS Code. Understand AI Credits and premium-request multipliers, inspect Agent Debug Logs, and trim context, instruction files, and MCP tool definitions."}
+          </p>
+        </div>
+        <ul class="at-lever-list">
+          <li><a href={docUrl("copilot-tokenomics/01-how-usage-is-charged/")}><span>01. {isKo ? "과금 방식과 모델별 배수" : "How Usage Is Charged"}</span><span>→</span></a></li>
+          <li><a href={docUrl("copilot-tokenomics/02-measure-usage/")}><span>02. {isKo ? "사용량 측정: Debug Logs" : "Measure Usage"}</span><span>→</span></a></li>
+          <li><a href={docUrl("copilot-tokenomics/03-context-hygiene/")}><span>03. {isKo ? "필요한 컨텍스트만 포함하기: #file" : "Context Hygiene"}</span><span>→</span></a></li>
+          <li><a href={docUrl("copilot-tokenomics/04-instructions-and-tools/")}><span>04. {isKo ? "지침 파일과 도구 선택" : "Instructions & Tools"}</span><span>→</span></a></li>
+          <li><a href={docUrl("copilot-tokenomics/08-agent-modes-and-budget/")}><span>08. {isKo ? "에이전트 모드와 예산" : "Agent Modes & Budget"}</span><span>→</span></a></li>
+          <li><a href={docUrl("copilot-tokenomics/09-mcp-audit/")}><span>09. {isKo ? "MCP 서버의 토큰 사용량 점검" : "MCP Server Audit"}</span><span>→</span></a></li>
+        </ul>
+        <div>
+          <a class="at-btn at-btn-primary" href={docUrl("copilot-tokenomics/")}>
+            {isKo ? "트랙 A 가이드 보기 →" : "Explore Track A Guide →"}
+          </a>
+        </div>
+      </article>
+
+      <article class="at-track-card">
+        <div class="at-track-head">
+          <span class="at-eyebrow">{isKo ? "트랙 B · LLM 에이전트 문제 해결" : "TRACK B · LLM AGENT TROUBLESHOOTING"}</span>
+          <h3>{isKo ? "트랙 B — 에이전트 토큰 절약" : "Track B — Agent Tokenomics"}</h3>
+          <p>
+            {isKo
+              ? "LLM 에이전트를 개발하거나 운영하는 엔지니어를 위한 가이드입니다. 요청의 기본 개념을 이해하고, 사용량을 진단한 뒤 낭비 원인을 확인하고 개선 효과와 품질을 검증합니다."
+              : "For engineers who build or operate LLM agents. Understand how requests are billed and cached, diagnose current token usage, confirm the cause of waste, apply one fix at a time, and verify both cost and quality."}
+          </p>
+        </div>
+        <ul class="at-lever-list">
+          <li><a href={docUrl("agent-tokenomics/00-concepts/")}><span>00. {isKo ? "핵심 개념: 요청마다 컨텍스트 다시 보내기" : "Core Concepts"}</span><span>→</span></a></li>
+          <li><a href={docUrl("agent-tokenomics/01-diagnose/")}><span>01. {isKo ? "현재 사용량 진단: tokprof" : "Diagnose Usage"}</span><span>→</span></a></li>
+          <li><a href={docUrl("agent-tokenomics/02-isolate/")}><span>02. {isKo ? "토큰 낭비의 주요 원인 찾기" : "Isolate the Cause"}</span><span>→</span></a></li>
+          <li><a href={docUrl("agent-tokenomics/03-prove/")}><span>03. {isKo ? "반복 측정으로 원인 확인하기" : "Prove with Baseline"}</span><span>→</span></a></li>
+          <li><a href={docUrl("agent-tokenomics/04-improve/")}><span>04. {isKo ? "원인에 맞게 개선하기" : "Targeted Fixes"}</span><span>→</span></a></li>
+          <li><a href={docUrl("agent-tokenomics/05-result/")}><span>05. {isKo ? "결과 확인 후 유지 또는 되돌리기" : "Verify & Report"}</span><span>→</span></a></li>
+        </ul>
+        <div>
+          <a class="at-btn at-btn-secondary" href={docUrl("agent-tokenomics/")}>
+            {isKo ? "트랙 B 가이드 보기 →" : "Explore Track B Guide →"}
+          </a>
+        </div>
+      </article>
+    </div>
+
+    <!-- Track B 6-Stage Architecture Blueprint (PyHookKit DeliveryArchitecture style) -->
+    <div class="at-blueprint" style="margin-top:1.35rem">
+      <div class="at-blueprint-grid" aria-hidden="true"></div>
+      <div class="at-blueprint-head">
+        <div>
+          <span class="at-blueprint-kicker">
+            {isKo ? "트랙 B · 문제 해결 6단계" : "TRACK B · 6-STAGE TROUBLESHOOTING"}
+          </span>
+          <h3>
+            {isKo
+              ? "개념 이해부터 개선 결과 확인까지"
+              : "From core concepts to diagnosis, proof, improvement, and verification"}
+          </h3>
+        </div>
+        <a class="tp-report-link" href={docUrl("agent-tokenomics/case-tokeneconomizer/")}>
+          {isKo ? "TokenEconomizer 사례 살펴보기 →" : "Read TokenEconomizer Case Study →"}
+        </a>
+      </div>
+      <div class="at-stages-row">
+        <a class="at-stage-node" href={docUrl("agent-tokenomics/00-concepts/")}>
+          <span class="at-stage-node-num">STAGE 00</span>
+          <strong>{isKo ? "개념 이해" : "Concepts"}</strong>
+          <small>{isKo ? "요청마다 컨텍스트를 다시 보내는 방식과 프롬프트 캐싱, 컨텍스트 윈도우, 도구 비용을 이해합니다." : "Understand stateless re-sending, prompt caching, context windows, and tool costs."}</small>
+        </a>
+        <a class="at-stage-node" href={docUrl("agent-tokenomics/01-diagnose/")}>
+          <span class="at-stage-node-num">STAGE 01</span>
+          <strong>{isKo ? "사용량 진단" : "Diagnose"}</strong>
+          <small>{isKo ? "tokprof로 시스템 프롬프트, 대화 기록, 도구의 토큰 사용량과 고정 오버헤드를 측정합니다." : "Measure system prompt, history, tool tokens, and fixed overhead with tokprof."}</small>
+        </a>
+        <a class="at-stage-node" href={docUrl("agent-tokenomics/02-isolate/")}>
+          <span class="at-stage-node-num">STAGE 02</span>
+          <strong>{isKo ? "원인 찾기" : "Isolate"}</strong>
+          <small>{isKo ? "사용하지 않는 도구, 반복 실패, 긴 도구 출력 등 낭비 원인을 하나씩 살펴봅니다." : "Examine unused tools, repeated errors, and large tool outputs one variable at a time."}</small>
+        </a>
+        <a class="at-stage-node" href={docUrl("agent-tokenomics/03-prove/")}>
+          <span class="at-stage-node-num">STAGE 03</span>
+          <strong>{isKo ? "원인 확인" : "Prove"}</strong>
+          <small>{isKo ? "같은 작업을 여러 번 실행해 토큰 낭비 규모와 신뢰구간을 확인합니다." : "Run a fixed task set repeatedly to quantify token waste and confidence intervals."}</small>
+        </a>
+        <a class="at-stage-node" href={docUrl("agent-tokenomics/04-improve/")}>
+          <span class="at-stage-node-num">STAGE 04</span>
+          <strong>{isKo ? "개선 적용" : "Improve"}</strong>
+          <small>{isKo ? "마이크로 스킬, 도구 가지치기, 루프 가드 중 한 번에 한 가지를 적용합니다." : "Apply one targeted change at a time: micro-skills, tool pruning, or loop guards."}</small>
+        </a>
+        <a class="at-stage-node" href={docUrl("agent-tokenomics/05-result/")}>
+          <span class="at-stage-node-num">STAGE 05</span>
+          <strong>{isKo ? "결과 확인" : "Result"}</strong>
+          <small>{isKo ? "비용, 작업 성공률, 지연 시간을 다시 측정해 변경 사항을 유지할지 되돌릴지 결정합니다." : "Re-measure cost, task success rate, and latency to decide whether to keep or revert."}</small>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. Principles & Research Links -->
+  <section aria-labelledby="principles">
+    <div class="at-sec-head">
+      <span class="at-eyebrow">
+        <i class="at-eyebrow-dot" aria-hidden="true"></i>
+        {isKo ? "핵심 원칙과 참고 자료" : "CORE PRINCIPLES & REFERENCES"}
+      </span>
+      <h2 id="principles">{isKo ? "토큰 절약의 네 가지 원칙" : "Principles"}</h2>
+    </div>
+
+    <div class="at-principles-grid">
+      <div class="at-principle-card">
+        <span class="at-principle-num">01 / MEASURE FIRST</span>
+        <h3>{isKo ? "1. 먼저 측정합니다." : "1. Measure first."}</h3>
+        <p>
+          {isKo
+            ? "개선하기 전에 자신의 세션에서 현재 사용량을 측정합니다."
+            : "Measure current usage from your own sessions before changing anything."}
+        </p>
+      </div>
+      <div class="at-principle-card">
+        <span class="at-principle-num">02 / QUALITY GUARDRAIL</span>
+        <h3>{isKo ? "2. 품질을 함께 확인합니다." : "2. Quality is a guardrail."}</h3>
+        <p>
+          {isKo
+            ? "토큰을 줄인 뒤에도 작업 성공률과 결과 품질이 유지되는지 확인합니다."
+            : "Fewer tokens only count when task success rate and output quality hold."}
+        </p>
+      </div>
+      <div class="at-principle-card">
+        <span class="at-principle-num">03 / SINGLE VARIABLE</span>
+        <h3>{isKo ? "3. 한 번에 하나씩 바꿉니다." : "3. One change at a time."}</h3>
+        <p>
+          {isKo
+            ? "실험할 때 한 가지씩 변경해야 어떤 조치가 효과가 있었는지 확인할 수 있습니다."
+            : "Change one variable per experiment so you know which action worked."}
+        </p>
+      </div>
+      <div class="at-principle-card">
+        <span class="at-principle-num">04 / CITE OR MEASURE</span>
+        <h3>{isKo ? "4. 출처를 밝히거나 직접 측정합니다." : "4. Cite or measure."}</h3>
+        <p>
+          {isKo
+            ? "수치에는 논문이나 공식 문서 같은 1차 출처를 밝히거나, 재현할 수 있는 로그와 스크립트를 제공합니다."
+            : "Link every number to a primary source or a reproducible log and script."}
+        </p>
+      </div>
+    </div>
+
+    <div class="at-footer-banner" style="margin-top:1.25rem">
+      <p>
+        {isKo ? (
+          <>
+            이 프로젝트는 마이크로 스킬, 도구 가지치기, 실패 루프 개입을 통해 코딩 에이전트의 비용을 줄이는{" "}
+            <a href="https://github.com/microsoft/TokenEconomizer">microsoft/TokenEconomizer</a>에서 영감을 얻었습니다.{" "}
+            <a href={docUrl("agent-tokenomics/case-tokeneconomizer/")}>사례 연구</a>와{" "}
+            <a href={docUrl("resources/")}>참고 자료</a>,{" "}
+            <a href={docUrl("papers/")}>논문 목록</a>,{" "}
+            <a href={docUrl("glossary/")}>한영 용어집</a>도 살펴보세요.
+          </>
+        ) : (
+          <>
+            Inspired by <a href="https://github.com/microsoft/TokenEconomizer">microsoft/TokenEconomizer</a>, which cuts coding-agent cost using micro-skills, tool pruning, and failure-loop intervention. See the{" "}
+            <a href={docUrl("agent-tokenomics/case-tokeneconomizer/")}>case study</a>, curated{" "}
+            <a href={docUrl("resources/")}>resources</a>,{" "}
+            <a href={docUrl("papers/")}>ranked papers</a>, and the <a href={docUrl("glossary/")}>bilingual glossary</a>.
+          </>
+        )}
+      </p>
+      <div class="at-footer-links">
+        <a class="at-btn at-btn-secondary" href={docUrl("resources/")}>
+          {isKo ? "참고 자료" : "Resources"}
+        </a>
+        <a class="at-btn at-btn-secondary" href={docUrl("papers/")}>
+          {isKo ? "논문 목록" : "Papers"}
+        </a>
+        <a class="at-btn at-btn-secondary" href={docUrl("glossary/")}>
+          {isKo ? "한영 용어집" : "Glossary"}
+        </a>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script is:inline>
+  window.__setTpTab = function (tab) {
+    var root = document.getElementById("tokprof-html-preview");
+    if (!root) return;
+    var buttons = root.querySelectorAll("[data-tp-tab]");
+    for (var i = 0; i < buttons.length; i++) {
+      var btn = buttons[i];
+      btn.setAttribute("aria-selected", btn.getAttribute("data-tp-tab") === tab ? "true" : "false");
+    }
+    var panels = root.querySelectorAll("[data-tp-panel]");
+    for (var j = 0; j < panels.length; j++) {
+      var panel = panels[j];
+      var kind = panel.getAttribute("data-tp-panel");
+      if (tab === "all" || kind === tab) {
+        panel.style.display = kind === "composition" ? "flex" : "block";
+      } else {
+        panel.style.display = "none";
+      }
+    }
+  };
+</script>

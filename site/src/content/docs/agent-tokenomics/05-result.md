@@ -29,6 +29,14 @@ Run the *same* task set, repetitions, and environment as the baseline, now with 
 Count **every** cost the fix introduces (e.g., a judge model, a summarizer), as TokenEconomizer does in
 its reports.
 
+<figure class="at-doc-figure">
+<div class="at-diag-stack">
+<div class="at-diag-row"><span>Baseline</span><div class="at-diag-bar"><span class="at-diag-seg seg-miss" style="width: 100%"></span></div><span>39,200 input tok</span></div>
+<div class="at-diag-row"><span>Illustrative fix</span><div class="at-diag-bar"><span class="at-diag-seg seg-hit" style="width: 38.8%"></span></div><span>~15,200 input tok</span></div>
+</div>
+<figcaption>In the <a href="https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/sample-requests.jsonl">sample</a>, s1 turn 1 has 39,200 input tokens over four calls. The after value assumes two calls of 7,200 and 8,000 input tokens after tool pruning and a loop guard; it is not a measured result. A held pass rate is also an assumption: repeat the same tasks to verify quality and cost. Test the two changes separately.</figcaption>
+</figure>
+
 ## Decision
 
 - **Keep** if cost fell and success held. Record the change, the numbers, and the date.

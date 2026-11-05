@@ -75,6 +75,15 @@ Consequences for your proof: report **cost per *successful* task**, not total to
 which *shorten* the loop (clear done-criteria, pre-stated repo facts, fewer retries) can raise success as well
 as cut cost.
 
+<figure class="at-doc-figure">
+<div class="at-diag-stack">
+<div class="at-diag-row"><span>5 steps</span><div class="at-diag-bar"><span class="at-diag-seg seg-hit" style="width: 77%"></span></div><span>77%</span></div>
+<div class="at-diag-row"><span>10 steps</span><div class="at-diag-bar"><span class="at-diag-seg seg-hist" style="width: 60%"></span></div><span>60%</span></div>
+<div class="at-diag-row"><span>20 steps</span><div class="at-diag-bar"><span class="at-diag-seg seg-miss" style="width: 36%"></span></div><span>36%</span></div>
+</div>
+<figcaption>Rounded p<sup>n</sup> values assume independent steps with p = 0.95; these are not measurements of an actual agent.</figcaption>
+</figure>
+
 ## Template
 
 ```text

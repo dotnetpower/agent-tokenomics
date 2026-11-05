@@ -20,6 +20,15 @@ does not change the agent's model or code. This page summarizes its published de
 | **Tool pruning** | Leaves out tool definitions unused over *p* prompts across ≥ *m* sessions, or over *s* sessions, via the agent's own settings; one command restores them | *p* = 10, *m* = 2, *s* = 5 |
 | **Failure-loop intervention (loop guard)** | A judge model checks a stuck turn; if ≥ *c* sure, injects one redirect; if still stuck, tells the user how to stop — never stops a turn itself | *c* = 0.7, *r* = 1 redirect per turn |
 
+<figure class="at-doc-figure">
+<div class="at-diag-stack">
+<div class="at-diag-row"><span>Repo facts</span><div class="at-diag-bar"><span class="at-diag-seg seg-prefix" style="width: 100%">Micro-skills</span></div><span></span></div>
+<div class="at-diag-row"><span>Tool selection</span><div class="at-diag-bar"><span class="at-diag-seg seg-tool" style="width: 100%">Pruning</span></div><span></span></div>
+<div class="at-diag-row"><span>Failure handling</span><div class="at-diag-bar"><span class="at-diag-seg seg-hit" style="width: 100%">Loop guard</span></div><span></span></div>
+</div>
+<figcaption>Three black-box mechanisms of <a href="https://github.com/microsoft/TokenEconomizer">TokenEconomizer</a>. The authors report 18.4–30.9% lower mean cost across five SWE-Bench agent–model pairs. This is not independently reproduced here; see the <a href="https://arxiv.org/abs/2610.22732">paper</a> and quality results below.</figcaption>
+</figure>
+
 ## Reported results
 
 On 277 SWE-Bench tasks across six repositories and five agent–model combinations, the authors report

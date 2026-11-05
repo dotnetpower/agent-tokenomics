@@ -18,6 +18,22 @@ tokens per task ≈ (tool schema tokens × steps) + accumulated conversation + t
 
 An idle server still costs tokens on every step. The more steps the agent takes, the larger the tax.
 
+<figure class="at-doc-figure">
+  <div class="at-diag-stack">
+    <div class="at-diag-row" aria-label="Five enabled MCP servers: tool definitions 65%, other prefix 35%">
+      <span>5 MCP servers</span>
+      <div class="at-diag-bar"><div class="at-diag-seg seg-tool" style="width:65%">Tools 65%</div><div class="at-diag-seg seg-prefix" style="width:35%">Other 35%</div></div>
+      <span>100%</span>
+    </div>
+    <div class="at-diag-row" aria-label="One task-relevant MCP server: tool definitions 15%, other prefix 35%">
+      <span>1 relevant server</span>
+      <div class="at-diag-bar"><div class="at-diag-seg seg-hit" style="width:15%">Tools 15%</div><div class="at-diag-seg seg-prefix" style="width:35%">Other 35%</div></div>
+      <span>50%</span>
+    </div>
+  </div>
+  <figcaption>Synthetic illustration, not a measured result: against the original prefix, tool definitions fall from 65% to 15%, while the other prefix stays at 35%; the new total is 50% of the original. Keeping one relevant server reduces the definitions sent on each turn; actual savings vary. Green indicates the pruned configuration, not a cache hit.</figcaption>
+</figure>
+
 ## Actions
 
 ### Run a monthly audit

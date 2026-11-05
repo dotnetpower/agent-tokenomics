@@ -12,6 +12,21 @@ sidebar:
 A conversation accumulates messages, tool outputs, and file contents. Every new request re-sends that
 history as input, so an unrelated old topic keeps costing tokens without improving answers.
 
+### Context window and context rot
+
+The **context window** is the maximum the model can consider in one request (input and output share it). It is
+a hard limit *and* a soft one: models use information in the middle of long contexts less reliably than at the
+start or end ([Lost in the Middle](https://arxiv.org/abs/2307.03172)), so quality can degrade well before the
+window is full. Cost and quality both argue for **as little context as the task needs, but enough**.
+
+<figure class="at-doc-figure">
+  <div class="at-doc-figure-grid">
+    <img src="https://code.visualstudio.com/assets/docs/chat/copilot-chat/chat-context-window-control.png" alt="VS Code Chat context window control showing token usage by category" loading="lazy" />
+    <img src="https://code.visualstudio.com/assets/docs/chat/copilot-chat/copilot-chat-view-chat-variables.png" alt="VS Code Chat context picker for adding relevant context" loading="lazy" />
+  </div>
+  <figcaption>Monitor context usage (left) and add relevant context (right). Sources: <a href="https://code.visualstudio.com/docs/copilot/chat/copilot-chat-context">VS Code Docs — Add context to chat</a> and <a href="https://code.visualstudio.com/docs/agents/guides/optimize-usage">Optimize AI credit usage</a>.</figcaption>
+</figure>
+
 ## Actions
 
 | Situation | Action |

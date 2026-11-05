@@ -38,6 +38,15 @@ sidebar:
 3. Write the hypothesis in one sentence with a number:
    *"Unused tool definitions cost ~14,000 tokens across 7 requests (19% of input)."*
 
+<figure class="at-doc-figure">
+<div class="at-diag-stack">
+<div class="at-diag-row"><span>Unused tools</span><div class="at-diag-bar"><span class="at-diag-seg seg-tool" style="width: 100%"></span></div><span>2,000 tok/call</span></div>
+<div class="at-diag-row"><span>run_tests ×3</span><div class="at-diag-bar"><span class="at-diag-seg seg-miss" style="width: 100%"></span></div><span>28,800 input tok</span></div>
+<div class="at-diag-row"><span>read_file output</span><div class="at-diag-bar"><span class="at-diag-seg seg-hist" style="width: 100%"></span></div><span>4,200 output tok</span></div>
+</div>
+<figcaption>The <a href="https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/sample-requests.jsonl">sample</a> s1 shows definitions per call, total input across the three error calls, and one <code>read_file</code> result; the log does not establish whether it was filtered. Bar lengths are not comparable because units and scopes differ; not all 28,800 tokens are avoidable. The causes can overlap, so do not sum them.</figcaption>
+</figure>
+
 ## Interpretation
 
 - Rule out **tool output** before blaming history: if tool results dominate the growth, truncating or
