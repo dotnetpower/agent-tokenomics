@@ -60,7 +60,7 @@ Using GitHub Copilot in VS Code instead? These do not instrument it; use
 [`tokprof`](https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler) (standalone native Rust single binary, no dependency on your agent's project) answers "which part of each request costs the tokens?" for agents you start through it or attach to:
 
 ```bash
-cargo install --path ./profiler                 # standalone Rust binary (includes tiktoken BPE), nothing added to the agent's project
+cargo install --path ./profiler                 # standalone Rust binary (or: uv tool install ./profiler)
 tokprof                                         # show detailed usage guide & examples (--lang en | --lang ko)
 tokprof start                                   # start background profiling (Linux: auto-captures running processes & Docker)
 tokprof stop                                    # stop session, print visual report, and write .tokprof/latest.html

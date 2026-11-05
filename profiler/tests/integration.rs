@@ -170,6 +170,40 @@ fn test_selfhosted_and_cloud_parsers() {
     assert_eq!(parsed_anth.segments.len(), 2);
 }
 
+fn drain_http_request(stream: &mut TcpStream) {
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+    let mut buf = Vec::with_capacity(4096);
+    let mut chunk = [0u8; 4096];
+    let mut header_end = None;
+    let mut content_len = 0usize;
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if header_end.is_none() {
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        header_end = Some(pos + 4);
+                        let head = String::from_utf8_lossy(&buf[..pos]);
+                        for line in head.lines() {
+                            if let Some((k, v)) = line.split_once(':') {
+                                if k.trim().eq_ignore_ascii_case("content-length") {
+                                    content_len = v.trim().parse::<usize>().unwrap_or(0);
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(he) = header_end {
+                    if buf.len() >= he + content_len {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn test_gateway_auth_ingest_and_proxy() {
     // Start a mock upstream LLM server
@@ -178,8 +212,7 @@ fn test_gateway_auth_ingest_and_proxy() {
     thread::spawn(move || {
         for stream in mock_listener.incoming().flatten() {
             let mut s = stream;
-            let mut buf = [0u8; 4096];
-            let _ = s.read(&mut buf);
+            drain_http_request(&mut s);
             let body = r#"{"id":"chatcmpl-1","model":"gpt-4o-mini","choices":[{"message":{"role":"assistant","content":"proxied ok"}}],"usage":{"prompt_tokens":18,"completion_tokens":4}}"#;
             let resp = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -187,6 +220,8 @@ fn test_gateway_auth_ingest_and_proxy() {
                 body
             );
             let _ = s.write_all(resp.as_bytes());
+            let _ = s.flush();
+            let _ = s.shutdown(std::net::Shutdown::Write);
         }
     });
 
@@ -315,8 +350,7 @@ fn test_python_inprocess_hook_via_runner() {
     let mock_port = mock_listener.local_addr().unwrap().port();
     thread::spawn(move || {
         if let Ok((mut s, _)) = mock_listener.accept() {
-            let mut buf = [0u8; 4096];
-            let _ = s.read(&mut buf);
+            drain_http_request(&mut s);
             let body = r#"{"id":"cmpl-vllm","model":"Qwen/Qwen2.5-7B-Instruct","choices":[{"message":{"role":"assistant","content":"vllm hooked ok"}}],"usage":{"prompt_tokens":15,"completion_tokens":5}}"#;
             let resp = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -324,6 +358,9 @@ fn test_python_inprocess_hook_via_runner() {
                 body
             );
             let _ = s.write_all(resp.as_bytes());
+            let _ = s.flush();
+            let _ = s.shutdown(std::net::Shutdown::Write);
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
     });
 

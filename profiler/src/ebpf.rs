@@ -292,21 +292,33 @@ pub fn run_ebpf(
             return 127;
         }
     };
+    crate::session::clear_sig_stop();
+    crate::session::install_signal_handlers();
+    let done_reading = Arc::new( std::sync::atomic::AtomicBool::new(false));
+    if let Some(mut stdin) = child.stdin.take() {
+        let done_cl = done_reading.clone();
+        std::thread::spawn(move || {
+            while !crate::session::sig_stop_requested() && !done_cl.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            let _ = stdin.flush();
+            drop(stdin);
+        });
+    }
     if let Some(stdout) = child.stdout.take() {
         let mut reader = BufReader::new(stdout);
         ingest_lines(&mut reader, &gw);
     }
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.flush();
-        drop(stdin);
-    }
-    let wait_deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    done_reading.store(true, Ordering::SeqCst);
+    let wait_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while std::time::Instant::now() < wait_deadline {
         if let Ok(Some(_)) = child.try_wait() {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
+    let _ = child.kill();
+    let _ = child.wait();
     writer.close();
 
     if !quiet {

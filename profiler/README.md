@@ -14,7 +14,16 @@ changing the agent's code and without installing anything into the agent's proje
 ## Install (standalone native Rust binary, no dependency on your agent's project)
 
 ```bash
-cargo install --path ./profiler        # installs the native `tokprof` binary (includes tiktoken BPE)
+cargo install --path ./profiler        # build & install native `tokprof` binary directly via Cargo
+uv tool install ./profiler             # or build & install via maturin (bindings = "bin")
+pipx install ./profiler                # or via pipx / pip
+```
+
+To build distributable wheels for PyPI across Linux, Windows, and macOS (same `maturin` `bindings = "bin"` packaging used by `ruff` and `uv`):
+
+```bash
+uvx maturin build --release -m profiler/Cargo.toml
+uvx maturin publish -m profiler/Cargo.toml
 ```
 
 ## Use

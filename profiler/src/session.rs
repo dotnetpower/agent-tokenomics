@@ -16,6 +16,14 @@ use std::sync::{mpsc, Arc};
 
 static SIG_STOP: AtomicBool = AtomicBool::new(false);
 
+pub fn clear_sig_stop() {
+    SIG_STOP.store(false, Ordering::SeqCst);
+}
+
+pub fn sig_stop_requested() -> bool {
+    SIG_STOP.load(Ordering::SeqCst)
+}
+
 #[cfg(unix)]
 extern "C" fn handle_sig(_sig: i32) {
     SIG_STOP.store(true, Ordering::SeqCst);
