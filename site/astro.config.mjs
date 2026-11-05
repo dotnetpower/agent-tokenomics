@@ -44,6 +44,11 @@ export default defineConfig({
   integrations: [
     starlight({
       title: "agent-tokenomics",
+      logo: {
+        src: "./public/favicon.svg",
+        replacesTitle: false,
+      },
+      favicon: "/favicon.svg",
       description:
         "Practical ways to save LLM tokens: VS Code GitHub Copilot, and a troubleshooting guide for LLM agents.",
       defaultLocale: "root",

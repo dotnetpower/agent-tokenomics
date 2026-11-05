@@ -29,6 +29,8 @@ npm --prefix site run build
 python3 examples/token_report.py examples/sample-requests.jsonl
 ```
 
+사이트 로고는 **T**에 화폐 기호를 연상시키는 두 개의 사선을 더해 토큰과 비용을 표현합니다. 헤더 로고와 favicon은 [`site/public/favicon.svg`](site/public/favicon.svg)를 함께 사용하므로, 이 SVG를 수정하면 두 곳에 모두 반영됩니다.
+
 ## 라이선스
 
 [LICENSE](LICENSE)를 참조하세요.

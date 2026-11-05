@@ -27,6 +27,8 @@ npm --prefix site run build
 python3 examples/token_report.py examples/sample-requests.jsonl
 ```
 
+The site logo is a currency-style **T** with two diagonal bars, connecting tokens and cost. The header logo and favicon share [`site/public/favicon.svg`](site/public/favicon.svg); edit this SVG to keep them in sync.
+
 ## License
 
 See [LICENSE](LICENSE).
