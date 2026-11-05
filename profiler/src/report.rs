@@ -1353,13 +1353,16 @@ pub fn render_html(
                 html_escape(&preview_line(&t.response_text, 140))
             ));
         }
-        let preview_html = if previews.is_empty() {
+        let preview_row = if previews.is_empty() {
             String::new()
         } else {
-            format!(r#"<div class="turn-preview">{}</div>"#, previews.join(""))
+            format!(
+                r#"<tr class="turn-preview-row"><td colspan="10"><div class="turn-preview">{}</div></td></tr>"#,
+                previews.join("")
+            )
         };
         turn_rows.push(format!(
-            r#"<tr><td><strong>{}</strong></td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono"><strong>{}</strong></td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td><div class="call-bar">{}</div>{preview_html}</td></tr>"#,
+            r#"<tr><td><strong>{}</strong></td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono"><strong>{}</strong></td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td><div class="call-bar">{}</div></td></tr>{preview_row}"#,
             html_escape(&tag),
             fmt_usize(t.calls_count),
             fmt_num(t.system),
@@ -1754,27 +1757,38 @@ body {{ margin: 0; background: var(--dp-bg); color: var(--dp-ink); font: 14px/1.
 .stack-bar {{ display: flex; height: 22px; border-radius: 6px; overflow: hidden; background: #e7e4dc; border: 1px solid var(--dp-rule); margin-bottom: 14px; }}
 .stack-bar .seg {{ height: 100%; transition: opacity 0.15s; }}
 .stack-bar .seg:hover {{ opacity: 0.82; }}
-.dp-table-wrap {{ overflow-x: auto; border: 1px solid var(--dp-rule); border-radius: 8px; background: var(--dp-surface); box-shadow: 0 4px 16px rgb(34 45 52 / 0.03); }}
+.dp-table-wrap {{ overflow-x: auto; border: 1px solid var(--dp-rule); border-radius: 8px; background: var(--dp-surface); box-shadow: 0 4px 16px rgb(34 45 52 / 0.03); padding: 0; }}
 .dp-table, table {{ width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }}
-.dp-table th, table th {{ font-size: 11.5px; color: var(--dp-muted); font-weight: 600; background: var(--dp-bg); text-transform: uppercase; letter-spacing: 0.05em; font-family: var(--cs-font-mono); }}
-.dp-table td, .dp-table th, table td, table th {{ padding: 10px 14px; border-bottom: 1px solid var(--dp-rule); vertical-align: top; }}
+.dp-table th, table th {{ font-size: 11.5px; color: var(--dp-muted); font-weight: 600; background: var(--dp-bg); text-transform: uppercase; letter-spacing: 0.05em; font-family: var(--cs-font-mono); white-space: nowrap; }}
+.dp-table td, .dp-table th, table td, table th {{ padding: 8px 9px; border-bottom: 1px solid var(--dp-rule); vertical-align: middle; }}
 .dp-table tr:last-child td, table tr:last-child td {{ border-bottom: 0; }}
-.dp-table tr:hover td {{ background: #faf8f2; }}
-.dp-studio.dp-dark .dp-table tr:hover td {{ background: #213440; }}
+.dp-table tr.call-row:hover td {{ background: #faf8f2; }}
+.dp-studio.dp-dark .dp-table tr.call-row:hover td {{ background: #213440; }}
 td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
-.call-row td:nth-child(2), .call-row td:nth-child(3) {{ white-space: nowrap; }}
+.call-row td:nth-child(2) {{ white-space: nowrap; }}
+.call-row .step-sub {{ display: block; font-size: 11px; color: var(--dp-muted); font-family: var(--cs-font); margin-top: 1px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
 .dot {{ display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 8px; vertical-align: middle; }}
 .mini-track {{ width: 140px; height: 8px; background: #e7e4dc; border-radius: 4px; overflow: hidden; }}
 .mini-fill {{ height: 100%; border-radius: 4px; }}
-.call-bar {{ display: flex; height: 10px; width: 190px; background: #e7e4dc; border-radius: 4px; overflow: hidden; border: 1px solid #dcd9d0; }}
+.call-actions {{ display: flex; align-items: center; gap: 6px; white-space: nowrap; }}
+.call-bar {{ display: flex; height: 9px; width: 68px; flex-shrink: 0; background: #e7e4dc; border-radius: 4px; overflow: hidden; border: 1px solid #dcd9d0; }}
 .call-bar span {{ display: block; height: 100%; }}
-.turn-preview {{ margin-top: 6px; font-size: 12px; color: var(--dp-muted); display: flex; flex-direction: column; gap: 3px; }}
-.p-details {{ margin-top: 6px; font-size: 12.5px; }}
-.p-details summary {{ cursor: pointer; color: var(--dp-accent); font-weight: 600; user-select: none; min-height: 24px; padding: 2px 0; }}
-.p-box {{ margin-top: 8px; display: flex; flex-direction: column; gap: 10px; max-width: 680px; }}
-.p-sec {{ border: 1px solid var(--dp-rule); border-radius: 6px; padding: 10px 12px; background: var(--dp-bg); }}
-.p-head {{ font-size: 12px; margin-bottom: 6px; display: flex; align-items: center; gap: 4px; }}
-.p-pre {{ margin: 0; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow-y: auto; font-size: 12px; line-height: 1.5; font-family: var(--cs-font-mono); color: var(--dp-ink); }}
+.dp-studio button.dp-inline-btn {{
+  min-height: 25px; padding: 2px 7px; font-size: 11px; font-weight: 600;
+  border: 1px solid var(--dp-rule); border-radius: 5px; background: var(--dp-bg); color: var(--dp-accent);
+}}
+.dp-studio button.dp-inline-btn:hover {{ background: var(--dp-tint); border-color: var(--dp-accent); }}
+.turn-preview-row td {{ background: #faf8f3; padding: 7px 14px 9px; }}
+.dp-studio.dp-dark .turn-preview-row td {{ background: #15242d; }}
+.turn-preview {{ font-size: 12px; color: var(--dp-muted); display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 6px 18px; }}
+.call-detail-row td.call-detail-cell {{ background: #faf8f3; padding: 12px 14px 14px; border-bottom: 2px solid var(--dp-rule); }}
+.dp-studio.dp-dark .call-detail-row td.call-detail-cell {{ background: #15242d; }}
+.p-box {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; width: 100%; align-items: start; }}
+@media (max-width: 820px) {{ .p-box {{ grid-template-columns: 1fr; }} }}
+.p-sec {{ border: 1px solid var(--dp-rule); border-radius: 6px; padding: 10px 12px; background: var(--dp-surface); min-width: 0; }}
+.p-head {{ font-size: 12px; margin-bottom: 6px; display: flex; align-items: center; gap: 4px; border-bottom: 1px solid #eceae2; padding-bottom: 5px; }}
+.dp-studio.dp-dark .p-head {{ border-bottom-color: var(--dp-rule); }}
+.p-pre {{ margin: 0; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto; font-size: 12px; line-height: 1.5; font-family: var(--cs-font-mono); color: var(--dp-ink); }}
 .finding {{ display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border-radius: 7px; border: 1px solid var(--dp-rule); margin-bottom: 10px; background: var(--dp-bg); }}
 .finding-body {{ font-size: 13px; }}
 .finding-body a {{ color: var(--dp-accent); font-size: 12px; font-weight: 600; display: inline-block; margin-top: 4px; }}
@@ -1980,8 +1994,8 @@ td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; white-s
               <thead>
                 <tr>
                   <th class="num">#</th><th>Turn</th><th>Model / Step</th>
-                  <th class="num">System</th><th class="num">History</th><th class="num">User</th><th class="num">Tools/Schema</th>
-                  <th class="num">Input</th><th class="num">Cached</th><th class="num">Output</th><th class="num">Latency</th><th>Prompts &amp; Response</th>
+                  <th class="num">System</th><th class="num">History</th><th class="num">User</th><th class="num">Tools</th>
+                  <th class="num">Input</th><th class="num">Cached</th><th class="num">Out</th><th class="num">Time</th><th>Prompts &amp; Response</th>
                 </tr>
               </thead>
               <tbody>"##
@@ -2001,7 +2015,7 @@ td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; white-s
                 .unwrap_or_else(|| "-".to_string());
             let _ = write!(
                 doc,
-                r##"<tr class="call-row" data-call-idx="{idx}" data-session="{sess_esc}" data-turn="{sess_esc}·T{turn}" data-model="{model_esc}" data-input="{in_t}" data-cached="{ca_t}" data-output="{out_t}" data-system="{sys_t}" data-history="{his_t}" data-user="{usr_t}" data-tools="{tls_t}" data-latency="{lat}"><td class="num"><button type="button" class="dp-edition-version" onclick="openCallDossier({idx})" title="Open Call #{idx} in Edition Dossier Drawer">#{idx}</button></td><td><code>{sess_esc}·T{turn}</code></td><td><code>{model_esc}"##,
+                r##"<tr class="call-row" data-call-idx="{idx}" data-session="{sess_esc}" data-turn="{sess_esc}·T{turn}" data-model="{model_esc}" data-input="{in_t}" data-cached="{ca_t}" data-output="{out_t}" data-system="{sys_t}" data-history="{his_t}" data-user="{usr_t}" data-tools="{tls_t}" data-latency="{lat}"><td class="num"><button type="button" class="dp-edition-version" onclick="openCallDossier({idx})" title="Open Call #{idx} in Edition Dossier Drawer">#{idx}</button></td><td><code>{sess_esc}·T{turn}</code></td><td><code>{model_esc}</code>"##,
                 idx = cd.index,
                 turn = cd.turn,
                 in_t = fmt_num(cd.input_total),
@@ -2014,12 +2028,16 @@ td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; white-s
             );
             if let Some(ref sl) = cd.step_label {
                 if sl != &cd.model {
-                    let _ = write!(doc, r##" <span class="sub">({})</span>"##, html_escape(sl));
+                    let _ = write!(
+                        doc,
+                        r##"<span class="step-sub" title="{0}">{0}</span>"##,
+                        html_escape(sl)
+                    );
                 }
             }
             let _ = write!(
                 doc,
-                r##"</code></td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono"><strong>{}</strong></td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono">{lat}</td><td><div class="call-bar">"##,
+                r##"</td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono"><strong>{}</strong></td><td class="num dp-mono">{}</td><td class="num dp-mono">{}</td><td class="num dp-mono">{lat}</td><td><div class="call-actions"><div class="call-bar">"##,
                 fmt_num(cd.system),
                 fmt_num(cd.history),
                 fmt_num(cd.user_prompt),
@@ -2056,11 +2074,21 @@ td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; white-s
                 || !p.other.is_empty()
                 || !p.response.is_empty();
             if has_any_prompt {
-                let open_attr = if cd.index == 1 { " open" } else { "" };
+                let btn_label = if cd.index == 1 {
+                    "&#9662; Prompts"
+                } else {
+                    "&#9656; Prompts"
+                };
                 let _ = write!(
                     doc,
-                    r##"<details class="p-details"{open_attr}><summary>View prompts &amp; response</summary><div class="p-box" id="call-prompts-{}">"##,
-                    cd.index
+                    r##"<button type="button" class="dp-inline-btn" id="call-toggle-btn-{idx}" onclick="toggleCallDetail({idx})">{btn_label}</button><button type="button" class="dp-inline-btn" onclick="openCallDossier({idx})" title="Open in right-side Dossier Drawer">Drawer &nearr;</button></div></td></tr>"##,
+                    idx = cd.index
+                );
+                let disp = if cd.index == 1 { "" } else { r#" style="display:none""# };
+                let _ = write!(
+                    doc,
+                    r##"<tr class="call-detail-row" id="call-detail-row-{idx}" data-parent-idx="{idx}"{disp}><td colspan="12" class="call-detail-cell"><div class="p-box" id="call-prompts-{idx}">"##,
+                    idx = cd.index
                 );
                 for (val, label, tok_cnt, col) in [
                     (&p.system, "System Prompt", cd.system, kind_color_hex("system")),
@@ -2101,13 +2129,12 @@ td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; white-s
                         }
                     }
                 }
-                doc.push_str("</div></details>");
+                doc.push_str("</div></td></tr>");
             } else {
                 doc.push_str(
-                    r##"<span class="sub">no text stored (re-capture to inspect full prompt text)</span>"##,
+                    r##"<span class="sub">no text stored (re-capture to inspect full prompt text)</span></div></td></tr>"##,
                 );
             }
-            doc.push_str("</td></tr>");
         }
     }
 
@@ -2169,20 +2196,32 @@ function showEditionArea(area) {{
     sec.style.display = (area === 'all' || sec.getAttribute('data-area-sec') === area) ? '' : 'none';
   }});
 }}
+function toggleCallDetail(idx) {{
+  var drow = document.getElementById('call-detail-row-' + idx);
+  var btn = document.getElementById('call-toggle-btn-' + idx);
+  if (!drow) return;
+  var hidden = drow.style.display === 'none';
+  drow.style.display = hidden ? '' : 'none';
+  if (btn) btn.innerHTML = hidden ? '&#9662; Prompts' : '&#9656; Prompts';
+}}
 function filterCalls() {{
   var q = (document.getElementById('call-search').value || '').toLowerCase().trim();
   var sess = document.getElementById('call-session-filter').value;
   var rows = document.querySelectorAll('#calls-table tbody tr.call-row');
   var shown = 0;
   rows.forEach(function(r) {{
+    var idx = r.getAttribute('data-call-idx');
+    var drow = document.getElementById('call-detail-row-' + idx);
+    var dtext = drow ? drow.textContent.toLowerCase() : '';
     var okSess = (sess === 'all' || r.getAttribute('data-session') === sess);
-    var okQ = (!q || r.textContent.toLowerCase().indexOf(q) !== -1);
+    var okQ = (!q || r.textContent.toLowerCase().indexOf(q) !== -1 || dtext.indexOf(q) !== -1);
     var vis = okSess && okQ;
     r.style.display = vis ? '' : 'none';
+    if (drow && !vis) drow.style.display = 'none';
     if (vis) shown++;
   }});
   var out = document.getElementById('call-filter-count');
-  if (out) out.textContent = shown + ' call(s) shown · click #call to open Dossier Drawer';
+  if (out) out.textContent = shown + ' call(s) shown · click ▾ View prompts or #call Drawer';
 }}
 function openCallDossier(idx) {{
   var row = document.querySelector('tr.call-row[data-call-idx="' + idx + '"]');
@@ -2201,7 +2240,7 @@ function openCallDossier(idx) {{
       '<div><dt>System / History / User / Tools</dt><dd class="dp-mono">' + row.getAttribute('data-system') + ' / ' + row.getAttribute('data-history') + ' / ' + row.getAttribute('data-user') + ' / ' + row.getAttribute('data-tools') + ' tok</dd></div>' +
       '<div><dt>Latency</dt><dd class="dp-mono">' + row.getAttribute('data-latency') + '</dd></div>' +
     '</dl>' +
-    '<div class="p-box" style="max-width:100%">' + promptsHtml + '</div>';
+    '<div class="p-box" style="grid-template-columns:1fr">' + promptsHtml + '</div>';
   backdrop.classList.add('is-open');
 }}
 function closeCallDossier() {{
