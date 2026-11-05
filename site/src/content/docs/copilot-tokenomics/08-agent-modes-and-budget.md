@@ -13,8 +13,11 @@ An agent run is a **loop**: each step is a model call, and each call re-sends th
 and conversation so far. A vague prompt can trigger a long exploration that ends in a misunderstanding and a restart.
 
 <figure class="at-doc-figure">
-  <img src="https://code.visualstudio.com/assets/docs/agents/chat-debug-view/agent-flow-chart-v2.png" alt="Agent Debug View flow chart showing model requests and tool calls" loading="lazy" />
-  <figcaption>Agent Debug View visualizes the steps in an agent run. Source: <a href="https://code.visualstudio.com/docs/copilot/chat/chat-debug-view">VS Code Docs — Agent Debug View</a>.</figcaption>
+  <div class="at-doc-figure-grid">
+    <img src="https://code.visualstudio.com/assets/docs/agents/chat-debug-view/agent-flow-chart-v2.png" alt="Agent Debug View flow chart showing model requests and tool calls" loading="lazy" />
+    <img src="https://code.visualstudio.com/assets/docs/agent-customization/customization/create-custom-agent-2.png" alt="VS Code custom agent creation interface" loading="lazy" />
+  </div>
+  <figcaption>Inspect an agent run (left) and create a custom agent (right). Sources: <a href="https://code.visualstudio.com/docs/copilot/chat/chat-debug-view">Agent Debug View</a> and <a href="https://code.visualstudio.com/docs/agent-customization/custom-agents">Custom Agents</a>.</figcaption>
 </figure>
 
 ## Actions
@@ -39,6 +42,14 @@ The expensive pattern is running Agent on an ambiguous prompt.
 - For complex work, have the agent write a **plan file** first and then execute it.
 - Name the tool to use when you know it ("use only the GitHub create-PR tool") to reduce tool searching.
 - Give **concrete context**: files, error text, constraints (see [Keep context lean](../03-context-hygiene/)).
+
+For Autopilot or a background agent, add an explicit loop guard to the task prompt:
+
+```text
+Run focused tests first. If the same command or test fails twice with the same error, stop and report the blocker instead of retrying in a loop.
+```
+
+This is an instruction, not a hard enforcement mechanism; check the logs and use request or budget limits as additional safeguards.
 
 ### Models and reasoning
 

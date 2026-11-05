@@ -33,6 +33,22 @@ sidebar:
 | Short, uncacheable prompts | Merge the step into a neighbor, replace it with a rule, or accept it (it is small); never pad to reach the minimum | Check the provider's current minimum and `cached_tokens` |
 | Bulk / polling tool loops | Run the loop in a script and return only the summary | Benchmark scripted vs interactive |
 
+<figure class="at-doc-figure">
+  <img src="https://raw.githubusercontent.com/microsoft/TokenEconomizer/main/docs/assets/framework_overview.png" alt="TokenEconomizer framework for controlling costs across agent sessions" loading="lazy" />
+  <figcaption>Reference framework for experience-driven cost control. Source: <a href="https://github.com/microsoft/TokenEconomizer">microsoft/TokenEconomizer (Apache 2.0)</a>; see also <a href="https://arxiv.org/abs/2610.22732">arXiv:2610.22732</a>.</figcaption>
+</figure>
+
+## Observation masking for old tool output
+
+For [bloated tool output or history growth](../02-isolate/), replace large tool results older than the last `K` steps with a deterministic placeholder rather than making an extra LLM summarization call. In this **synthetic** example, preserve the tool call/result pairing and recent working window:
+
+```text
+current_step = 5; K = 3  # keep results from steps 3–5 unchanged
+turn 1 read_file result → [omitted 4,200-token read_file output from turn 1; path=src/checkout.py lines=1..180]
+```
+
+Masking requires no summarization model call, but the placeholder still consumes input tokens. It is lossy and can invalidate part of the prompt cache; retain the original securely for on-demand rereading, redact paths if needed, and measure cost, cache reuse, and task success against the baseline. This approach is informed by [The Complexity Trap](https://arxiv.org/abs/2508.21433); its results are reported by the authors and are not independently reproduced here.
+
 ## Compaction without losing the cache
 
 Compaction and prompt caching pull in opposite directions: rewriting the *beginning* of the history changes the

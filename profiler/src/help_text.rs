@@ -185,7 +185,7 @@ pub fn subcommand_help_ko(subcmd: &str) -> Option<&'static str> {
         "ebpf" => Some("Linux: 이미 실행 중인 프로세스 및 컨테이너의 TLS/평문 HTTP 호출을 eBPF로 캡처합니다.\n  예시:\n    tokprof ebpf --comm fdai --report\n    tokprof ebpf --all --duration 1m --report"),
         "mitm" => Some("mitmproxy를 사용해 선택된 프로세스의 LLM 호출을 캡처합니다 (Windows/macOS/Linux).\n  예시:\n    tokprof mitm --trust-help\n    tokprof mitm --local python,node --report"),
         "compare" => Some("최적화 전(before)과 후(after) 두 실행 기록을 95% 부트스트랩 신뢰구간으로 비교합니다.\n  예시:\n    tokprof compare before.jsonl after.jsonl"),
-        "explain" => Some("특정 URL과 요청 본문 JSON이 어떻게 분류되는지 점수와 근거를 설명합니다.\n  예시:\n    tokprof explain http://vllm.internal:8000/v1/chat/completions --body req.json"),
+        "explain" => Some("특정 URL과 요청 본문 JSON이 어떻게 분류되는지 점수와 판정 이유를 설명합니다.\n  예시:\n    tokprof explain http://vllm.internal:8000/v1/chat/completions --body req.json"),
         "doctor" => Some("현재 환경의 토크나이저, Linux eBPF 커널 지원, mitmproxy 설치 여부를 점검합니다."),
         "selftest" => Some("로컬 모의(mock) LLM 서버를 띄워 게이트웨이·분해 파이프라인 전체를 자체 검증합니다."),
         _ => None,

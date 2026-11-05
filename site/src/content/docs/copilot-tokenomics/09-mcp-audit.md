@@ -9,14 +9,13 @@ sidebar:
 
 ## Problem
 
-Each enabled MCP server contributes **tool definitions (schemas)** that are sent with every model request, used
-or not. In an agent loop the cost multiplies:
+MCP **tool definitions (schemas)** included in a request add input whether used or not. Some clients defer schemas through virtual tool grouping, as described below. When all schemas are sent on each step of an agent loop, the cost multiplies:
 
 ```text
 tokens per task ≈ (tool schema tokens × steps) + accumulated conversation + tool responses
 ```
 
-An idle server still costs tokens on every step. The more steps the agent takes, the larger the tax.
+An idle server whose full schemas are loaded still costs tokens on each step; deferred schemas can change this baseline.
 
 <figure class="at-doc-figure">
   <div class="at-diag-stack">
@@ -50,6 +49,10 @@ An idle server still costs tokens on every step. The more steps the agent takes,
 | Large server where you need two tools | Use a narrower server or a small CLI the agent calls from the terminal |
 
 4. Re-measure the first-request input size and the baseline task ([Measure your usage](../02-measure-usage/)).
+
+### On-demand tool loading and virtual grouping
+
+Recent VS Code Copilot builds can group a large tool catalog into virtual tools and defer full schemas until a group is activated (a tool-search step such as `tool_search`, where supported). Once activated, the group's schemas can remain in later requests for the session; behavior depends on the build and model. If grouping is disabled or unsupported, full schemas may be sent from the start. Check Agent Debug Logs and Cache Explorer rather than assuming a cache saving. The experimental `github.copilot.chat.virtualTools.threshold` controls when grouping is used ([VS Code settings reference](https://code.visualstudio.com/docs/copilot/reference/copilot-settings)). Disabling unused MCP servers per workspace remains the most reliable baseline for reducing the available catalog.
 
 ### Scope per workspace, not globally
 

@@ -33,6 +33,23 @@ sidebar:
 | 짧아서 캐시할 수 없는 프롬프트 | 단계를 인접 단계에 합치거나, 규칙으로 대체하거나, 그대로 둡니다(작으므로). 최소 길이를 채우려고 내용을 부풀리지는 않습니다 | 공급자의 현재 최소 길이와 `cached_tokens`를 확인합니다 |
 | 대량 / 폴링 도구 루프 | 루프를 스크립트로 실행하고 요약만 반환합니다 | 스크립트 방식과 대화형 방식을 벤치마크합니다 |
 
+<figure class="at-doc-figure">
+  <img src="https://raw.githubusercontent.com/microsoft/TokenEconomizer/main/docs/assets/framework_overview.png" alt="에이전트 세션의 비용을 제어하는 TokenEconomizer 프레임워크" loading="lazy" />
+  <figcaption>경험 기반 비용 제어를 위한 참고 프레임워크입니다. 출처: <a href="https://github.com/microsoft/TokenEconomizer">microsoft/TokenEconomizer (Apache 2.0)</a>, <a href="https://arxiv.org/abs/2610.22732">arXiv:2610.22732</a>.</figcaption>
+</figure>
+
+<a id="observation-masking-for-old-tool-output"></a>
+## 오래된 도구 출력에 관찰 마스킹 적용
+
+[비대한 도구 출력이나 기록 증가](../02-isolate/)가 원인이라면 추가 LLM 호출로 요약하는 대신 최근 `K`단계보다 오래된 큰 도구 결과를 정해진 형식의 자리 표시자로 바꾸세요. 다음은 **가상 예시**입니다. 도구 호출과 결과의 짝을 유지하고 최근 작업 구간은 그대로 보존합니다.
+
+```text
+current_step = 5; K = 3  # keep results from steps 3–5 unchanged
+turn 1 read_file result → [omitted 4,200-token read_file output from turn 1; path=src/checkout.py lines=1..180]
+```
+
+마스킹에는 요약 모델 호출이 필요하지 않지만 자리 표시자에도 입력 토큰이 듭니다. 정보가 손실되고 프롬프트 캐시 일부가 무효화될 수 있으므로 원본은 필요할 때 다시 읽도록 안전하게 보관하고 필요한 경우 경로도 마스킹하세요. 기준선과 비용, 캐시 재사용률, 작업 성공률을 비교합니다. 이 방법은 [The Complexity Trap](https://arxiv.org/abs/2508.21433)을 참고했으며, 논문의 결과는 저자가 보고한 것으로 이곳에서 독립적으로 재현하지 않았습니다.
+
 <a id="compaction-without-losing-the-cache"></a>
 <a id="캐시를-잃지-않는-컨텍스트-압축"></a>
 ## 캐시를 유지하는 컨텍스트 압축
@@ -138,9 +155,9 @@ Failures to avoid: <error signatures already seen and what fixed them>
 - 조용한 동작 변경보다 **되돌릴 수 있고 눈에 보이는** 수정(설정/구성)을 선호합니다.
 - 블랙박스 우선: 에이전트 자체를 수정할 수 없다면 구성, 지침, 도구 설정을 통해 대응합니다.
 
-## 원인별 근거
+## 원인별 관련 연구
 
-각 수정의 근거가 되는 발표된 연구를 소개합니다. 학회 등급 순, 같은 행 안에서는 인용 수 순으로 정렬했습니다(전체 목록: [논문](../../papers/)). 각 연구는 *자신의* 에이전트에 대한 가설로 취급하고 [3단계](../03-prove/)에서 검증합니다.
+각 개선 방법과 관련된 발표 연구를 소개합니다. 학회 등급 순, 같은 행 안에서는 인용 수 순으로 정렬했습니다(전체 목록: [논문](../../papers/)). 각 연구는 *자신의* 에이전트에 대한 가설로 취급하고 [3단계](../03-prove/)에서 검증합니다.
 
 | 원인 | 논문 |
 |------|------|

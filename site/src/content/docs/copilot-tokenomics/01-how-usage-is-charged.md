@@ -43,6 +43,10 @@ reasoning). Input grows with every turn, so a long session pays for old context 
 Providers can reuse an unchanged request prefix (**prompt caching**), which lowers cost and latency
 when the beginning of the request stays stable.
 
+### Cached input and billing
+
+When a prefix cache hits, `cached_input_tokens` are charged at the model's discounted cache-read rate under AI Credits, rather than the uncached input rate. Under legacy premium-request billing, the prompt still consumes `1 × model multiplier` premium requests regardless of a cache hit; caching can still reduce latency and rate-limit pressure. Check the model picker hover for the applicable rates and Agent Debug Logs for the request's cache usage; verify billing details in your plan's usage report.
+
 ## Trade-offs
 
 Everything in this track trades *context* against *cost*. Removing context the model needs leads to

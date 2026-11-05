@@ -605,8 +605,45 @@ html:has(.at-landing) main > .content-panel > .sl-container {
 
 .at-cmd-strip {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.85rem;
+}
+
+.at-install-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+  padding: 0.85rem 1.05rem;
+  border-radius: 0.95rem;
+  border: 1px solid color-mix(in srgb, var(--sl-color-accent) 28%, var(--sl-color-gray-5));
+  background: color-mix(in srgb, var(--sl-color-accent-low) 45%, var(--sl-color-gray-6));
+}
+
+.at-install-bar-cmds {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+  color: var(--sl-color-gray-1);
+}
+
+.at-install-bar-cmds code {
+  padding: 0.25rem 0.55rem;
+  border-radius: 0.45rem;
+  background: #0f172a;
+  color: #e2e8f0;
+  font: 600 0.75rem/1.35 var(--sl-font-mono);
+  white-space: nowrap;
+}
+
+.at-install-bar-links {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 .at-cmd-card {
@@ -1461,6 +1498,9 @@ html:has(.at-landing) main > .content-panel > .sl-container {
 @media (max-width: 1120px) {
   .at-hero {
     grid-template-columns: 1fr;
+  }
+  .at-cmd-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .tp-ed-kpis {
     grid-template-columns: repeat(3, minmax(0, 1fr));

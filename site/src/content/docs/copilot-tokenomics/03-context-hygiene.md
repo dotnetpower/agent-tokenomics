@@ -43,6 +43,10 @@ window is full. Cost and quality both argue for **as little context as the task 
 Search-match snippets count toward the context window even when the agent never opens the file, so
 excluding noisy paths helps directly.
 
+### Subagent delegation break-even rule
+
+A subagent keeps intermediate exploration out of the parent chat's context window, but its first turn has its own system-prompt and tool-schema prefix. As a practical heuristic, handle short lookups (up to 5 tool calls) directly; delegate broad or multi-file exploration when its intermediate results would otherwise bloat later parent turns. Measure both cost and task success: isolation is not free.
+
 ## How to verify
 
 Repeat the baseline task from [Measure your usage](../02-measure-usage/) after the change and compare

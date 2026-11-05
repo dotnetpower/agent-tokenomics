@@ -7,6 +7,18 @@ verified: 2026-11-03
 
 Track A는 VS Code에서 GitHub Copilot을 **사용하는** 개발자를 위한 가이드입니다. 각 페이지는 *문제 → 조치 → 확인 방법 → 트레이드오프* 순서로 설명합니다.
 
+먼저 Copilot 청구 설정에서 사용 중인 플랜을 확인하세요. 과금 방식에 따라 우선할 절약 방법이 다릅니다.
+
+| 과금 방식 | 과금 단위 | 먼저 볼 페이지 |
+|---|---|---|
+| AI 크레딧(사용량 기반) | 입력, 캐시된 입력, 출력 토큰 각각에 모델 요율 적용 | [사용량 측정](02-measure-usage/), [컨텍스트](03-context-hygiene/), [도구](04-instructions-and-tools/) |
+| 기존 프리미엄 요청 | 프롬프트/턴당 모델 배수 적용 | [과금](01-how-usage-is-charged/), [모델](05-models-and-planning/), [예산 가드](08-agent-modes-and-budget/) |
+
+<figure class="at-doc-figure">
+  <img src="https://code.visualstudio.com/assets/docs/agents/concepts/context-assembly.png" alt="여러 소스에서 에이전트 컨텍스트를 구성하는 과정을 보여 주는 VS Code 다이어그램" loading="lazy" />
+  <figcaption>에이전트 컨텍스트는 여러 소스에서 구성됩니다. 출처: <a href="https://code.visualstudio.com/docs/agents/concepts/context">VS Code Docs — Context in Agents</a>.</figcaption>
+</figure>
+
 | 페이지 | 살펴볼 질문 |
 |------|---------------------|
 | [Copilot 사용량은 어떻게 과금되는가](01-how-usage-is-charged/) | 무엇에 비용이 드는가? |

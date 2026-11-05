@@ -61,6 +61,10 @@ Next cause:    <from stage 2 ranking>
 Re-run the diagnosis periodically: new tools, longer instructions, or model changes can silently bring
 the waste back.
 
+### Continuous drift guard
+
+After keeping a fix, run a fixed representative task set in CI or a weekly job when tools or instructions change. Record the baseline and assert that `first_call_input` (first-call input tokens, a fixed-overhead proxy) and `unused_tool_defs` (definitions unused across the selected task set) stay within agreed thresholds. Compare the same model, tools, and tasks; investigate intentional changes rather than silently updating the baseline. An unused tool on a small set is only a candidate for review, not proof it is unnecessary. Track task success alongside cost so the check does not reward a quality regression.
+
 ## Further reading (papers)
 
 Ordered by venue tier, then citations. Findings are hypotheses to verify on your own workload; see the full list in [Papers](../../papers/).

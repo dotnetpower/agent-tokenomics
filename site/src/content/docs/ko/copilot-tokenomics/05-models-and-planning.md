@@ -1,6 +1,6 @@
 ---
 title: "모델, 계획, 위임"
-description: "근거를 바탕으로 모델을 고르고, 코딩 전에 계획하며, 범위가 정해진 작업을 위임합니다."
+description: "측정 결과를 바탕으로 모델을 고르고, 코딩 전에 계획하며, 범위가 정해진 작업을 위임합니다."
 track: copilot
 verified: 2026-11-03
 sidebar:
@@ -12,9 +12,17 @@ sidebar:
 토큰당 가장 저렴한 모델이 작업 결과를 얻는 데도 가장 저렴한 것은 아닙니다. 잘못된 접근으로 곧바로 코드를 작성하면
 세션 전체가 낭비될 수도 있습니다.
 
+<figure class="at-doc-figure">
+  <div class="at-doc-figure-grid">
+    <img src="https://code.visualstudio.com/assets/docs/agent-customization/language-models/model-dropdown-change-model.png" alt="VS Code 언어 모델 선택 메뉴" loading="lazy" />
+    <img src="https://code.visualstudio.com/assets/docs/agent-customization/language-models/thinking-effort-submenu.png" alt="VS Code 사고 강도 선택 메뉴" loading="lazy" />
+  </div>
+  <figcaption>모델(왼쪽)과 사고 강도(오른쪽)를 선택합니다. 출처: <a href="https://code.visualstudio.com/docs/agent-customization/language-models">VS Code Docs — Language Models</a>.</figcaption>
+</figure>
+
 ## 조치
 
-1. **근거를 바탕으로 모델을 선택합니다.** 기대하는 결과와 평가 방법을 먼저 정의합니다. 출력은 비결정적이므로
+1. **측정 결과를 바탕으로 모델을 선택합니다.** 기대하는 결과와 평가 방법을 먼저 정의합니다. 출력은 비결정적이므로
    후보 모델마다 두 번 이상 실행합니다. 완료 여부, 품질, 안정성, 소요 시간, 크레딧을 비교하고,
    기준을 꾸준히 충족하는 가장 저렴한 모델을 고릅니다. 모델이 바뀌면 다시 평가합니다.
 2. **관리하기 쉬운 기본 설정:** **자동 모델 선택**을 사용합니다. 반복되는 워크플로에서는
@@ -24,6 +32,11 @@ sidebar:
 4. **계획한 다음 구현합니다.** 성능이 높은 모델로 Plan 에이전트를 실행하고 계획을 검토한 뒤,
    범위가 명확한 작업으로 나눕니다. 각 작업은 더 저렴한 모델, 작업에 맞는 지침, 최소한의 도구를 갖춘
    **사용자 지정 서브에이전트**에 위임합니다. 기본 에이전트가 결과를 검토합니다.
+
+<a id="failure-retry-paradox"></a>
+### 실패와 재시도의 역설
+
+단순화하면 `total cost = rate × calls × accumulated context`입니다(`accumulated context`는 호출당 평균 토큰 수). 가상의 예로 토큰 요율이 프런티어 모델의 3분의 1인 모델이 테스트 루프에서 네 번 실패한 뒤 성공하면, 호출당 평균 컨텍스트가 같더라도 한 번에 성공한 프런티어 모델 비용의 최소 `1/3 × 5`가 듭니다. 도구 출력이 쌓여 컨텍스트가 커지면 비용은 더 늘 수 있습니다. 실제 청구에서는 입력, 캐시된 입력, 출력의 요율도 구분합니다. 모델을 비교할 때는 작업 성공 기준을 같게 유지하고 재시도, 도구 출력, 최종 성공 실행까지 포함하세요.
 
 ## 확인 방법
 

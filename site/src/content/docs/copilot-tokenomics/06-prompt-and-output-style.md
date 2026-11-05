@@ -14,6 +14,11 @@ every *answer* repeats on every request. Output tokens are also priced higher th
 models, so response length is often the best lever per minute of effort. (Check your model's rates in the
 GitHub Docs model pricing; the ratio differs by model.)
 
+<figure class="at-doc-figure">
+  <img src="https://code.visualstudio.com/assets/docs/agent-customization/customization/create-prompt-file-2.png" alt="VS Code prompt file creation interface" loading="lazy" />
+  <figcaption>Create a reusable prompt file. Source: <a href="https://code.visualstudio.com/docs/agent-customization/prompt-files">VS Code Docs — Prompt Files</a>.</figcaption>
+</figure>
+
 ## Actions
 
 ### 1. Cap the output (highest return)
@@ -29,6 +34,8 @@ Add a standing rule to `copilot-instructions.md` and/or end a prompt with a form
 | `Reply as JSON.` / `Table format.` | Structured output, no narrative. |
 
 A concise *prompt* does not make the *answer* concise. Set both.
+
+**Structured-output trade-off.** A `response_format` or strict JSON schema can simplify parsing, but forcing reasoning into a rigid format can reduce accuracy on multi-step tasks. [Let Me Speak Freely?](https://arxiv.org/abs/2408.02442) reports this effect for the models and tasks it evaluated, not every model or schema. If accuracy falls, allow brief reasoning before formatting or extract structured fields in a final step, then verify both schema validity and task success. Availability of these controls depends on the client and provider.
 
 ### 2. Trim the prompt
 

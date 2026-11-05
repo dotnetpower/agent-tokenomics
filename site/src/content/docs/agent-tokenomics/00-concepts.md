@@ -91,6 +91,8 @@ request). Anything large and attached to several steps (or to a step that is cal
   </figcaption>
 </figure>
 
+**Long-context degradation in custom agents.** As history and tool results accumulate, models can use information buried in the middle less reliably than information at the beginning or end ([Lost in the Middle](https://arxiv.org/abs/2307.03172)); [RULER](https://arxiv.org/abs/2404.06654) also tests how effective context capacity varies by task. Unbounded history can therefore hurt task accuracy as well as increase token cost; verify the effect on your own agent.
+
 ## 4. What you are billed for
 
 | Dimension | What it is | Why it matters |
@@ -283,6 +285,8 @@ Ordered by venue tier, then citations. Findings are hypotheses to verify on your
 - [RULER: What's the Real Context Size of Your Long-Context Language Models?](https://arxiv.org/abs/2404.06654) — preprint 2024, 1,580 citations. Benchmark showing the effective context length is often shorter than the advertised window.
 
 ## Sources
+
+- [Lost in the Middle (arXiv:2307.03172)](https://arxiv.org/abs/2307.03172)
 
 - [openai/tiktoken — fast BPE tokenizer for OpenAI models](https://github.com/openai/tiktoken) and [`examples/count_tokens.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/count_tokens.py)
 - [Prompt caching in Azure OpenAI (Microsoft Learn)](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/prompt-caching) and [Azure OpenAI Service pricing](https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/)

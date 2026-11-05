@@ -28,6 +28,12 @@ sidebar:
 <figcaption><a href="https://github.com/microsoft/TokenEconomizer">TokenEconomizer</a>의 세 가지 블랙박스 방식입니다. 저자는 SWE-Bench의 에이전트–모델 조합 5개에서 평균 비용이 18.4–30.9% 낮아졌다고 보고합니다. 독립적으로 재현한 결과는 아니며, <a href="https://arxiv.org/abs/2610.22732">논문</a>과 본문에서 품질 결과를 함께 확인하세요.</figcaption>
 </figure>
 
+<figure class="at-doc-figure">
+  <img src="https://raw.githubusercontent.com/microsoft/TokenEconomizer/main/docs/assets/teaser.gif" alt="TokenEconomizer 비용 제어 작업 과정을 보여 주는 데모" loading="lazy" />
+  <img src="https://raw.githubusercontent.com/microsoft/TokenEconomizer/main/docs/assets/framework_overview.png" alt="TokenEconomizer 비용 제어 프레임워크 개요" loading="lazy" />
+  <figcaption>프로젝트의 공식 시각 자료입니다. 출처: <a href="https://github.com/microsoft/TokenEconomizer">microsoft/TokenEconomizer (Apache 2.0)</a>, <a href="https://arxiv.org/abs/2610.22732">Experience-Driven Black-Box Cost Control for Coding Agents (arXiv:2610.22732)</a>.</figcaption>
+</figure>
+
 ## 보고된 결과
 
 저자들은 여섯 개 저장소의 SWE-Bench 작업 277개와 에이전트–모델 조합 5개에서 평균 비용이
@@ -46,6 +52,15 @@ sidebar:
 참고할 만한 설계 원칙은 다음과 같습니다. 에이전트의 **자체 설정**을 통해 동작합니다. 학습한 사실을 알려 주기 전에
 **확인**을 요구합니다. 개입 횟수에 **상한**을 둡니다. **최적화 도구 자체의 비용**을 집계에 포함합니다.
 **실패해도 작업을 계속**(fail open)합니다. 최적화 도구가 실패하면 세션은 설치되지 않은 것처럼 계속 진행됩니다.
+
+<a id="recommended-adoption-order-for-your-own-agent"></a>
+## 직접 만든 에이전트에 권장하는 도입 순서
+
+1. **실패 루프 가드:** 현재 턴의 반복 오류를 감지해 한 번 방향을 바꾸고, 계속 실패하면 사용자에게 알립니다. 세션 간 학습 상태가 필요 없으며 비용이 크게 늘어나는 장시간 실행을 제한할 수 있습니다.
+2. **사용하지 않는 도구 가지치기:** 사람이 검토한 작업별 도구 집합부터 시작합니다. 세션 간 학습 상태 없이도 반복되는 스키마 오버헤드를 줄일 수 있습니다. 드물게 필요한 도구를 복원할 방법은 남겨 두세요. 위 표의 TokenEconomizer *자동* 가지치기는 여러 세션의 사용 기록을 활용합니다.
+3. **저장소 마이크로 스킬:** 세션 로그가 쌓이면 반복적으로 확인되는 사실을 검증한 뒤, 짧고 되돌릴 수 있는 지침으로 세션 시작 시 제공합니다.
+
+이 순서는 실용적인 출발점이지 모든 에이전트에서 가장 큰 절감을 보장하지는 않습니다. 각 변경의 비용과 작업 성공률을 따로 측정하고, 기준선에서 다른 원인의 낭비가 더 크다면 그 원인부터 처리하세요.
 
 ## 추가 자료(논문)
 

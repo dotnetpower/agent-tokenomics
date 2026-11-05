@@ -12,6 +12,14 @@ sidebar:
 The cheapest model per token is not always the cheapest per *result*, and jumping straight to code with
 the wrong approach wastes whole sessions.
 
+<figure class="at-doc-figure">
+  <div class="at-doc-figure-grid">
+    <img src="https://code.visualstudio.com/assets/docs/agent-customization/language-models/model-dropdown-change-model.png" alt="VS Code language model selection dropdown" loading="lazy" />
+    <img src="https://code.visualstudio.com/assets/docs/agent-customization/language-models/thinking-effort-submenu.png" alt="VS Code thinking effort submenu" loading="lazy" />
+  </div>
+  <figcaption>Choose a model (left) and its thinking effort (right). Source: <a href="https://code.visualstudio.com/docs/agent-customization/language-models">VS Code Docs — Language Models</a>.</figcaption>
+</figure>
+
 ## Actions
 
 1. **Choose models on evidence.** Define the expected result and how you will judge it; run each candidate
@@ -24,6 +32,10 @@ the wrong approach wastes whole sessions.
 4. **Plan, then implement.** Use the Plan agent with a capable model, review the plan, split it into
    well-scoped tasks, and delegate those to **custom agents as subagents** with cheaper models, focused
    instructions, and minimal tools. The primary agent reviews results.
+
+### Failure-retry paradox
+
+A simple approximation is `total cost = rate × calls × accumulated context` (where accumulated context is the average tokens per call). For a synthetic comparison, a model with one-third the token rate that makes four failed test-loop calls and then succeeds uses at least `1/3 × 5` of the frontier model's one-call cost if their average context is equal; growing tool outputs can increase it further. Real bills also distinguish input, cached input, and output rates. Compare models at the same task success and include retries, tool outputs, and any final successful run.
 
 ## How to verify
 

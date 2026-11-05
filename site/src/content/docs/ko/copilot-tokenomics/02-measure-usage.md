@@ -24,7 +24,7 @@ sidebar:
 5. **프롬프트 캐싱** — Summary에서 캐시 재사용률은 낮은데 소요 시간이나 입력 토큰이 예상보다 클 때
    **Cache Explorer**(Agent Debug Logs → Summary → *Cache Explorer*)를 사용합니다. 연속된 요청을 비교하면
    프롬프트 시그니처(시스템 지침, 도구 정의, 메시지)에서 *처음 달라진 지점*을 확인할 수 있습니다.
-6. **맞춤 팁** — 채팅 세션에서 `/chronicle:cost-tips`를 실행하면 최근 활동을 바탕으로 한 권장 사항을 받을 수 있습니다.
+6. **맞춤 팁** — 채팅 세션에서 `/chronicle:cost-tips`를 실행하면 최근 활동을 바탕으로 한 권장 사항을 받을 수 있습니다. Chronicle cost-tips 참가자가 활성화된 최신 VS Code / Copilot Chat 빌드가 필요합니다. 사용할 수 없다면 Agent Debug Logs → **Summary**와 **Cache Explorer**를 직접 이용하세요.
 7. **모델 비용** — 모델 선택기에 마우스를 올리면 토큰 유형별 비용과 Low / Medium / High 등급이 표시됩니다.
 
 <figure class="at-doc-figure">
@@ -41,6 +41,8 @@ sidebar:
 
 대표적인 작업 하나를 골라 같은 모델로 두 번 실행합니다. 요청별 크레딧, 세션 합계, 캐시 적중률(%)을 기록합니다.
 이 값을 이후 변경 사항을 비교할 기준선으로 삼습니다.
+
+변경 전후를 비교하려면 요청 또는 세션 요약 값을 기준선 기록에 복사하세요. Agent Debug Logs에서 세션을 선택하고 **Export**로 OpenTelemetry JSON을 저장할 수도 있습니다. 같은 작업과 모델로 실행한 두 결과를 비교하고, 내보낸 파일을 공유하기 전에는 민감한 내용이 없는지 확인하세요.
 
 ## 트레이드오프와 주의 사항
 

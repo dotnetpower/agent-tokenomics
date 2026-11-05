@@ -52,15 +52,23 @@ To use [`token_report.py`](https://github.com/dotnetpower/agent-tokenomics/tree/
 export or query the platform's data and map it to the JSONL fields (`session`, `turn`, `input_tokens`,
 `cached_input_tokens`, `output_tokens`, `tool_defs`, `tool_calls`).
 
+**Two JSONL schemas:** `.tokprof/*.jsonl` contains `tokprof`'s rich `v: 1` records with per-segment token estimates, salted hashes, and secret-redacted prompt/response text (unless `--no-content` is used). By contrast, `examples/sample-requests.jsonl` uses the compact summary schema read by `examples/token_report.py`. Convert a recording before passing it to that script:
+
+```bash
+tokprof export run.jsonl --out legacy.jsonl
+```
+
+Redaction is not a guarantee that a log is safe to share; review it first.
+
 Using GitHub Copilot in VS Code instead? These do not instrument it; use
 [Agent Debug Logs and the Cache Explorer](../../copilot-tokenomics/02-measure-usage/).
 
 ## Profile without changing code: tokprof
 
-[`tokprof`](https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler) (standalone native Rust single binary, no dependency on your agent's project) answers "which part of each request costs the tokens?" for agents you start through it or attach to:
+[`tokprof`](../tokprof/) ([PyPI](https://pypi.org/project/tokprof/), standalone native Rust single binary, no dependency on your agent's project) answers "which part of each request costs the tokens?" for agents you start through it or attach to:
 
 ```bash
-cargo install --path ./profiler                 # standalone Rust binary (or: uv tool install ./profiler)
+pip install tokprof                             # or: uv tool install tokprof / uvx tokprof / pipx install tokprof
 tokprof                                         # show detailed usage guide & examples (--lang en | --lang ko)
 tokprof start                                   # start background profiling (Linux: auto-captures running processes & Docker)
 tokprof stop                                    # stop session, print visual report, and write .tokprof/latest.html
@@ -70,6 +78,8 @@ tokprof report --format csv                     # output per-session, per-turn, 
 tokprof report --watch                          # live-updating terminal view while an agent runs
 tokprof compare before.jsonl after.jsonl        # bootstrap interval, for stages 3 and 5
 ```
+
+See the full [tokprof: Install & Usage guide](../tokprof/) for all capture modes, CLI options, and private/on-prem endpoint configuration.
 
 - **How it captures.** `tokprof start` launches a background session that on Linux automatically attaches the eBPF tap to running host processes and Docker containers (use `tokprof start --comm <name>` to scope by process, working directory, or container name) and stops with `tokprof stop` (printing the visual report and saving `.tokprof/latest.html`). `tokprof run` starts a gateway on `127.0.0.1` and points `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`,
   `AZURE_OPENAI_ENDPOINT`, and pattern-matched base-URL variables (`VLLM_BASE_URL`, `OLLAMA_HOST`, …) at it **for that command only**, plus in-process hooks (Python `httpx`, `requests`, `urllib3`, `aiohttp`, and
@@ -124,13 +134,20 @@ Record these for the baseline:
 
 ## Per-step token map
 
-For agents that run several model calls per user request, build one table per request type:
+For agents that run several model calls per user request, build one table per request type. Below is a filled example from the synthetic pipeline [`examples/sample-pipeline.json`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/sample-pipeline.json) (once you collect runtime logs, fill in the `Dynamic tokens / call` column with average retrieved passages, history, and tool results):
 
-| Step | Model | Calls | Fixed tokens / call | Dynamic tokens / call | Total | Share |
-|------|-------|------:|--------------------:|----------------------:|------:|------:|
-| *(one row per step)* | | | | | | |
+| Step | Model | Calls | Fixed tokens / call | Dynamic tokens / call | Fixed total | Share | Note |
+|------|-------|------:|--------------------:|----------------------:|------------:|------:|------|
+| `guardrail` | `small` | 1 | 800 | *(from logs)* | 800 | 1.0% | `< 1,024 tok`: likely not cacheable |
+| `rewrite` | `small` | 1 | 2,500 | *(from logs)* | 2,500 | 3.2% | |
+| `router` | `large` | 1 | 12,000 | *(from logs)* | 12,000 | 15.2% | Large-model routing overhead |
+| `classify` | `small` | 1 | 2,000 | *(from logs)* | 2,000 | 2.5% | |
+| **`answer`** | **`large`** | **2** | **28,000** | *(from logs)* | **56,000** | **71.1%** | `reference_doc` (20k) + `rules_and_tools` (8k) × 2 calls |
+| `follow_up` | `small` | 1 | 3,500 | *(from logs)* | 3,500 | 4.4% | |
+| `final_reply` | `large` | 1 | 2,000 | *(from logs)* | 2,000 | 2.5% | |
+| **Total (per request)** | — | **8** | — | — | **78,800** | **100.0%** | Lower bound (excluding dynamic tokens) |
 
-Rank **components** (system prompt, tool schemas, output schema, reference documents) by `tokens × calls`. The top
+Rank **components** (system prompt, tool schemas, output schema, reference documents) by `tokens × calls` (`answer/reference_doc`: `20,000 × 2 = 40,000 tok, 50.8%` → `answer/rules_and_tools`: `8,000 × 2 = 16,000 tok, 20.3%` → `router/fixed`: `12,000 × 1 = 12,000 tok, 15.2%`). The top
 one or two usually explain most of the waste.
 
 ### No production access? Estimate statically

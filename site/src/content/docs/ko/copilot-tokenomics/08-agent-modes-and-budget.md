@@ -12,8 +12,11 @@ sidebar:
 에이전트 실행은 **루프**입니다. 각 단계가 모델 호출이며, 호출할 때마다 지침, 도구 정의, 지금까지의 대화가 다시 전송됩니다. 프롬프트가 모호하면 에이전트가 오래 탐색한 끝에 의도를 잘못 이해해 처음부터 다시 시작해야 할 수 있습니다.
 
 <figure class="at-doc-figure">
-  <img src="https://code.visualstudio.com/assets/docs/agents/chat-debug-view/agent-flow-chart-v2.png" alt="모델 요청과 도구 호출을 보여 주는 Agent Debug View 흐름도" loading="lazy" />
-  <figcaption>Agent Debug View에서 에이전트 실행 단계를 확인합니다. 출처: <a href="https://code.visualstudio.com/docs/copilot/chat/chat-debug-view">VS Code Docs — Agent Debug View</a>.</figcaption>
+  <div class="at-doc-figure-grid">
+    <img src="https://code.visualstudio.com/assets/docs/agents/chat-debug-view/agent-flow-chart-v2.png" alt="모델 요청과 도구 호출을 보여 주는 Agent Debug View 흐름도" loading="lazy" />
+    <img src="https://code.visualstudio.com/assets/docs/agent-customization/customization/create-custom-agent-2.png" alt="VS Code에서 사용자 지정 에이전트를 만드는 화면" loading="lazy" />
+  </div>
+  <figcaption>에이전트 실행을 살펴보고(왼쪽) 사용자 지정 에이전트를 만듭니다(오른쪽). 출처: <a href="https://code.visualstudio.com/docs/copilot/chat/chat-debug-view">Agent Debug View</a> 및 <a href="https://code.visualstudio.com/docs/agent-customization/custom-agents">Custom Agents</a>.</figcaption>
 </figure>
 
 ## 조치
@@ -35,6 +38,14 @@ sidebar:
 - 복잡한 작업은 에이전트가 먼저 **계획 파일**을 작성한 뒤 실행하게 합니다.
 - 사용할 도구를 알고 있다면 이름을 지정해("GitHub create-PR 도구만 사용") 도구 탐색을 줄입니다.
 - **구체적인 컨텍스트**(파일, 오류 메시지, 제약 조건)를 제공합니다([컨텍스트를 간결하게 유지하기](../03-context-hygiene/) 참조).
+
+Autopilot이나 백그라운드 에이전트에는 작업 프롬프트에 명시적인 루프 가드를 추가하세요.
+
+```text
+먼저 관련 범위의 테스트를 실행하세요. 같은 명령이나 테스트가 같은 오류로 두 번 실패하면 반복 재시도하지 말고 멈춰서 장애 원인을 보고하세요.
+```
+
+이는 강제 실행 제한이 아닌 지시입니다. 로그를 확인하고 요청 또는 예산 한도도 추가 안전장치로 사용하세요.
 
 ### 모델과 추론
 

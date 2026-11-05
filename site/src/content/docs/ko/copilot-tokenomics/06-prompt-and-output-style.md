@@ -11,6 +11,11 @@ sidebar:
 
 보낸 토큰과 모델이 생성한 토큰 **모두**에 비용이 듭니다. 프롬프트의 군더더기는 한 번에 그치지만, *답변*의 군더더기는 요청마다 반복됩니다. 대부분의 모델에서 출력 토큰은 입력 토큰보다 단가도 높습니다. 따라서 응답 길이를 조절하는 것이 들인 노력 대비 가장 효과가 큰 방법인 경우가 많습니다. 모델별 요금은 GitHub Docs의 모델 가격 정보에서 확인하세요. 입력과 출력의 요금 비율은 모델마다 다릅니다.
 
+<figure class="at-doc-figure">
+  <img src="https://code.visualstudio.com/assets/docs/agent-customization/customization/create-prompt-file-2.png" alt="VS Code에서 프롬프트 파일을 만드는 화면" loading="lazy" />
+  <figcaption>재사용할 프롬프트 파일을 만듭니다. 출처: <a href="https://code.visualstudio.com/docs/agent-customization/prompt-files">VS Code Docs — Prompt Files</a>.</figcaption>
+</figure>
+
 ## 조치
 
 ### 1. 출력을 제한합니다(효과가 가장 큼)
@@ -26,6 +31,8 @@ sidebar:
 | `Reply as JSON.` / `Table format.` | 서술 없이 구조화된 출력만 받습니다. |
 
 *프롬프트*가 간결하다고 *답변*도 간결해지지는 않습니다. 프롬프트도 간결하게 쓰고 답변 길이도 지정합니다.
+
+**구조화된 출력의 트레이드오프.** `response_format`이나 엄격한 JSON 스키마는 결과 파싱을 쉽게 하지만, 추론까지 고정된 형식에 맞추면 여러 단계가 필요한 작업의 정확도가 떨어질 수 있습니다. [Let Me Speak Freely?](https://arxiv.org/abs/2408.02442)는 평가한 모델과 작업에서 이 현상을 보고했으며, 모든 모델이나 스키마에 일반화할 수는 없습니다. 정확도가 떨어지면 형식을 적용하기 전에 짧게 추론하도록 허용하거나 마지막 단계에서 구조화된 필드를 추출하세요. 스키마 유효성과 작업 성공 여부를 함께 확인합니다. 이 설정의 사용 가능 여부는 클라이언트와 제공자에 따라 다릅니다.
 
 ### 2. 프롬프트를 다듬습니다
 

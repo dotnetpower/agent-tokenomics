@@ -29,6 +29,12 @@ does not change the agent's model or code. This page summarizes its published de
 <figcaption>Three black-box mechanisms of <a href="https://github.com/microsoft/TokenEconomizer">TokenEconomizer</a>. The authors report 18.4–30.9% lower mean cost across five SWE-Bench agent–model pairs. This is not independently reproduced here; see the <a href="https://arxiv.org/abs/2610.22732">paper</a> and quality results below.</figcaption>
 </figure>
 
+<figure class="at-doc-figure">
+  <img src="https://raw.githubusercontent.com/microsoft/TokenEconomizer/main/docs/assets/teaser.gif" alt="TokenEconomizer demonstration of its cost-control workflow" loading="lazy" />
+  <img src="https://raw.githubusercontent.com/microsoft/TokenEconomizer/main/docs/assets/framework_overview.png" alt="Overview of the TokenEconomizer cost-control framework" loading="lazy" />
+  <figcaption>Official project visuals. Source: <a href="https://github.com/microsoft/TokenEconomizer">microsoft/TokenEconomizer (Apache 2.0)</a>; <a href="https://arxiv.org/abs/2610.22732">Experience-Driven Black-Box Cost Control for Coding Agents (arXiv:2610.22732)</a>.</figcaption>
+</figure>
+
 ## Reported results
 
 On 277 SWE-Bench tasks across six repositories and five agent–model combinations, the authors report
@@ -47,6 +53,14 @@ of 5 combinations. Costs include every model call TokenEconomizer itself makes. 
 Design lessons worth copying: act through the agent's **own settings**; require **confirmation** before
 stating a learned fact; **cap** interventions; **include the optimizer's own cost** in the accounting;
 **fail open** (if the optimizer fails, the session continues as if it were not installed).
+
+## Recommended adoption order for your own agent
+
+1. **Failure-loop guard:** detect repeated errors within the current turn, redirect once, and surface persistent failure. This does not require cross-session training state and can limit costly tail runs.
+2. **Unused-tool pruning:** start with a manually reviewed, task-scoped tool set; it also needs no cross-session training state and can cut repeated schema overhead. Keep an escape hatch for rare tools. TokenEconomizer's *automatic* pruning uses usage across sessions, as shown above.
+3. **Repo micro-skills:** once session logs accumulate, confirm recurring facts before injecting short, reversible guidance at session start.
+
+This is a practical starting order, not a guarantee that these are the largest savings for every agent. Measure each change separately against cost and task success; prioritize the largest observed waste instead when your baseline points elsewhere.
 
 ## Further reading (papers)
 

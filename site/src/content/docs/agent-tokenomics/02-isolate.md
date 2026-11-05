@@ -47,6 +47,16 @@ sidebar:
 <figcaption>The <a href="https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/sample-requests.jsonl">sample</a> s1 shows definitions per call, total input across the three error calls, and one <code>read_file</code> result; the log does not establish whether it was filtered. Bar lengths are not comparable because units and scopes differ; not all 28,800 tokens are avoidable. The causes can overlap, so do not sum them.</figcaption>
 </figure>
 
+### Check prompt cache-busting
+
+Inspect a recording from `.tokprof/*.jsonl` for **prefix hash churn**. Putting `datetime.now()`, request UUIDs, or nondeterministically ordered dictionary entries into the system prompt can change `sysfp` on each call and prevent cache reuse. Nondeterministic tool ordering can also break the request prefix, but `sysfp` fingerprints **system text only**, so inspect the tool segments separately.
+
+```bash
+jq -r '[.conv, .sysfp, .usage.cached] | @tsv' run.jsonl
+```
+
+Compare calls within the same conversation and recording; `sysfp` is salted and may be absent. A changing hash is a clue, not proof of cache misses: cached counts can be unavailable, and provider minimum lengths, routing, and expiry also matter. Confirm the first prefix divergence and compare cache usage before changing one variable.
+
 ## Interpretation
 
 - Rule out **tool output** before blaming history: if tool results dominate the growth, truncating or

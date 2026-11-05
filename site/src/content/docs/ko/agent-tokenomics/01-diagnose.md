@@ -53,15 +53,24 @@ sidebar:
 사용하려면, 플랫폼의 데이터를 내보내거나 쿼리한 다음 JSONL 필드(`session`, `turn`, `input_tokens`,
 `cached_input_tokens`, `output_tokens`, `tool_defs`, `tool_calls`)에 매핑하세요.
 
+**JSONL 스키마 두 가지:** `.tokprof/*.jsonl`에는 세그먼트별 토큰 추정치, 솔트가 적용된 해시, 비밀값을 마스킹한 프롬프트·응답 텍스트를 담은 `tokprof`의 상세 `v: 1` 레코드가 저장됩니다. `--no-content`를 지정하면 텍스트는 저장하지 않습니다. 반면 `examples/sample-requests.jsonl`은 `examples/token_report.py`가 읽는 간결한 요약 스키마를 사용합니다. 해당 스크립트에 기록을 전달하기 전에 변환하세요.
+
+```bash
+tokprof export run.jsonl --out legacy.jsonl
+```
+
+마스킹만으로 공유 안전이 보장되지는 않으므로 로그를 먼저 검토하세요.
+
 VS Code에서 GitHub Copilot을 사용하나요? 위 플랫폼은 Copilot을 계측하지 않습니다.
 [Agent Debug Logs와 Cache Explorer](../../copilot-tokenomics/02-measure-usage/)를 사용하세요.
 
+<a id="profile-without-changing-code-tokprof"></a>
 ## 코드 수정 없이 프로파일링하기: tokprof
 
-[`tokprof`](https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler)(독립 실행형 네이티브 Rust 단일 바이너리, 에이전트 프로젝트에 의존하지 않음)는 이 도구로 시작하거나 연결한 에이전트에 대해 "각 요청에서 어느 부분이 토큰을 쓰는가"에 답합니다.
+[`tokprof`](../tokprof/)([PyPI](https://pypi.org/project/tokprof/), 독립 실행형 네이티브 Rust 단일 바이너리, 에이전트 프로젝트에 의존하지 않음)는 이 도구로 시작하거나 연결한 에이전트에 대해 "각 요청에서 어느 부분이 토큰을 쓰는가"에 답합니다.
 
 ```bash
-cargo install --path ./profiler                 # 네이티브 Rust 단일 바이너리 설치 (또는: uv tool install ./profiler)
+pip install tokprof                             # 또는: uv tool install tokprof / uvx tokprof / pipx install tokprof
 tokprof --lang ko                               # 상세 사용 가이드 및 예시 출력 (--lang ko | --lang en)
 tokprof start                                   # 백그라운드 프로파일링 시작 (Linux: 실행 중인 프로세스 및 Docker 자동 수집)
 tokprof stop                                    # 세션 종료 + 시각적 리포트 출력 + .tokprof/latest.html 생성
@@ -71,6 +80,8 @@ tokprof report --format csv                     # 세션별·턴별·호출별 �
 tokprof report --watch                          # 에이전트 실행 중 실시간으로 터미널 리포트를 갱신합니다
 tokprof compare before.jsonl after.jsonl        # 부트스트랩 구간, 3단계와 5단계용
 ```
+
+모든 캡처 방식과 CLI 명령어, 사내·온프레미스 엔드포인트 설정은 [tokprof: 설치 및 사용법 가이드](../tokprof/)를 참고하세요.
 
 - **수집 방식**: `tokprof start`는 백그라운드 세션을 시작하며, Linux에서는 실행 중인 호스트 프로세스와 Docker 컨테이너에 eBPF 프로브를 자동으로 연결합니다(`tokprof start --comm <이름>`으로 프로세스·작업 디렉터리·컨테이너 이름별 필터링 가능). 작업 후 `tokprof stop`을 실행하면 세션을 멈추고 시각적 리포트와 `.tokprof/latest.html`을 바로 생성합니다. `tokprof run`은 `127.0.0.1`에 게이트웨이를 띄우고, **해당 명령에서만** `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `AZURE_OPENAI_ENDPOINT`와 패턴으로 찾은 기본 URL 변수(`VLLM_BASE_URL`, `OLLAMA_HOST` 등)를 그곳으로 향하게 하며, 프로세스 내부 훅(`sitecustomize`를 통한 Python `httpx`, `requests`, `urllib3`, `aiohttp`, `urllib.request`와 `--require`를 통한 Node `fetch`, `http.request`, `https.request`)도 함께 로드합니다.
 - **LLM 호출로 인식하는 기준**: 고정된 URL 목록이 아닙니다. `tokprof`는 요청 본문의 형태(`messages` 목록, Gemini `contents`, Responses 방식의 `input`, `prompt`), 경로, 호스트(사설 DNS, RFC 1918, `.svc.cluster.local`, `privatelink`, `vllm`·`ollama` 같은 이름, 관례적인 포트), 그리고 모호한 본문에 대해서는 응답(사용량 카운터, `choices`, Ollama·llama.cpp·TGI 카운터)을 함께 점수화합니다. 그래서 사설 DNS 엔드포인트, 온프레미스 vLLM, Ollama, TGI, llama.cpp, LiteLLM 방식 게이트웨이, Azure 프라이빗 엔드포인트, Gemini를 모두 인식합니다. `tokprof explain <url> --body request.json`은 요청이 기록되었거나 기록되지 않은 이유를 보여 주고, `--llm-host`, `--llm-path`, `--exclude-host`로 판정을 직접 지정할 수 있습니다. 사설 CA는 `SSL_CERT_FILE` 또는 `--upstream-ca`로 신뢰합니다.
@@ -107,13 +118,20 @@ python examples/token_report.py requests.jsonl
 
 ## 단계별 토큰 지도
 
-사용자 요청 하나에 모델 호출을 여러 번 실행하는 에이전트라면 요청 유형마다 표를 하나씩 만드세요.
+사용자 요청 하나에 모델 호출을 여러 번 실행하는 에이전트라면 요청 유형마다 표를 하나씩 만드세요. 아래는 합성 파이프라인([`examples/sample-pipeline.json`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/sample-pipeline.json))을 기준으로 작성한 단계별 토큰 지도 예시입니다(실제 로그를 수집하면 `호출당 동적 토큰` 열에 검색 구절·대화 기록·도구 결과 평균치를 함께 채웁니다).
 
-| 단계 | 모델 | 호출 수 | 호출당 고정 토큰 | 호출당 동적 토큰 | 합계 | 비중 |
-|------|------|--------:|-----------------:|-----------------:|-----:|-----:|
-| *(단계마다 한 행)* | | | | | | |
+| 단계 | 모델 | 호출 수 | 호출당 고정 토큰 | 호출당 동적 토큰 | 고정 합계 | 비중 | 비고 |
+|------|------|--------:|-----------------:|-----------------:|----------:|-----:|------|
+| `guardrail` | `small` | 1 | 800 | *(로그에서 측정)* | 800 | 1.0% | `< 1,024 tok`: 캐시 미적용 가능성 |
+| `rewrite` | `small` | 1 | 2,500 | *(로그에서 측정)* | 2,500 | 3.2% | |
+| `router` | `large` | 1 | 12,000 | *(로그에서 측정)* | 12,000 | 15.2% | 대형 모델 라우팅 오버헤드 |
+| `classify` | `small` | 1 | 2,000 | *(로그에서 측정)* | 2,000 | 2.5% | |
+| **`answer`** | **`large`** | **2** | **28,000** | *(로그에서 측정)* | **56,000** | **71.1%** | `reference_doc`(20k) + `rules_and_tools`(8k) × 2회 |
+| `follow_up` | `small` | 1 | 3,500 | *(로그에서 측정)* | 3,500 | 4.4% | |
+| `final_reply` | `large` | 1 | 2,000 | *(로그에서 측정)* | 2,000 | 2.5% | |
+| **합계 (요청 1건당)** | — | **8** | — | — | **78,800** | **100.0%** | 동적 토큰을 제외한 하한값 |
 
-**구성 요소**(시스템 프롬프트, 도구 스키마, 출력 스키마, 참조 문서)를 `tokens × calls` 기준으로 순위를 매기세요.
+**구성 요소**(시스템 프롬프트, 도구 스키마, 출력 스키마, 참조 문서)를 `tokens × calls` 기준으로 순위를 매기세요(`answer/reference_doc`: `20,000 × 2 = 40,000 tok, 50.8%` → `answer/rules_and_tools`: `8,000 × 2 = 16,000 tok, 20.3%` → `router/fixed`: `12,000 × 1 = 12,000 tok, 15.2%`).
 상위 한두 개가 대부분의 낭비를 설명하는 경우가 많습니다.
 
 ### 프로덕션에 접근할 수 없다면? 정적으로 추정하기

@@ -9,8 +9,7 @@ sidebar:
 
 ## Problem
 
-Some content is paid for on **every request**: custom instructions and the definitions of every enabled
-tool (including each MCP server's tools). Unused or bloated items are a fixed tax.
+Custom instructions and tool definitions included in a request add recurring input. Unused or bloated items are a fixed tax; some tool schemas can be loaded on demand (see [MCP audit](../09-mcp-audit/)).
 
 <figure class="at-doc-figure">
   <div class="at-diag-stack">
@@ -28,6 +27,11 @@ tool (including each MCP server's tools). Unused or bloated items are a fixed ta
   <figcaption>Synthetic illustration, not a measured result: against the original input, fixed overhead falls from 82% to 22%, and the task remains at 18%; the new total is 40% of the original. Scoping and pruning reduce fixed overhead while the task stays the same; actual savings vary. Colors distinguish configurations, not cache hits or misses.</figcaption>
 </figure>
 
+<figure class="at-doc-figure">
+  <img src="https://code.visualstudio.com/assets/docs/agent-customization/customization/chat-customizations-editor-2.png" alt="VS Code chat customizations editor showing agent instruction settings" loading="lazy" />
+  <figcaption>Manage agent customizations in VS Code. Source: <a href="https://code.visualstudio.com/docs/agent-customization/overview">VS Code Docs — Agent Customization Overview</a>.</figcaption>
+</figure>
+
 ## Actions
 
 **Custom instructions** (`.github/copilot-instructions.md`, `*.instructions.md`, `AGENTS.md`)
@@ -39,7 +43,7 @@ tool (including each MCP server's tools). Unused or bloated items are a fixed ta
   path rules), and **on-demand** (skills or notes for occasional workflows such as PR review).
 - Delete anything the agent can discover cheaply from the code. Do not paste long style guides.
 - Facts stated once in instructions save the agent from rediscovering them in every session.
-- Merge duplicates across `AGENTS.md` and `copilot-instructions.md`; duplicated text is billed twice.
+- Avoid duplicating rules across `copilot-instructions.md`, `AGENTS.md`, `CLAUDE.md`, and `*.instructions.md`. Applicable files can be injected together, duplicating fixed prefix tokens; keep one canonical source per scope and check what actually loaded.
 - Write the rules tersely (declarative rules, no filler); the file is re-sent on every request.
 - For tool-routing and fallback instructions, consider a **BPE-aligned formula layout** (`need => tool`, `condition -> action`, `>` priority chains; see [Prompt and output style](../06-prompt-and-output-style/#4-bpe-aligned-formula-notation)). As a VS Code reference case, converting the auto-loaded `.instructions.md` in [dotnetpower/code-context](https://github.com/dotnetpower/code-context) from 106-line prose (9,127 bytes, 2,048 `o200k_base` tokens) to a 26-line BPE-aligned formula specification (2,688 bytes, 718 tokens) cut per-turn instruction tokens by **64.9%** while retaining **100% (31/31)** rule-recognition accuracy across 12 edge-case scenarios.
 

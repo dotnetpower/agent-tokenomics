@@ -27,7 +27,7 @@ costs the most.
    consecutive requests and shows the *first divergence* in the prompt signature (system
    instructions, tool definitions, messages).
 6. **Personalized tips** — run `/chronicle:cost-tips` in a chat session for recommendations based on
-   your recent activity.
+   your recent activity. This requires a recent VS Code / Copilot Chat build with the Chronicle cost-tips participant enabled. If it is unavailable, use Agent Debug Logs → **Summary** and **Cache Explorer** directly.
 7. **Model cost** — the model picker's hover shows cost per token type and a Low / Medium / High tier.
 
 <figure class="at-doc-figure">
@@ -44,6 +44,8 @@ costs the most.
 
 Pick one representative task and run it twice with the same model. Record per-request credits, session
 total, and cache hit %. This is your baseline for every later change.
+
+For a before/after comparison, copy the request or session summary values into your baseline record, or select the session in Agent Debug Logs and use **Export** to save its OpenTelemetry JSON. Compare the two runs with the same task and model; review exports for sensitive content before sharing.
 
 ## Trade-offs and cautions
 

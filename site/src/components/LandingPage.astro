@@ -46,8 +46,11 @@ const demoReportUrl = `${base}demo/tokprof-sample.html`;
         <a class="at-btn at-btn-secondary" href={docUrl("agent-tokenomics/")}>
           {isKo ? "트랙 B: 에이전트 토큰 절약 →" : "Track B: Agent Tokenomics →"}
         </a>
+        <a class="at-btn at-btn-secondary" href={docUrl("agent-tokenomics/tokprof/")}>
+          {isKo ? "tokprof 설치 및 사용법 →" : "tokprof Install & Usage →"}
+        </a>
         <a class="at-btn at-btn-ghost" href="#tokprof-showcase">
-          {isKo ? "tokprof 실행 화면과 HTML 예시 보기 ↓" : "See tokprof start & HTML Report ↓"}
+          {isKo ? "실행 화면과 HTML 예시 보기 ↓" : "See CLI & HTML Report ↓"}
         </a>
       </div>
     </div>
@@ -138,19 +141,31 @@ const demoReportUrl = `${base}demo/tokprof-sample.html`;
     <div class="at-cmd-strip">
       <div class="at-cmd-card">
         <div class="at-cmd-card-top">
-          <span>{isKo ? "01 / 측정 시작" : "01 / START SESSION"}</span>
-          <span>Background</span>
+          <span>{isKo ? "01 / PyPI 설치" : "01 / INSTALL (PyPI)"}</span>
+          <span>Linux · macOS · Win</span>
         </div>
-        <code>tokprof start</code>
+        <code>pip install tokprof</code>
         <span>
           {isKo
-            ? "백그라운드 측정 세션을 시작합니다. 지원되는 Linux 환경에서는 eBPF로 실행 중인 프로세스의 요청을 수집할 수 있습니다."
-            : "Starts a background profiling session. On supported Linux hosts, eBPF captures requests from running processes."}
+            ? "Rust/Go 설치 없이 프리빌트 네이티브 바이너리를 바로 설치합니다 (uv tool install tokprof 또는 uvx tokprof도 지원)."
+            : "Installs the prebuilt native binary from PyPI with no Rust or Go toolchain required (or use uv tool install tokprof / uvx tokprof)."}
         </span>
       </div>
       <div class="at-cmd-card">
         <div class="at-cmd-card-top">
-          <span>{isKo ? "02 / 수집 상태 확인" : "02 / CHECK STATUS"}</span>
+          <span>{isKo ? "02 / 측정 시작" : "02 / START SESSION"}</span>
+          <span>Background / CLI</span>
+        </div>
+        <code>tokprof start</code>
+        <span>
+          {isKo
+            ? "백그라운드 측정 세션을 시작합니다. 지원되는 Linux에서는 eBPF로 실행 중인 프로세스와 Docker를 수집하며, 단일 명령은 tokprof -- python app.py로 실행합니다."
+            : "Starts a background session (auto-attaches eBPF on supported Linux hosts), or run a single command with tokprof -- python app.py."}
+        </span>
+      </div>
+      <div class="at-cmd-card">
+        <div class="at-cmd-card-top">
+          <span>{isKo ? "03 / 수집 상태 확인" : "03 / CHECK STATUS"}</span>
           <span>Live Count</span>
         </div>
         <code>tokprof status</code>
@@ -162,8 +177,8 @@ const demoReportUrl = `${base}demo/tokprof-sample.html`;
       </div>
       <div class="at-cmd-card">
         <div class="at-cmd-card-top">
-          <span>{isKo ? "03 / 측정 종료" : "03 / STOP & REPORT"}</span>
-          <span>CLI + HTML</span>
+          <span>{isKo ? "04 / 측정 종료 및 리포트" : "04 / STOP & REPORT"}</span>
+          <span>CLI + HTML + CSV</span>
         </div>
         <code>tokprof stop</code>
         <span>
@@ -171,6 +186,24 @@ const demoReportUrl = `${base}demo/tokprof-sample.html`;
             ? "측정을 종료하고 터미널 요약표와 대화형 HTML 리포트(.tokprof/latest.html)를 확인합니다."
             : "Stops the session, prints the terminal breakdown, and writes the HTML report (.tokprof/latest.html)."}
         </span>
+      </div>
+    </div>
+
+    <div class="at-install-bar">
+      <div class="at-install-bar-cmds">
+        <span><strong>{isKo ? "빠른 실행 명령어:" : "Quick commands:"}</strong></span>
+        <code>uvx tokprof --lang ko</code>
+        <code>tokprof -- python my_agent.py</code>
+        <code>tokprof report --html --open</code>
+        <code>tokprof compare before.jsonl after.jsonl</code>
+      </div>
+      <div class="at-install-bar-links">
+        <a class="at-btn at-btn-primary" href={docUrl("agent-tokenomics/tokprof/")} style="padding:0.48rem 0.9rem;font-size:0.82rem">
+          {isKo ? "tokprof 설치 및 사용법 전체 보기 →" : "Full tokprof Install & Usage Guide →"}
+        </a>
+        <a class="at-btn at-btn-secondary" href="https://pypi.org/project/tokprof/" target="_blank" rel="noopener noreferrer" style="padding:0.48rem 0.9rem;font-size:0.82rem">
+          PyPI: tokprof ↗
+        </a>
       </div>
     </div>
 
@@ -698,6 +731,7 @@ Assistant: Patched boundary check (&gt;= 100); 14 passed.</pre>
           <li><a href={docUrl("agent-tokenomics/03-prove/")}><span>03. {isKo ? "반복 측정으로 원인 확인하기" : "Prove with Baseline"}</span><span>→</span></a></li>
           <li><a href={docUrl("agent-tokenomics/04-improve/")}><span>04. {isKo ? "원인에 맞게 개선하기" : "Targeted Fixes"}</span><span>→</span></a></li>
           <li><a href={docUrl("agent-tokenomics/05-result/")}><span>05. {isKo ? "결과 확인 후 유지 또는 되돌리기" : "Verify & Report"}</span><span>→</span></a></li>
+          <li><a href={docUrl("agent-tokenomics/tokprof/")}><span>06. {isKo ? "tokprof 설치 및 사용법 (PyPI)" : "tokprof: Install & Usage (PyPI)"}</span><span>→</span></a></li>
         </ul>
         <div>
           <a class="at-btn at-btn-secondary" href={docUrl("agent-tokenomics/")}>

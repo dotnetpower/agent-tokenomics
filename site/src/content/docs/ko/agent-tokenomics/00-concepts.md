@@ -9,7 +9,7 @@ sidebar:
 
 [문제 해결 단계](../01-diagnose/)를 시작하기 전에 이 페이지를 읽어 보세요. 이후 단계에서는 여기서 설명하는 개념을 바탕으로 토큰 비용을 진단합니다.
 
-## 1. 모델은 이전 호출을 기억하지 않습니다 (무상태 호출)
+## 1. 모델은 이전 호출을 기억하지 않습니다 (stateless)
 
 모델은 호출과 호출 사이의 내용을 기억하지 않습니다. 에이전트가 이전 내용을 기억하는 것처럼 보이는 이유는 지침, 도구 정의, 지금까지의 대화를 **요청마다 다시 보내기 때문**입니다. 따라서 토큰 비용은 사용자가 입력한 내용뿐 아니라 프레임워크가 **요청마다 함께 담아 보내는 내용**에도 크게 좌우됩니다.
 
@@ -80,6 +80,8 @@ input tokens ≈ n × prefix + Σ(history and tool results accumulated before ea
     그림 1. 에이전트 루프 단계가 진행될수록 고정 접두부(<code>n × prefix</code>)가 반복 전송되고 이전 단계의 대화 기록·도구 결과(<code>Σ</code>)가 누적되어 입력 토큰이 늘어나는 구조. 참조: <a href="https://arxiv.org/abs/2210.03629">ReAct (ICLR 2022)</a> 및 <a href="https://github.com/microsoft/TokenEconomizer">microsoft/TokenEconomizer</a>.
   </figcaption>
 </figure>
+
+**직접 만든 에이전트의 긴 컨텍스트 열화.** 대화 기록과 도구 결과가 쌓이면 모델은 컨텍스트의 중간에 묻힌 정보를 시작이나 끝에 있는 정보보다 덜 안정적으로 활용할 수 있습니다([Lost in the Middle](https://arxiv.org/abs/2307.03172)). [RULER](https://arxiv.org/abs/2404.06654)도 실제로 활용할 수 있는 컨텍스트 길이가 작업에 따라 달라지는지 평가합니다. 제한 없이 기록을 쌓으면 토큰 비용뿐 아니라 작업 정확도에도 영향을 줄 수 있으므로 직접 만든 에이전트에서 확인하세요.
 
 ## 4. 요금이 부과되는 토큰 유형
 
@@ -224,7 +226,7 @@ input tokens ≈ n × prefix + Σ(history and tool results accumulated before ea
 
 | 개념 | 발생하는 낭비 | 진단할 위치 |
 |------|---------------|-------------|
-| 무상태 호출의 재전송, 큰 접두부 | 고정 오버헤드, 프로젝트 정보를 반복해서 다시 파악 | [진단](../01-diagnose/), [원인 분리](../02-isolate/) |
+| stateless 재전송, 큰 접두부 | 고정 오버헤드, 프로젝트 정보를 반복해서 다시 파악 | [진단](../01-diagnose/), [원인 분리](../02-isolate/) |
 | 도구 정의 비용 | 사용하지 않는 도구 | [원인 분리](../02-isolate/) |
 | 도구 결과 비용 | 과도하게 큰 출력 | [개선](../04-improve/) |
 | 루프에 따른 비용 증가 | 실패 루프, 재시도 | [입증](../03-prove/) |
@@ -253,6 +255,8 @@ input tokens ≈ n × prefix + Σ(history and tool results accumulated before ea
 - [RULER: What's the Real Context Size of Your Long-Context Language Models?](https://arxiv.org/abs/2404.06654) — 프리프린트 2024, 인용 1,580회. 실제로 유효한 컨텍스트 길이가 공시된 윈도우보다 짧은 경우가 많음을 보여 주는 벤치마크입니다.
 
 ## 출처
+
+- [Lost in the Middle (arXiv:2307.03172)](https://arxiv.org/abs/2307.03172)
 
 - [openai/tiktoken — OpenAI 모델용 BPE 토크나이저](https://github.com/openai/tiktoken), [`examples/count_tokens.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/count_tokens.py)
 - [Azure OpenAI 프롬프트 캐싱](https://learn.microsoft.com/ko-kr/azure/ai-foundry/openai/how-to/prompt-caching), [Azure OpenAI 요금](https://azure.microsoft.com/ko-kr/pricing/details/cognitive-services/openai-service/)

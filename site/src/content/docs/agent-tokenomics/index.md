@@ -24,8 +24,13 @@ Diagnose → Isolate → Prove → Improve → Result
 | [4. Improve](04-improve/) | What targeted fix removes it? | One change, one experiment |
 | [5. Result](05-result/) | Did cost fall without hurting quality? | Keep / revert decision |
 
-Plus a [case study of TokenEconomizer](case-tokeneconomizer/), the [ranked paper list](../papers/) behind the fixes, and a runnable
+Plus [tokprof: Install & Usage](tokprof/), a [case study of TokenEconomizer](case-tokeneconomizer/), the [ranked paper list](../papers/) behind the fixes, and a runnable
 [measurement script](https://github.com/dotnetpower/agent-tokenomics/tree/main/examples).
+
+<figure class="at-doc-figure">
+  <img src="https://code.visualstudio.com/assets/docs/agents/concepts/agent-loop.png" alt="An agent repeatedly uses tools and their results to advance a task" loading="lazy" />
+  <figcaption>The agent loop: instructions, tools, conversation history, and tool results shape successive calls. Stages 0–5 diagnose and optimize their cost. Sources: <a href="https://code.visualstudio.com/docs/agents/concepts/agents">VS Code Docs — Agents Overview</a> and <a href="https://github.com/microsoft/TokenEconomizer">microsoft/TokenEconomizer</a>.</figcaption>
+</figure>
 
 ## What you need
 

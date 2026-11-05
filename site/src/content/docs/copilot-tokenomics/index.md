@@ -8,6 +8,18 @@ verified: 2026-11-03
 Track A is for people who **use** GitHub Copilot in VS Code. Every page follows the same shape:
 *Problem → Action → How to verify → Trade-offs*.
 
+Check your Copilot billing settings first; the best levers depend on your plan.
+
+| Billing model | What is charged | Start with |
+|---|---|---|
+| AI Credits (usage-based) | Input, cached input, and output tokens × their model rates | [Measure usage](02-measure-usage/), [context](03-context-hygiene/), and [tools](04-instructions-and-tools/) |
+| Legacy Premium Requests | Each prompt/turn × the model multiplier | [Billing](01-how-usage-is-charged/), [models](05-models-and-planning/), and [budget guards](08-agent-modes-and-budget/) |
+
+<figure class="at-doc-figure">
+  <img src="https://code.visualstudio.com/assets/docs/agents/concepts/context-assembly.png" alt="VS Code diagram showing how agent context is assembled" loading="lazy" />
+  <figcaption>Agent context is assembled from multiple sources. Source: <a href="https://code.visualstudio.com/docs/agents/concepts/context">VS Code Docs — Context in Agents</a>.</figcaption>
+</figure>
+
 | Page | Question it answers |
 |------|---------------------|
 | [How Copilot usage is charged](01-how-usage-is-charged/) | What am I actually spending? |

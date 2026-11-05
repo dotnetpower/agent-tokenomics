@@ -24,8 +24,13 @@ Diagnose → Isolate → Prove → Improve → Result
 | [4. 개선](04-improve/) | 원인에 맞는 어떤 변경으로 낭비를 줄일 수 있는가? | 변경 하나, 실험 하나 |
 | [5. 결과](05-result/) | 품질 저하 없이 비용이 줄었는가? | 유지 / 되돌리기 결정 |
 
-이 외에 [TokenEconomizer 사례 연구](case-tokeneconomizer/), 개선 방법의 근거가 되는 [논문 순위 목록](../papers/),
+이 외에 [tokprof: 설치 및 사용법](tokprof/), [TokenEconomizer 사례 연구](case-tokeneconomizer/), 개선 방법과 관련된 [논문 순위 목록](../papers/),
 실행 가능한 [측정 스크립트](https://github.com/dotnetpower/agent-tokenomics/tree/main/examples)도 제공합니다.
+
+<figure class="at-doc-figure">
+  <img src="https://code.visualstudio.com/assets/docs/agents/concepts/agent-loop.png" alt="에이전트가 도구와 그 결과를 반복해서 활용해 작업을 진행하는 과정" loading="lazy" />
+  <figcaption>에이전트 루프에서는 지침, 도구, 대화 기록, 도구 결과가 다음 모델 호출에 영향을 줍니다. 0–5단계에서 이 비용을 진단하고 최적화합니다. 출처: <a href="https://code.visualstudio.com/docs/agents/concepts/agents">VS Code Docs — Agents Overview</a>, <a href="https://github.com/microsoft/TokenEconomizer">microsoft/TokenEconomizer</a>.</figcaption>
+</figure>
 
 ## 준비물
 

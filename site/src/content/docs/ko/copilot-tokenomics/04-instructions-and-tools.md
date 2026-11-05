@@ -9,8 +9,8 @@ sidebar:
 
 ## 문제
 
-사용자 지정 지침과 사용 설정한 도구의 정의(MCP 서버의 도구 포함)는 **요청마다** 비용을 발생시킵니다.
-사용하지 않거나 불필요하게 큰 항목은 매번 드는 고정 비용과 같습니다.
+요청에 포함되는 사용자 지정 지침과 도구 정의는 반복적인 입력 비용을 발생시킵니다.
+사용하지 않거나 불필요하게 큰 항목은 고정 비용과 같습니다. 일부 도구 스키마는 필요할 때 로드할 수 있습니다([MCP 감사](../09-mcp-audit/) 참조).
 
 <figure class="at-doc-figure">
   <div class="at-diag-stack">
@@ -28,6 +28,11 @@ sidebar:
   <figcaption>측정 결과가 아닌 가상의 예시입니다. 변경 전 입력을 기준으로 고정 비용은 82%에서 22%로 줄고 작업은 18%로 유지되어, 변경 후 전체 입력은 기존의 40%가 됩니다. 작업 내용은 유지하면서 지침과 도구의 고정 비용을 줄이는 모습을 보여 주며, 실제 절감량은 다릅니다. 색상은 구성의 차이를 나타낼 뿐 캐시 적중 여부를 뜻하지 않습니다.</figcaption>
 </figure>
 
+<figure class="at-doc-figure">
+  <img src="https://code.visualstudio.com/assets/docs/agent-customization/customization/chat-customizations-editor-2.png" alt="VS Code의 에이전트 지침 설정을 보여 주는 채팅 사용자 지정 편집기" loading="lazy" />
+  <figcaption>VS Code에서 에이전트 사용자 지정을 관리합니다. 출처: <a href="https://code.visualstudio.com/docs/agent-customization/overview">VS Code Docs — Agent Customization Overview</a>.</figcaption>
+</figure>
+
 ## 조치
 
 **사용자 지정 지침**(`.github/copilot-instructions.md`, `*.instructions.md`, `AGENTS.md`)
@@ -39,7 +44,7 @@ sidebar:
   **필요 시 적용**(PR 검토처럼 가끔 쓰는 워크플로를 위한 스킬이나 메모)입니다.
 - 에이전트가 코드에서 쉽게 알아낼 수 있는 내용은 삭제합니다. 긴 스타일 가이드를 붙여 넣지 않습니다.
 - 지침에 사실을 한 번 적어 두면 에이전트가 세션마다 다시 찾을 필요가 없습니다.
-- `AGENTS.md`와 `copilot-instructions.md`에 중복된 내용은 합칩니다. 중복된 텍스트는 두 번 과금됩니다.
+- `copilot-instructions.md`, `AGENTS.md`, `CLAUDE.md`, `*.instructions.md`에 같은 규칙을 중복하지 마세요. 적용 대상 파일이 함께 주입되면 고정 접두부 토큰이 중복됩니다. 범위마다 기준이 되는 원본 하나만 유지하고 실제로 로드된 지침을 확인하세요.
 - 규칙은 간결하게 씁니다(군더더기 없는 선언형 규칙). 이 파일은 모든 요청에서 다시 전송됩니다.
 - 도구 선택 우선순위나 폴백 조건을 정의할 때는 **BPE 친화적 수식 표기법**(`조건 => 도구`, `상황 -> 조치`, `>` 우선순위 체인; [프롬프트와 출력 스타일](../06-prompt-and-output-style/#4-bpe-aligned-formula-notation) 참조)을 고려합니다. VS Code용 참고 사례로, [dotnetpower/code-context](https://github.com/dotnetpower/code-context)의 자동 로드 지침(`*.instructions.md`)을 106줄 줄글(9,127바이트, `o200k_base` 2,048토큰)에서 26줄 BPE 정렬 수식 명세(2,688바이트, 718토큰)로 변환했을 때 12개 엣지케이스 시나리오의 규칙 인식률 **100% (31/31)**를 유지하면서 매 턴 전송되는 지침 토큰을 **64.9%** 줄였습니다.
 

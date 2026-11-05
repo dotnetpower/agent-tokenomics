@@ -31,12 +31,18 @@ sidebar:
 
 If the spread between repetitions is larger than the effect, run more repetitions or choose a bigger target.
 
+### Cost measurements versus pass-rate guardrails
+
+For a deterministic fixed-prefix reduction, such as a **synthetic** 2,000-token drop, 3–5 repeats per task can establish the size of the token-count change if the observed spread is small; variable effects require checking the spread and repeating as needed. This is not enough to establish success-rate parity.
+
+For a 3–5 percentage-point change in Pass@1, use a substantially larger fixed task set and calculate a paired confidence interval or power analysis before deciding. A 20–50+ task subset can be an exploratory starting point, **not** a sufficient sample-size guarantee: small differences can require hundreds or more tasks depending on paired outcomes, desired power, and the equivalence margin. Report the uncertainty and leave the guardrail inconclusive when it is too wide ([Adding Error Bars to Evals](https://arxiv.org/abs/2411.00640)).
+
 ## When the fix is lossy (summaries, compaction)
 
 Compressing history cannot *guarantee* the same result; it can only be **shown** equivalent on your tasks.
 Define "equivalent" before running the experiment:
 
-1. **Success parity** — pass rate with compaction is not lower than baseline beyond noise (same tasks, ≥ 3 runs).
+1. **Success parity** — use the same tasks and enough observations that a paired confidence interval fits within the predeclared equivalence margin; otherwise the result is inconclusive.
 2. **Preserved facts** — list what must survive: decisions, constraints, file paths, error signatures,
    open TODOs. After compaction, ask questions whose answers are in that list and count correct recalls.
 3. **No new rework** — re-asked questions and repeated explorations per task do not increase.
