@@ -295,9 +295,15 @@ def main():
         jsonl = os.path.join(tmp, "out.jsonl")
         penv = None
         if args.tokprof:
-            src = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "src")
-            cmd = [sys.executable, "-m", "tokprof", "ebpf", "--pid", pids, "--out", jsonl, "--helper", helper]
-            penv = dict(os.environ, PYTHONPATH=src)
+            prof_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            candidates = [
+                os.path.join(prof_root, "target", "release", "tokprof"),
+                os.path.join(prof_root, "target", "debug", "tokprof"),
+                shutil.which("tokprof") or "",
+            ]
+            tokprof_bin = next((c for c in candidates if c and os.path.exists(c)), "tokprof")
+            cmd = [tokprof_bin, "ebpf", "--pid", pids, "--out", jsonl, "--helper", helper]
+            penv = dict(os.environ)
         h = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                              env=penv if args.tokprof else None)
         err_lines, out_lines = [], []

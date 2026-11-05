@@ -14,10 +14,10 @@ use std::time::Duration;
 pub const DEFAULT_OPENAI: &str = "https://api.openai.com/v1";
 pub const DEFAULT_ANTHROPIC: &str = "https://api.anthropic.com";
 
-const EMBED_HOOK_PY: &str = include_str!("../src/tokprof/boot/_tokprof_hook.py");
-const EMBED_SITECUSTOMIZE_PY: &str = include_str!("../src/tokprof/boot/sitecustomize.py");
-const EMBED_NODE_PRELOAD_JS: &str = include_str!("../src/tokprof/boot/node_preload.js");
-const EMBED_MITM_ADDON_PY: &str = include_str!("../src/tokprof/boot/mitm_addon.py");
+const EMBED_HOOK_PY: &str = include_str!("../boot/_tokprof_hook.py");
+const EMBED_SITECUSTOMIZE_PY: &str = include_str!("../boot/sitecustomize.py");
+const EMBED_NODE_PRELOAD_JS: &str = include_str!("../boot/node_preload.js");
+const EMBED_MITM_ADDON_PY: &str = include_str!("../boot/mitm_addon.py");
 
 const HANDLED_VARS: &[&str] = &[
     "OPENAI_BASE_URL",

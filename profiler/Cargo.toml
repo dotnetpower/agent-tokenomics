@@ -7,11 +7,11 @@ license = "MIT"
 
 [lib]
 name = "tokprof"
-path = "rust_src/lib.rs"
+path = "src/lib.rs"
 
 [[bin]]
 name = "tokprof"
-path = "rust_src/main.rs"
+path = "src/main.rs"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

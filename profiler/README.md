@@ -11,11 +11,10 @@ changing the agent's code and without installing anything into the agent's proje
 > Also: a Linux eBPF tap (`tokprof ebpf`) that captures LLM calls of **already-running** processes without restarting
 > or changing them, and `tokprof mitm` (mitmproxy local capture) for Windows and macOS.
 
-## Install (isolated, no dependency on your agent's project)
+## Install (standalone native Rust binary, no dependency on your agent's project)
 
 ```bash
-uv tool install ./profiler            # or: pipx install ./profiler
-uv tool install "./profiler[tiktoken]"  # better counting accuracy
+cargo install --path ./profiler        # installs the native `tokprof` binary (includes tiktoken BPE)
 ```
 
 ## Use

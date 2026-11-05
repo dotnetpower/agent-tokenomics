@@ -58,10 +58,10 @@ VS Code에서 GitHub Copilot을 사용하나요? 위 플랫폼은 Copilot을 계
 
 ## 코드 수정 없이 프로파일링하기: tokprof
 
-[`tokprof`](https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler)(초기 개발 단계, Python 3.9 이상, 에이전트 프로젝트에 의존하지 않음)는 이 도구로 시작한 에이전트에 대해 "각 요청에서 어느 부분이 토큰을 쓰는가"에 답합니다.
+[`tokprof`](https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler)(독립 실행형 네이티브 Rust 단일 바이너리, 에이전트 프로젝트에 의존하지 않음)는 이 도구로 시작하거나 연결한 에이전트에 대해 "각 요청에서 어느 부분이 토큰을 쓰는가"에 답합니다.
 
 ```bash
-uv tool install ./profiler            # 격리 설치, 에이전트 프로젝트에는 아무것도 추가되지 않습니다
+cargo install --path ./profiler                 # 네이티브 Rust 단일 바이너리 설치 (tiktoken BPE 내장, 에이전트 프로젝트에 아무것도 추가되지 않음)
 tokprof --lang ko                               # 상세 사용 가이드 및 예시 출력 (--lang ko | --lang en)
 tokprof start                                   # 백그라운드 프로파일링 시작 (Linux: 실행 중인 프로세스 및 Docker 자동 수집)
 tokprof stop                                    # 세션 종료 + 시각적 리포트 출력 + .tokprof/latest.html 생성
