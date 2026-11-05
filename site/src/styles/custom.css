@@ -37,11 +37,67 @@ header.header {
 .sl-markdown-content table {
   display: table;
   width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.65rem;
+  overflow: hidden;
+  font-size: 0.86rem;
+  line-height: 1.48;
+}
+
+.sl-markdown-content th {
+  background: var(--sl-color-gray-6);
+  color: var(--sl-color-white);
+  font-weight: 700;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--sl-color-gray-4);
 }
 
 .sl-markdown-content th,
 .sl-markdown-content td {
-  padding: 0.55rem 0.65rem;
+  padding: 0.5rem 0.65rem;
+  vertical-align: top;
+  border-bottom: 1px solid color-mix(in srgb, var(--sl-color-gray-5) 75%, transparent);
+}
+
+.sl-markdown-content tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--sl-color-gray-6) 45%, transparent);
+}
+
+.sl-markdown-content tbody tr:hover td {
+  background: color-mix(in srgb, var(--sl-color-accent-low) 45%, transparent);
+}
+
+.sl-markdown-content table code:not(:where(.expressive-code *)) {
+  font-size: 0.78rem;
+  padding: 0.1rem 0.32rem;
+  word-break: break-word;
+}
+
+/* Dense tables (5+ columns): compact font, tighter padding, and preserved first-column IDs */
+.sl-markdown-content table:has(th:nth-child(5)),
+.sl-markdown-content table:has(th:nth-child(5)) td {
+  font-size: 0.75rem !important;
+  line-height: 1.38 !important;
+}
+
+.sl-markdown-content table:has(th:nth-child(5)) th {
+  font-size: 0.72rem !important;
+  padding: 0.38rem 0.45rem !important;
+}
+
+.sl-markdown-content table:has(th:nth-child(5)) td {
+  padding: 0.36rem 0.45rem !important;
+}
+
+.sl-markdown-content table:has(th:nth-child(5)) td:first-child {
+  white-space: nowrap;
+}
+
+.sl-markdown-content table:has(th:nth-child(5)) code:not(:where(.expressive-code *)) {
+  font-size: 0.7rem !important;
+  padding: 0.05rem 0.24rem !important;
 }
 
 .sidebar-content,
@@ -84,10 +140,14 @@ header.header {
 
 .at-doc-figure {
   margin: 1.5rem 0;
-  padding: 1.1rem 1.25rem;
+  padding: 1.15rem 1.35rem;
   border: 1px solid var(--sl-color-gray-5);
   border-radius: 1rem;
   background: var(--sl-color-gray-6);
+}
+
+.at-doc-figure :where(div, span, p, img, pre) {
+  margin-top: 0 !important;
 }
 
 .at-doc-figure-grid {
@@ -98,7 +158,7 @@ header.header {
 }
 
 .at-doc-figure figcaption {
-  margin-top: 0.75rem;
+  margin-top: 0.85rem !important;
   color: var(--sl-color-gray-2);
   font-size: 0.82rem;
   line-height: 1.55;
@@ -109,7 +169,7 @@ header.header {
   display: flex;
   flex-direction: column;
   gap: 0.7rem;
-  padding: 0.9rem 1rem;
+  padding: 0.95rem 1.1rem;
   border: 1px solid var(--sl-color-gray-5);
   border-radius: 0.75rem;
   background: var(--sl-color-black);
@@ -123,7 +183,7 @@ header.header {
 }
 
 .at-tok-label {
-  min-width: 11.5rem;
+  min-width: 12rem;
   font: 700 0.76rem/1.3 var(--sl-font-mono);
   color: var(--sl-color-gray-2);
 }
@@ -131,71 +191,90 @@ header.header {
 .at-tok-chip {
   display: inline-flex;
   align-items: center;
-  padding: 0.2rem 0.5rem;
+  padding: 0.22rem 0.52rem;
   border-radius: 0.38rem;
   font: 600 0.8rem/1.35 var(--sl-font-mono);
   border: 1px solid transparent;
   white-space: pre;
 }
 
-.at-tok-chip.c1 { background: rgb(59 130 246 / 16%); border-color: rgb(59 130 246 / 40%); color: var(--sl-color-white); }
-.at-tok-chip.c2 { background: rgb(16 185 129 / 16%); border-color: rgb(16 185 129 / 40%); color: var(--sl-color-white); }
-.at-tok-chip.c3 { background: rgb(168 85 247 / 16%); border-color: rgb(168 85 247 / 40%); color: var(--sl-color-white); }
-.at-tok-chip.c4 { background: rgb(245 158 11 / 16%); border-color: rgb(245 158 11 / 40%); color: var(--sl-color-white); }
-.at-tok-chip.c5 { background: rgb(236 72 153 / 16%); border-color: rgb(236 72 153 / 40%); color: var(--sl-color-white); }
-.at-tok-chip.c-byte { background: rgb(239 68 68 / 15%); border-color: rgb(239 68 68 / 45%); color: var(--sl-color-white); font-size: 0.74rem; }
+.at-tok-chip.c1 { background: rgb(71 118 182 / 16%); border-color: rgb(71 118 182 / 38%); color: var(--sl-color-white); }
+.at-tok-chip.c2 { background: rgb(47 122 106 / 16%); border-color: rgb(47 122 106 / 38%); color: var(--sl-color-white); }
+.at-tok-chip.c3 { background: rgb(118 88 152 / 16%); border-color: rgb(118 88 152 / 38%); color: var(--sl-color-white); }
+.at-tok-chip.c4 { background: rgb(180 126 60 / 16%); border-color: rgb(180 126 60 / 38%); color: var(--sl-color-white); }
+.at-tok-chip.c5 { background: rgb(162 84 116 / 16%); border-color: rgb(162 84 116 / 38%); color: var(--sl-color-white); }
+.at-tok-chip.c-byte { background: rgb(168 74 88 / 16%); border-color: rgb(168 74 88 / 42%); color: var(--sl-color-white); font-size: 0.74rem; }
 
 /* Agent Loop & Cache Prefix Diagrams for Track B */
 .at-diag-stack {
   display: flex;
   flex-direction: column;
-  gap: 0.65rem;
-  padding: 1rem 1.1rem;
+  gap: 0.75rem;
+  padding: 1.05rem 1.2rem;
   border: 1px solid var(--sl-color-gray-5);
-  border-radius: 0.75rem;
+  border-radius: 0.8rem;
   background: var(--sl-color-black);
 }
 
 .at-diag-row {
   display: grid;
-  grid-template-columns: 7.5rem minmax(0, 1fr) 5.5rem;
+  grid-template-columns: 8.5rem minmax(0, 1fr) 6.5rem;
   align-items: center;
-  gap: 0.65rem;
-  font: 600 0.76rem/1.3 var(--sl-font-mono);
+  gap: 0.75rem;
+  font: 600 0.78rem/1.35 var(--sl-font-mono);
+  color: var(--sl-color-gray-2);
+}
+
+.at-diag-row > span:last-child {
+  text-align: right;
+  white-space: nowrap;
 }
 
 .at-diag-bar {
   display: flex;
-  height: 1.75rem;
-  border-radius: 0.4rem;
+  align-items: stretch;
+  height: 2.25rem;
+  border-radius: 0.5rem;
   overflow: hidden;
-  border: 1px solid var(--sl-color-gray-5);
-  background: var(--sl-color-gray-6);
+  border: 1px solid color-mix(in srgb, var(--sl-color-gray-4) 55%, transparent);
+  background: color-mix(in srgb, var(--sl-color-gray-6) 85%, transparent);
+  box-shadow: inset 0 1px 2px rgb(15 23 42 / 8%);
 }
 
 .at-diag-seg {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0 0.45rem;
-  color: #ffffff;
-  font: 600 0.68rem/1 var(--sl-font-mono);
+  height: 100%;
+  margin: 0 !important;
+  padding: 0 0.65rem;
+  color: #f8fafc;
+  font: 600 0.74rem/1.2 var(--sl-font-mono);
+  letter-spacing: 0.01em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  border-right: 1px solid rgb(255 255 255 / 16%);
 }
 
-.at-diag-seg.seg-prefix { background: #245e63; }
-.at-diag-seg.seg-hist { background: #2b6cb0; }
-.at-diag-seg.seg-tool { background: #a84268; }
-.at-diag-seg.seg-user { background: #296e48; }
-.at-diag-seg.seg-hit { background: #15803d; }
-.at-diag-seg.seg-miss { background: #b91c1c; }
+.at-diag-seg:last-child {
+  border-right: 0;
+}
+
+.at-diag-seg.seg-prefix { background: linear-gradient(135deg, #2b5866, #366b7c); color: #f0f9ff; }
+.at-diag-seg.seg-hist   { background: linear-gradient(135deg, #415a77, #526f91); color: #f1f5f9; }
+.at-diag-seg.seg-tool   { background: linear-gradient(135deg, #5e4b7a, #725b91); color: #faf5ff; }
+.at-diag-seg.seg-user   { background: linear-gradient(135deg, #3b5378, #4b6894); color: #eff6ff; }
+.at-diag-seg.seg-hit    { background: linear-gradient(135deg, #28665b, #327a6d); color: #ecfdf5; }
+.at-diag-seg.seg-miss   { background: linear-gradient(135deg, #7c3f4e, #914b5c); color: #fff1f2; }
 
 @media (max-width: 640px) {
   .at-diag-row {
     grid-template-columns: 1fr;
-    gap: 0.25rem;
+    gap: 0.3rem;
+  }
+  .at-diag-row > span:last-child {
+    text-align: left;
   }
 }
 
@@ -1494,6 +1573,34 @@ html:has(.at-landing) main > .content-panel > .sl-container {
   gap: 0.55rem;
 }
 
+.at-faq-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.at-faq-item {
+  padding: 1.2rem 1.35rem;
+  border-radius: 1rem;
+  border: 1px solid var(--sl-color-gray-5);
+  background: var(--sl-color-gray-6);
+}
+
+.at-faq-item h3 {
+  margin: 0 0 0.45rem;
+  font-size: 1rem;
+  font-weight: 750;
+  color: var(--sl-color-white);
+  line-height: 1.38;
+}
+
+.at-faq-item p {
+  margin: 0;
+  font-size: 0.86rem;
+  color: var(--sl-color-gray-2);
+  line-height: 1.62;
+}
+
 /* Responsive Breakpoints */
 @media (max-width: 1120px) {
   .at-hero {
@@ -1521,6 +1628,9 @@ html:has(.at-landing) main > .content-panel > .sl-container {
     grid-template-columns: 1fr;
   }
   .at-tracks-grid {
+    grid-template-columns: 1fr;
+  }
+  .at-faq-grid {
     grid-template-columns: 1fr;
   }
   .at-stage-steps {

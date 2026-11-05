@@ -26,6 +26,7 @@ sidebar:
    프롬프트 시그니처(시스템 지침, 도구 정의, 메시지)에서 *처음 달라진 지점*을 확인할 수 있습니다.
 6. **맞춤 팁** — 채팅 세션에서 `/chronicle:cost-tips`를 실행하면 최근 활동을 바탕으로 한 권장 사항을 받을 수 있습니다. Chronicle cost-tips 참가자가 활성화된 최신 VS Code / Copilot Chat 빌드가 필요합니다. 사용할 수 없다면 Agent Debug Logs → **Summary**와 **Cache Explorer**를 직접 이용하세요.
 7. **모델 비용** — 모델 선택기에 마우스를 올리면 토큰 유형별 비용과 Low / Medium / High 등급이 표시됩니다.
+8. **실시간 코드 탐색 및 멀티 세션 절감 대시보드(`cctx`)** — VS Code Marketplace에서 [Code Context (`cctx`) 확장](../cctx/)(`dotnetpower.code-context-native`)을 설치하면, 하단 상태 표시줄의 `CCTX N` 배지 호버 툴팁이나 터미널의 `cctx usage --hours 24` 명령으로 최근 세션 전체의 모델별 토큰 소비, 프롬프트 캐시 적중률, 탐색 속도, 추정 절감 금액(AIC/USD)을 바로 확인할 수 있습니다.
 
 <figure class="at-doc-figure">
   <div class="at-doc-figure-grid">

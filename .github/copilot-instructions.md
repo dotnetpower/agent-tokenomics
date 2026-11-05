@@ -25,6 +25,7 @@ site/                        # Astro Starlight project (astro.config.mjs, packag
       agent-tokenomics/
       glossary.md
 examples/                    # optional measurement scripts / sample logs, referenced by docs
+llms.txt                     # llmstxt.org structured index (synced to site/public/llms.txt; build emits dist/llms-full.txt)
 .github/workflows/pages.yml  # build + deploy to GitHub Pages
 .github/copilot-instructions.md
 README.md                    # English landing page; README.ko.md for Korean
@@ -37,7 +38,7 @@ README.md                    # English landing page; README.ko.md for Korean
 - Front matter follows Starlight's schema (`title`, `description`, optional `sidebar.order`); add `track` (`copilot` | `agent`) and `stage` (Track B only) as custom fields only if declared in `content.config.ts`. Put "verified on" dates and sources in the page body (a **Sources** section).
 - Internal links must include the locale prefix and the site base path; use relative links where possible so both locales work.
 - Sidebar entries are defined in `astro.config.mjs` with Starlight `translations` for Korean labels; update them whenever a page is added.
-- Validate locally with `npm --prefix site ci && npm --prefix site run build` before committing site changes.
+- Validate locally with `npm --prefix site ci && npm --prefix site run check:pairs -- --strict && npm --prefix site run build && npm --prefix site run check:seo` before committing site changes.
 
 ## Track A – VS Code GitHub Copilot
 

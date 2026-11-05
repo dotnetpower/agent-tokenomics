@@ -1,11 +1,11 @@
 ---
-title: "Copilot 토큰 이코노믹스"
-description: "VS Code에서 GitHub Copilot을 사용할 때 토큰과 AI 크레딧을 절약하는 방법입니다."
+title: "Copilot 토큰 이코노믹스 (Tokenomics · Token Economics)"
+description: "VS Code GitHub Copilot을 위한 실전 토큰 이코노믹스(Token Economics, 토큰 경제학): 토큰과 AI 크레딧 절약, 컨텍스트·MCP 최적화, cctx 개발 가속."
 track: copilot
 verified: 2026-11-03
 ---
 
-Track A는 VS Code에서 GitHub Copilot을 **사용하는** 개발자를 위한 가이드입니다. 각 페이지는 *문제 → 조치 → 확인 방법 → 트레이드오프* 순서로 설명합니다.
+Track A는 VS Code에서 GitHub Copilot을 **사용하는** 개발자를 위한 **Copilot 토큰 이코노믹스(Tokenomics · Token Economics)** 가이드입니다. 각 페이지는 *문제 → 조치 → 확인 방법 → 트레이드오프* 순서로 설명합니다.
 
 먼저 Copilot 청구 설정에서 사용 중인 플랜을 확인하세요. 과금 방식에 따라 우선할 절약 방법이 다릅니다.
 
@@ -31,6 +31,7 @@ Track A는 VS Code에서 GitHub Copilot을 **사용하는** 개발자를 위한 
 | [에이전트 모드와 예산 가드](08-agent-modes-and-budget/) | Ask, Plan, Agent는 어떻게 다르며 반복 실행을 어떻게 제한하는가? |
 | [MCP 점검](09-mcp-audit/) | 어떤 도구 서버를 계속 사용 설정해 둘 것인가? |
 | [체크리스트](10-checklist/) | 한 페이지로 정리한 점검 루틴입니다. |
+| [cctx: VS Code 토큰 절감 및 개발 가속](cctx/) | VS Code Marketplace 확장으로 탐색 토큰을 줄이고 개발 속도와 실시간 절감액을 확인하려면? |
 | [리소스](../resources/) | 알아 두면 좋은 도구와 리포지토리입니다. |
 | [논문](../papers/) | 이 전략의 바탕이 되는 연구를 신뢰도 순으로 정리했습니다. |
 

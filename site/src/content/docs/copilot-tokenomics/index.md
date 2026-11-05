@@ -1,11 +1,11 @@
 ---
-title: Copilot Tokenomics
-description: Save tokens and AI credits when using GitHub Copilot in VS Code.
+title: "Copilot Tokenomics (Token Economics)"
+description: "Practical tokenomics and token economics for GitHub Copilot in VS Code: save tokens and AI credits, trim context and MCP overhead, and speed up coding with cctx."
 track: copilot
 verified: 2026-11-03
 ---
 
-Track A is for people who **use** GitHub Copilot in VS Code. Every page follows the same shape:
+Track A covers **Copilot Tokenomics (token economics)** for developers who **use** GitHub Copilot in VS Code. Every page follows the same shape:
 *Problem → Action → How to verify → Trade-offs*.
 
 Check your Copilot billing settings first; the best levers depend on your plan.
@@ -32,6 +32,7 @@ Check your Copilot billing settings first; the best levers depend on your plan.
 | [Agent modes and budget guards](08-agent-modes-and-budget/) | Ask vs Plan vs Agent; how do I bound the loop? |
 | [MCP audit](09-mcp-audit/) | Which tool servers should stay enabled? |
 | [Checklist](10-checklist/) | A one-page routine. |
+| [cctx: VS Code Token Saver & Accelerator](cctx/) | How do I cut lookup tokens, speed up coding tasks, and see live AIC/USD savings in VS Code? |
 | [Resources](../resources/) | Tools and repos worth knowing. |
 | [Papers](../papers/) | Research behind these tactics, ranked by authority. |
 

@@ -1,13 +1,13 @@
 ---
-title: "0. Concepts: how an agent spends tokens"
-description: The mental model you need before diagnosing - request anatomy, the agent loop, pricing dimensions, caching, and context.
+title: "0. Concepts: Tokenomics & Token Economics for LLM Agents"
+description: "Core concepts of LLM tokenomics and token economics: stateless re-sending, request anatomy, agent loop fan-out, pricing dimensions, prompt caching, and context rot."
 track: agent
 verified: 2026-11-03
 sidebar:
   order: 0
 ---
 
-Read this once before the [troubleshooting stages](../01-diagnose/). Every later page assumes these ideas.
+Read this once before the [troubleshooting stages](../01-diagnose/). Every later page assumes these **LLM tokenomics (token economics)** fundamentals.
 
 ## 1. A model call is stateless
 

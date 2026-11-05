@@ -24,8 +24,10 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/dotnetpower/agent-tokenomics"
+Homepage = "https://dotnetpower.github.io/agent-tokenomics/"
+Documentation = "https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/tokprof/"
 Repository = "https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler"
+Issues = "https://github.com/dotnetpower/agent-tokenomics/issues"
 
 [tool.maturin]
 bindings = "bin"

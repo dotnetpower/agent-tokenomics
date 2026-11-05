@@ -57,6 +57,9 @@ export default defineConfig({
         ko: { label: "한국어", lang: "ko" },
       },
       customCss: ["./src/styles/custom.css"],
+      components: {
+        Head: "./src/components/Head.astro",
+      },
       social: [
         {
           icon: "github",

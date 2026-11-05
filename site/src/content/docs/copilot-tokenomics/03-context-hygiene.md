@@ -36,6 +36,7 @@ window is full. Cost and quality both argue for **as little context as the task 
 | Long session you still need | Run `/compact` (optionally `/compact focus on the API design decisions`) to summarize older turns. |
 | You know the relevant code | **#-mention** the file, folder, or symbol rather than letting the agent search broadly. |
 | You need codebase search | `#codebase` runs a search; it does **not** add the whole codebase to context. |
+| Repeated `grep` + `view` loops slow down tasks and bloat history | Install [Code Context (`cctx`)](../cctx/) from the VS Code Marketplace so Copilot uses single-call, block-clamped `#cctxNativeContext` lookups (`<8 KiB` inline budget; 15.20× faster warm retrieval and 24.7% faster task completion, as reported). |
 | Noisy search results (logs, build output, generated files) | Exclude them: `.gitignore` (index + agent search), `files.exclude` (hide entirely), `search.exclude` (hide from agent search only). |
 | Web reference | Use `#fetch` with a URL only when needed; fetched pages enter the context. |
 | Independent research | Delegate to a **subagent** so the exploration stays out of the main conversation. |

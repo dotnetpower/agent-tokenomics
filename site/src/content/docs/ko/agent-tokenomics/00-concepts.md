@@ -1,13 +1,13 @@
 ---
-title: "0. 개념: 에이전트는 토큰을 어떻게 쓰는가"
-description: 토큰 비용을 진단하기 전에 요청 구성, 에이전트 루프, 과금, 캐싱, 컨텍스트의 기본 개념을 살펴봅니다.
+title: "0. 개념: LLM 에이전트 토큰 이코노믹스(Token Economics)의 원리"
+description: "LLM 토큰 이코노믹스(Tokenomics · Token Economics, 토큰 경제학)의 핵심 개념인 stateless 재전송, 요청 구성, 에이전트 루프, 과금 차원, 프롬프트 캐싱, 컨텍스트 열화를 살펴봅니다."
 track: agent
 verified: 2026-11-03
 sidebar:
   order: 0
 ---
 
-[문제 해결 단계](../01-diagnose/)를 시작하기 전에 이 페이지를 읽어 보세요. 이후 단계에서는 여기서 설명하는 개념을 바탕으로 토큰 비용을 진단합니다.
+[문제 해결 단계](../01-diagnose/)를 시작하기 전에 이 페이지를 읽어 보세요. 이후 단계에서는 여기서 설명하는 **LLM 토큰 이코노믹스(Tokenomics · Token Economics, 토큰 경제학)** 개념을 바탕으로 토큰 비용을 진단합니다.
 
 ## 1. 모델은 이전 호출을 기억하지 않습니다 (stateless)
 

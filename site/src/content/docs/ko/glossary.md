@@ -1,12 +1,13 @@
 ---
-title: 용어집
-description: agent-tokenomics 전반에서 사용하는 용어입니다(영어 ↔ 한국어).
+title: "토큰 이코노믹스(Tokenomics) 용어집"
+description: "토큰 이코노믹스(Token Economics, 토큰 경제학), 프롬프트 캐싱, 컨텍스트 윈도우, 도구 가지치기 등 LLM 에이전트 비용 용어 사전입니다(영어 ↔ 한국어)."
 sidebar:
   order: 99
 ---
 
 | English | 한국어 | 설명 |
 |---------|--------|------|
+| tokenomics / token economics | 토큰 이코노믹스 / 토큰 경제학 | 응답 품질을 유지하면서 LLM 요청과 AI 에이전트 루프 전반의 토큰 과금, 예산, 캐싱, 컨텍스트 효율을 측정하고 최적화하는 엔지니어링 분야입니다. |
 | token | 토큰 | 모델이 읽거나 쓰는 텍스트 단위이며, 사용량 기반 과금의 기준입니다. |
 | input / output tokens | 입력 / 출력 토큰 | 모델에 보내는 토큰 / 모델이 생성하는 토큰입니다. |
 | context window | 컨텍스트 윈도우 | 모델이 한 번의 요청에서 처리할 수 있는 최대 토큰 수입니다. |

@@ -1,11 +1,11 @@
 ---
-title: Agent Tokenomics
-description: LLM 에이전트의 토큰 비용을 줄이기 위한 문제 해결 절차입니다.
+title: "에이전트 토큰 이코노믹스 (Tokenomics · Token Economics)"
+description: "LLM 에이전트의 토큰 이코노믹스(Token Economics, 토큰 경제학) 6단계 문제 해결 절차와 tokprof 프로파일링 및 골든 데이터셋 평가 가이드입니다."
 track: agent
 verified: 2026-11-03
 ---
 
-Track B는 LLM 에이전트를 **직접 만들거나 운영하는** 엔지니어를 위한 가이드입니다. 토큰 비용이 높은 상황을
+Track B는 LLM 에이전트를 **직접 만들거나 운영하는** 엔지니어를 위한 **에이전트 토큰 이코노믹스(Agent Tokenomics · Token Economics)** 가이드입니다. 토큰 비용이 높은 상황을
 운영 장애처럼 다룹니다. 추측에 의존하지 말고 절차에 따라 원인을 확인하세요.
 
 처음이라면 에이전트가 토큰을 쓰는 방식을 설명하는 [0. 개념](00-concepts/)부터 읽은 다음 절차를 따라가세요.
@@ -23,6 +23,7 @@ Diagnose → Isolate → Prove → Improve → Result
 | [3. 입증](03-prove/) | 그 원인이 실제로 존재하며 규모는 얼마인가? | 재현하고 수치화한 낭비 |
 | [4. 개선](04-improve/) | 원인에 맞는 어떤 변경으로 낭비를 줄일 수 있는가? | 변경 하나, 실험 하나 |
 | [5. 결과](05-result/) | 품질 저하 없이 비용이 줄었는가? | 유지 / 되돌리기 결정 |
+| [6. 골든 데이터셋과 루브릭 평가](06-golden-dataset-and-rubric/) | 단일·멀티턴 정답(키워드·의도)과 품질을 어떻게 채점하는가? | 엑셀(CSV) 평가셋 및 하이브리드 루브릭 |
 
 이 외에 [tokprof: 설치 및 사용법](tokprof/), [TokenEconomizer 사례 연구](case-tokeneconomizer/), 개선 방법과 관련된 [논문 순위 목록](../papers/),
 실행 가능한 [측정 스크립트](https://github.com/dotnetpower/agent-tokenomics/tree/main/examples)도 제공합니다.

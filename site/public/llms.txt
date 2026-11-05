@@ -1,0 +1,84 @@
+# agent-tokenomics — Tokenomics & Token Economics for LLMs & AI Agents
+
+> Practical bilingual (English / Korean) **tokenomics (token economics)** engineering guide to reducing LLM token consumption and accelerating coding workflows without degrading answer or task quality. Covers Track A (everyday VS Code GitHub Copilot tokenomics + `cctx` Marketplace extension), Track B (a 6-stage agent tokenomics troubleshooting procedure: Diagnose → Isolate → Prove → Improve → Result → Golden Dataset Rubric), and `tokprof` (`pip install tokprof`), a standalone zero-code native Rust token profiler. Inspired by [microsoft/TokenEconomizer](https://github.com/microsoft/TokenEconomizer).
+
+## Key Facts
+
+- **Documentation site (English)**: <https://dotnetpower.github.io/agent-tokenomics/>
+- **Documentation site (Korean / 한국어)**: <https://dotnetpower.github.io/agent-tokenomics/ko/>
+- **GitHub repository**: <https://github.com/dotnetpower/agent-tokenomics>
+- **`tokprof` on PyPI**: <https://pypi.org/project/tokprof/> (`pip install tokprof` / `uv tool install tokprof` / `uvx tokprof`)
+- **`Code Context (cctx)` on VS Code Marketplace**: <https://marketplace.visualstudio.com/items?itemName=dotnetpower.code-context-native> (`code --install-extension dotnetpower.code-context-native`) — cuts lookup payload tokens by 73.2–91.3%, accelerates warm code retrieval by 15.20×, reduces end-to-end coding agent task completion time by 24.7% (as reported), and displays live AIC/USD savings in the VS Code status bar and `cctx usage --hours 24`.
+- **License**: MIT
+- **Core rule (Rule Zero)**: A token reduction only counts when task success rate and answer quality hold. Always measure cost alongside a quality guardrail.
+- **Reported benchmark reference**: [microsoft/TokenEconomizer](https://github.com/microsoft/TokenEconomizer) reports **18.4–30.9% lower mean cost** on SWE-Bench across 5 agent–model combinations using experience-driven micro-skills, tool pruning, and failure-loop intervention.
+
+## `tokprof` — Zero-Code LLM Agent Token Profiler
+
+`tokprof` is a standalone native Rust single-binary profiler that decomposes the input tokens of every LLM request into **system prompt**, **conversation history**, **current user prompt**, and **tool definitions / calls / results** per session, turn, and call — without modifying agent code.
+
+- **Install**: `pip install tokprof` or `uv tool install tokprof` or `uvx tokprof` (prebuilt wheels for Linux `x86_64`/`aarch64`, macOS `arm64`/`x86_64`, Windows `x64`).
+- **Capture modes**: Linux eBPF TLS uprobes (attaches to already-running host processes and Docker containers with zero config), local reverse-proxy gateway (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `AZURE_OPENAI_ENDPOINT`), Python `sitecustomize` hooks (`httpx`, `requests`, `urllib3`, `aiohttp`), Node `--require` hooks (`fetch`, `http`/`https`), and `mitmproxy` addon.
+- **Quick commands**:
+  - `tokprof start` — start background session (auto-attaches eBPF on supported Linux hosts)
+  - `tokprof status` — inspect active session and recorded LLM call count
+  - `tokprof stop` — stop session, print terminal breakdown, and generate `.tokprof/latest.html`
+  - `tokprof -- python my_agent.py` — profile a single command end-to-end
+  - `tokprof compare before.jsonl after.jsonl` — compare per-request token delta with a 95% bootstrap confidence interval
+  - `tokprof --lang ko` — full CLI usage guide in Korean
+
+## Track A — VS Code GitHub Copilot Tokenomics
+
+Every page follows *Problem → Action → How to verify → Trade-offs*:
+
+- [Copilot Tokenomics Overview](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/): AI Credits (usage-based token billing) vs. legacy Premium Request multipliers.
+- [01. How Copilot Usage Is Charged](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/01-how-usage-is-charged/): Billing dimensions (input, cached input, output tokens, model multipliers).
+- [02. Measure Your Usage](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/02-measure-usage/): Inspect per-request token usage with VS Code Agent Debug Logs and Chat Debug View.
+- [03. Keep Context Lean](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/03-context-hygiene/): New chat per task, `/fork`, `/compact`, `#file`/`#selection` scoping, and workspace exclusions.
+- [04. Instructions and Tools](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/04-instructions-and-tools/): Trim always-on `copilot-instructions.md`, scope `*.instructions.md` with `applyTo`, and prune unused tools.
+- [05. Models, Planning, Delegation](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/05-models-and-planning/): Cost per completed task, Plan-first workflows, and subagent context isolation.
+- [06. Prompt and Output Style](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/06-prompt-and-output-style/): Concise structured prompts, BPE-aligned formula prompts, and bounding output length.
+- [07. Language and Tokenization](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/07-language-and-tokenization/): Why non-English text costs more BPE tokens and how to measure across languages (`examples/count_tokens.py`, `examples/formula_prompt.py`).
+- [08. Agent Modes and Budget Guards](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/08-agent-modes-and-budget/): Ask vs. Edit vs. Plan vs. Agent mode, loop limits, and reasoning effort controls.
+- [09. MCP Audit](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/09-mcp-audit/): Auditing MCP server schema overhead (`tool schema tokens × steps`) and workspace-scoped enabling.
+- [10. Checklist](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/10-checklist/): One-page operational checklist prioritized by impact.
+- [cctx: VS Code Copilot Token Saver & Accelerator](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/cctx/): Install `dotnetpower.code-context-native` from the VS Code Marketplace to replace multi-turn `grep` + `view` loops with single-call block-clamped lookups (`#cctxNativeContext`, `#cctxNativeRead`), accelerate development speed (`15.20×` faster retrieval, `-61.9%` tool calls, `-26.7%` turns, `-24.7%` task wall time), and inspect live per-model AIC/USD savings in the VS Code status bar and `cctx usage --hours 24`.
+
+## Track B — LLM Agent Token Troubleshooting
+
+Treat high agent token cost like a production incident — measure first and change one variable per experiment:
+
+- [Agent Tokenomics Overview](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/): The 6-stage troubleshooting loop and Rule Zero.
+- [00. Concepts: How an Agent Spends Tokens](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/00-concepts/): Stateless re-sending, request anatomy, agent loop fan-out, prompt caching prefixes, context rot, and tool costs.
+- [01. Diagnose the Current State](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/01-diagnose/): Measure baseline input/output/cached tokens, first-call fixed overhead, and turn growth curves.
+- [02. Isolate the Problem](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/02-isolate/): Attribute cost to re-learned repo facts, unused tools, failure loops, bloated tool outputs, history growth, or model tier.
+- [03. Prove the Problem](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/03-prove/): Reproduce waste on a frozen task set and quantify confidence across repeat runs.
+- [04. Improve](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/04-improve/): Apply one targeted fix per experiment (micro-skills, tool pruning, loop guards, output truncation, history compaction, prompt-cache prefix stability).
+- [05. Result](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/05-result/): Re-measure cost, task success rate, and latency against baseline to decide keep or revert.
+- [06. Golden Dataset and Rubric Evaluation](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/06-golden-dataset-and-rubric/): Excel/CSV golden datasets, hybrid keyword + intent grading, and bias-resistant multi-turn rubrics (`examples/golden_dataset_tool.py`).
+- [tokprof: Install & Usage](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/tokprof/): Complete installation, CLI workflow, capture modes, and HTML Edition Dossier guide.
+- [Case Study: TokenEconomizer](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/case-tokeneconomizer/): How `microsoft/TokenEconomizer` maps to Stages 1–5.
+
+## Reference & Research
+
+- [Resources](https://dotnetpower.github.io/agent-tokenomics/resources/): Curated open-source repositories, tools, and official provider documentation for saving tokens.
+- [Papers](https://dotnetpower.github.io/agent-tokenomics/papers/): 75 peer-reviewed papers and preprints on prompt compression, KV/prompt caching, routing, tool pruning, and agent efficiency, ranked by venue tier and citations.
+- [Glossary (English ↔ Korean)](https://dotnetpower.github.io/agent-tokenomics/glossary/): Standardized bilingual terminology used across the guides.
+- [Interactive `tokprof` HTML Report Sample](https://dotnetpower.github.io/agent-tokenomics/demo/tokprof-sample.html): Live browser preview of a synthetic 7-call `.tokprof/latest.html` Edition Dossier.
+
+## Korean Documentation (한국어 문서)
+
+- [한국어 홈 (Korean Home)](https://dotnetpower.github.io/agent-tokenomics/ko/)
+- [트랙 A: Copilot 토큰 이코노믹스](https://dotnetpower.github.io/agent-tokenomics/ko/copilot-tokenomics/)
+- [cctx: VS Code Copilot 토큰 절감 및 개발 가속](https://dotnetpower.github.io/agent-tokenomics/ko/copilot-tokenomics/cctx/)
+- [트랙 B: 에이전트 토큰 이코노믹스](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/)
+- [tokprof: 설치 및 사용법](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/tokprof/)
+- [6. 골든 데이터셋과 루브릭 평가](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/06-golden-dataset-and-rubric/)
+- [사례 연구: TokenEconomizer](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/case-tokeneconomizer/)
+- [리소스 (참고 자료)](https://dotnetpower.github.io/agent-tokenomics/ko/resources/)
+- [논문 75선](https://dotnetpower.github.io/agent-tokenomics/ko/papers/)
+- [용어집 (English ↔ 한국어)](https://dotnetpower.github.io/agent-tokenomics/ko/glossary/)
+
+## Optional: Full Corpus
+
+- [llms-full.txt](https://dotnetpower.github.io/agent-tokenomics/llms-full.txt): Every published English and Korean documentation page concatenated as plain markdown for single-fetch LLM ingestion.

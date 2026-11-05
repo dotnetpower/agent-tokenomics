@@ -18,8 +18,8 @@ const demoReportUrl = `${base}demo/tokprof-sample.html`;
       <span class="at-eyebrow">
         <i class="at-eyebrow-dot" aria-hidden="true"></i>
         {isKo
-          ? "LLM 토큰 절약 가이드 · 두 가지 트랙과 코드 수정 없는 프로파일러"
-          : "PRACTICAL LLM TOKEN GUIDE · TWO TRACKS & ZERO-CODE PROFILER"}
+          ? "토큰 이코노믹스 (TOKENOMICS · TOKEN ECONOMICS) · LLM 및 AI 에이전트 토큰 절약 가이드"
+          : "TOKENOMICS & TOKEN ECONOMICS · PRACTICAL LLM & AI AGENT PLAYBOOK"}
       </span>
       <h1 id="_top" data-page-title="" class="at-hero-title">
         {isKo ? (
@@ -36,8 +36,8 @@ const demoReportUrl = `${base}demo/tokprof-sample.html`;
       </h1>
       <p class="at-hero-subtitle">
         {isKo
-          ? "VS Code에서 GitHub Copilot을 사용하는 개발자와 LLM 에이전트를 개발하거나 운영하는 엔지니어를 위한 가이드입니다. 토큰 사용량을 측정하고 낭비 원인을 찾아 개선하는 방법을 안내합니다. 함께 제공되는 독립 실행형 도구 tokprof로 LLM 요청을 분석하고 HTML 리포트를 확인할 수 있습니다."
-          : "A practical guide for developers using GitHub Copilot in VS Code (Track A) and engineers who build or operate LLM agents (Track B). Measure where tokens go, isolate the cause of waste, and verify fixes with tokprof — a standalone profiler that inspects LLM requests and generates an HTML report without changing agent code."}
+          ? "LLM과 AI 에이전트를 위한 실전 토큰 이코노믹스(Tokenomics · Token Economics, 토큰 경제학) 가이드입니다. VS Code에서 GitHub Copilot을 사용하는 개발자(트랙 A)는 마켓플레이스 확장 cctx로 탐색 토큰을 줄이고 개발 속도를 가속하며, 에이전트를 개발·운영하는 엔지니어(트랙 B)는 코드 수정 없는 프로파일러 tokprof로 LLM 호출을 분석하고 비용과 품질을 검증할 수 있습니다."
+          : "Practical tokenomics (token economics) for developers using GitHub Copilot in VS Code (Track A) and engineers who build or operate LLM agents (Track B). Cut lookup tokens and accelerate coding tasks with the cctx VS Code Marketplace extension, and profile agent LLM calls with tokprof without changing agent code."}
       </p>
       <div class="at-hero-actions">
         <a class="at-btn at-btn-primary" href={docUrl("copilot-tokenomics/")}>
@@ -45,6 +45,9 @@ const demoReportUrl = `${base}demo/tokprof-sample.html`;
         </a>
         <a class="at-btn at-btn-secondary" href={docUrl("agent-tokenomics/")}>
           {isKo ? "트랙 B: 에이전트 토큰 절약 →" : "Track B: Agent Tokenomics →"}
+        </a>
+        <a class="at-btn at-btn-secondary" href={docUrl("copilot-tokenomics/cctx/")}>
+          {isKo ? "cctx: VS Code 확장 및 가속 →" : "cctx: VS Code Extension →"}
         </a>
         <a class="at-btn at-btn-secondary" href={docUrl("agent-tokenomics/tokprof/")}>
           {isKo ? "tokprof 설치 및 사용법 →" : "tokprof Install & Usage →"}
@@ -706,6 +709,7 @@ Assistant: Patched boundary check (&gt;= 100); 14 passed.</pre>
           <li><a href={docUrl("copilot-tokenomics/04-instructions-and-tools/")}><span>04. {isKo ? "지침 파일과 도구 선택" : "Instructions & Tools"}</span><span>→</span></a></li>
           <li><a href={docUrl("copilot-tokenomics/08-agent-modes-and-budget/")}><span>08. {isKo ? "에이전트 모드와 예산" : "Agent Modes & Budget"}</span><span>→</span></a></li>
           <li><a href={docUrl("copilot-tokenomics/09-mcp-audit/")}><span>09. {isKo ? "MCP 서버의 토큰 사용량 점검" : "MCP Server Audit"}</span><span>→</span></a></li>
+          <li><a href={docUrl("copilot-tokenomics/cctx/")}><span>11. {isKo ? "cctx: 토큰 절감 및 개발 가속 (VS Code)" : "cctx: Token Saver & Accelerator (VS Code)"}</span><span>→</span></a></li>
         </ul>
         <div>
           <a class="at-btn at-btn-primary" href={docUrl("copilot-tokenomics/")}>
@@ -873,7 +877,109 @@ Assistant: Patched boundary check (&gt;= 100); 14 passed.</pre>
         <a class="at-btn at-btn-secondary" href={docUrl("glossary/")}>
           {isKo ? "한영 용어집" : "Glossary"}
         </a>
+        <a class="at-btn at-btn-ghost" href={`${base}llms.txt`}>
+          llms.txt
+        </a>
+        <a class="at-btn at-btn-ghost" href={`${base}llms-full.txt`}>
+          llms-full.txt
+        </a>
       </div>
+    </div>
+  </section>
+
+  <!-- 5. Frequently Asked Questions (GEO & FAQPage Schema Paired) -->
+  <section id="faq" aria-labelledby="faq-title">
+    <div class="at-sec-head">
+      <span class="at-eyebrow">
+        <i class="at-eyebrow-dot" aria-hidden="true"></i>
+        {isKo ? "자주 묻는 질문 · 핵심 요약" : "FREQUENTLY ASKED QUESTIONS · KEY FACTS"}
+      </span>
+      <h2 id="faq-title">
+        {isKo ? "자주 묻는 질문 (FAQ)" : "Frequently Asked Questions"}
+      </h2>
+    </div>
+
+    <div class="at-faq-grid">
+      <article class="at-faq-item">
+        <h3>
+          {isKo
+            ? "LLM과 AI 에이전트에서 토큰 이코노믹스(Tokenomics · Token Economics)란 무엇인가요?"
+            : "What is tokenomics (token economics) in LLMs and AI agents?"}
+        </h3>
+        <p>
+          {isKo ? (
+            <>
+              AI와 대규모 언어 모델(LLM)에서 <strong>토큰 이코노믹스(Tokenomics · Token Economics, 토큰 경제학)</strong>는 모델 호출과 멀티턴 에이전트 루프 전반에서 입력·캐시·출력·추론 토큰의 과금 구조를 분석하고, 답변 품질 저하 없이 컨텍스트 예산과 비용 대비 성능을 최적화하는 엔지니어링 분야입니다.{" "}
+              <code>agent-tokenomics</code>는 <a href={docUrl("copilot-tokenomics/")}>트랙 A(VS Code Copilot 토큰 이코노믹스 및 <code>cctx</code> 개발 가속)</a>와{" "}
+              <a href={docUrl("agent-tokenomics/")}>트랙 B(에이전트 토큰 이코노믹스 6단계 절차 및 <code>tokprof</code> 프로파일러)</a>로 이를 체계화합니다.
+            </>
+          ) : (
+            <>
+              In AI and large language models, <strong>tokenomics (token economics)</strong> is the engineering discipline of measuring, pricing, budgeting, and optimizing input, cached, output, and reasoning tokens across model calls and multi-turn agent loops without degrading answer quality.{" "}
+              <code>agent-tokenomics</code> organizes this into two tracks: <a href={docUrl("copilot-tokenomics/")}>Track A (VS Code Copilot Tokenomics with <code>cctx</code>)</a> and{" "}
+              <a href={docUrl("agent-tokenomics/")}>Track B (6-stage Agent Tokenomics with <code>tokprof</code>)</a>.
+            </>
+          )}
+        </p>
+      </article>
+
+      <article class="at-faq-item">
+        <h3>
+          {isKo
+            ? "tokprof는 어떻게 설치하고 실행하나요?"
+            : "How do I install and run tokprof to profile LLM agent tokens?"}
+        </h3>
+        <p>
+          {isKo ? (
+            <>
+              Python 환경에서 <code>pip install tokprof</code> 또는 <code>uv tool install tokprof</code>(설치 없이 실행할 때는 <code>uvx tokprof</code>)로 프리빌트 네이티브 바이너리를 설치합니다.{" "}
+              <code>tokprof start</code>로 백그라운드 프로파일링(Linux eBPF 및 로컬 게이트웨이·훅 지원)을 시작하고, 에이전트 작업 후 <code>tokprof stop</code>을 실행하면 세션·턴·호출별 입력 토큰 구성과 대화형 HTML 리포트(<code>.tokprof/latest.html</code>)가 생성됩니다.
+            </>
+          ) : (
+            <>
+              Install prebuilt native wheels from <a href="https://pypi.org/project/tokprof/">PyPI</a> with <code>pip install tokprof</code> or <code>uv tool install tokprof</code> (or run directly via <code>uvx tokprof</code>). Run <code>tokprof start</code>, execute your agent workload, and run <code>tokprof stop</code> to get a terminal breakdown and an interactive HTML Edition Dossier (<code>.tokprof/latest.html</code>) attributing input tokens to system prompt, history, user prompt, and tool schemas/results.
+            </>
+          )}
+        </p>
+      </article>
+
+      <article class="at-faq-item">
+        <h3>
+          {isKo
+            ? "VS Code GitHub Copilot에서 토큰과 AI 크레딧을 줄이면서 개발 속도를 높이려면 어떻게 하나요?"
+            : "What are the highest-impact ways to save tokens and speed up coding in VS Code GitHub Copilot?"}
+        </h3>
+        <p>
+          {isKo ? (
+            <>
+              작업마다 새 채팅을 시작해(부수적인 질문은 <code>/fork</code> 활용) 이전 대화 기록이 매 턴 재전송되지 않게 하고, 사용하지 않는 <a href={docUrl("copilot-tokenomics/09-mcp-audit/")}>MCP 서버와 도구</a>를 비활성화하며, <code>#file</code>·<code>#selection</code>으로 필요한 컨텍스트만 지정합니다. 또한 VS Code Marketplace에서 <a href={docUrl("copilot-tokenomics/cctx/")}><code>Code Context (cctx)</code></a>를 설치하면 다단계 <code>grep</code> + <code>view</code> 루프를 블록 클램핑 1회 조회로 대체해 탐색 속도를 15.20배 높이고 작업 완료 시간을 24.7% 단축하면서 상태 표시줄과 <code>cctx usage</code>에서 실시간 절감 비용을 확인할 수 있습니다.
+            </>
+          ) : (
+            <>
+              Start a new chat per task (or use <code>/fork</code> for side questions) so stale history is not re-sent on every turn, disable unused <a href={docUrl("copilot-tokenomics/09-mcp-audit/")}>MCP servers and tool definitions</a>, and scope attachments with <code>#file</code> and <code>#selection</code>. In addition, install <a href={docUrl("copilot-tokenomics/cctx/")}><code>Code Context (cctx)</code></a> from the VS Code Marketplace to replace multi-turn <code>grep</code> + <code>view</code> loops with single-call block-clamped lookups (15.20× faster warm retrieval and 24.7% faster task completion, as reported) and track live AIC/USD savings in the status bar and <code>cctx usage</code>.
+            </>
+          )}
+        </p>
+      </article>
+
+      <article class="at-faq-item">
+        <h3>
+          {isKo
+            ? "LLM 에이전트의 토큰 비용 문제는 어떤 순서로 해결하나요?"
+            : "How do you troubleshoot high token cost in a custom LLM agent?"}
+        </h3>
+        <p>
+          {isKo ? (
+            <>
+              추측 대신 6단계 절차를 따릅니다: <a href={docUrl("agent-tokenomics/00-concepts/")}>0. 개념 이해</a> → <a href={docUrl("agent-tokenomics/01-diagnose/")}>1. 진단(Diagnose)</a> → <a href={docUrl("agent-tokenomics/02-isolate/")}>2. 분리(Isolate)</a> → <a href={docUrl("agent-tokenomics/03-prove/")}>3. 증명(Prove)</a> → <a href={docUrl("agent-tokenomics/04-improve/")}>4. 개선(Improve)</a> → <a href={docUrl("agent-tokenomics/05-result/")}>5. 결과(Result)</a> 및 <a href={docUrl("agent-tokenomics/06-golden-dataset-and-rubric/")}>6. 골든 데이터셋과 루브릭 평가</a>로 비용 절감과 답변 품질 유지를 동시에 검증합니다.
+            </>
+          ) : (
+            <>
+              Follow a 6-stage engineering procedure: <a href={docUrl("agent-tokenomics/00-concepts/")}>0. Concepts</a> → <a href={docUrl("agent-tokenomics/01-diagnose/")}>1. Diagnose</a> (measure baseline with <code>tokprof</code>) → <a href={docUrl("agent-tokenomics/02-isolate/")}>2. Isolate</a> (one variable at a time) → <a href={docUrl("agent-tokenomics/03-prove/")}>3. Prove</a> (fixed task set) → <a href={docUrl("agent-tokenomics/04-improve/")}>4. Improve</a> (micro-skills, tool pruning, loop guards, prompt caching) → <a href={docUrl("agent-tokenomics/05-result/")}>5. Result</a> &amp; <a href={docUrl("agent-tokenomics/06-golden-dataset-and-rubric/")}>6. Golden Dataset Rubric</a>.
+            </>
+          )}
+        </p>
+      </article>
     </div>
   </section>
 </div>

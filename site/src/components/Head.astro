@@ -1,0 +1,437 @@
+---
+const route = Astro.locals.starlightRoute;
+const { head, entry, lang, id, siteTitle } = route;
+const data = entry?.data ?? {};
+
+const SITE_ORIGIN = (Astro.site ? Astro.site.origin : "https://dotnetpower.github.io").replace(/\/$/, "");
+const BASE_URL = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+const SITE_ROOT_URL = `${SITE_ORIGIN}${BASE_URL}`;
+
+const isKo = lang === "ko" || id === "ko" || id.startsWith("ko/");
+const is404 = id === "404" || id === "ko/404" || Astro.url.pathname.endsWith("/404") || Astro.url.pathname.endsWith("/404/");
+const isHome = id === "" || id === "index" || id === "ko" || id === "ko/index";
+
+const canonicalEntry = head.find((item) => item.tag === "link" && item.attrs?.rel === "canonical");
+const rawCanonical = typeof canonicalEntry?.attrs?.href === "string"
+  ? canonicalEntry.attrs.href
+  : new URL(Astro.url.pathname, SITE_ORIGIN).href;
+const canonicalHref = rawCanonical.endsWith("/") || /\.[a-z0-9]+$/i.test(rawCanonical)
+  ? rawCanonical
+  : `${rawCanonical}/`;
+
+const defaultDescription = isKo
+  ? "LLM과 AI 에이전트를 위한 토큰 이코노믹스(Tokenomics · Token Economics, 토큰 경제학) 실전 가이드: VS Code Copilot 토큰 절약, cctx 개발 가속, tokprof 프로파일링."
+  : "Tokenomics and token economics guide for LLMs & AI agents: cut token costs in VS Code GitHub Copilot, accelerate coding with cctx, and profile calls with tokprof.";
+
+const finalDescription = String(data.description || defaultDescription).replace(/\s+/g, " ").trim();
+
+const seoKeywords = isKo
+  ? "tokenomics, token economics, 토큰 이코노믹스, 토큰 경제학, LLM tokenomics, AI token economics, agent tokenomics, copilot tokenomics, LLM 토큰 절약, 프롬프트 캐싱, 컨텍스트 엔지니어링, tokprof, cctx, GitHub Copilot"
+  : "tokenomics, token economics, LLM tokenomics, AI token economics, agent tokenomics, copilot tokenomics, token optimization, prompt caching, context engineering, LLM cost optimization, tokprof, cctx, GitHub Copilot";
+
+let finalTitle: string;
+if (isHome) {
+  finalTitle = isKo
+    ? "토큰 이코노믹스(Tokenomics · Token Economics) — LLM 및 AI 에이전트 토큰 절약 가이드 | agent-tokenomics"
+    : "Tokenomics & Token Economics for LLMs & AI Agents — agent-tokenomics";
+} else if (is404) {
+  finalTitle = isKo ? `404 — 페이지를 찾을 수 없음 | ${siteTitle}` : `404 — Page Not Found | ${siteTitle}`;
+} else {
+  const pageTitle = String(data.title || siteTitle).trim();
+  const trackLabel = data.track === "copilot"
+    ? (isKo ? "Copilot 토큰 절약" : "Copilot Tokenomics")
+    : data.track === "agent"
+      ? (isKo ? "에이전트 토큰 절약" : "Agent Tokenomics")
+      : "";
+  if (
+    trackLabel &&
+    !pageTitle.toLowerCase().includes(trackLabel.toLowerCase()) &&
+    !pageTitle.toLowerCase().includes("tokenomics") &&
+    !pageTitle.includes("토큰 이코노믹스")
+  ) {
+    finalTitle = `${pageTitle} (${trackLabel}) | ${siteTitle}`;
+  } else {
+    finalTitle = pageTitle.toLowerCase().includes(siteTitle.toLowerCase())
+      ? pageTitle
+      : `${pageTitle} | ${siteTitle}`;
+  }
+}
+
+const ogImageUrl = `${SITE_ROOT_URL}og-cover.png`;
+const ogImageAlt = isKo
+  ? "agent-tokenomics — VS Code GitHub Copilot 및 LLM 에이전트 토큰 절약 가이드와 tokprof 프로파일러"
+  : "agent-tokenomics — Spend fewer tokens without making your AI tools worse (Copilot Tokenomics, Agent Tokenomics, tokprof)";
+
+const enAlternateEntry = head.find(
+  (item) => item.tag === "link" && item.attrs?.rel === "alternate" && item.attrs?.hreflang === "en",
+);
+const enAlternateHref = typeof enAlternateEntry?.attrs?.href === "string"
+  ? (enAlternateEntry.attrs.href.endsWith("/") ? enAlternateEntry.attrs.href : `${enAlternateEntry.attrs.href}/`)
+  : SITE_ROOT_URL;
+
+// Filter out tags from Starlight's default head that we replace with normalized SEO/GEO versions.
+const filteredHead = head.filter((item) => {
+  if (item.tag === "title") return false;
+  if (item.tag === "link" && item.attrs?.rel === "canonical") return false;
+  if (item.tag === "meta") {
+    const key = String(item.attrs?.name || item.attrs?.property || "");
+    if (
+      [
+        "description",
+        "keywords",
+        "robots",
+        "og:title",
+        "og:description",
+        "og:url",
+        "og:type",
+        "og:locale",
+        "og:image",
+        "og:image:secure_url",
+        "og:image:type",
+        "og:image:width",
+        "og:image:height",
+        "og:image:alt",
+        "twitter:card",
+        "twitter:title",
+        "twitter:description",
+        "twitter:image",
+        "twitter:image:alt",
+      ].includes(key)
+    ) {
+      return false;
+    }
+  }
+  return true;
+});
+
+const verifiedIso = data.verified instanceof Date && !Number.isNaN(data.verified.valueOf())
+  ? data.verified.toISOString().slice(0, 10)
+  : undefined;
+
+const homeFaqEntities = isKo
+  ? [
+      {
+        "@type": "Question",
+        name: "LLM과 AI 에이전트에서 토큰 이코노믹스(Tokenomics · Token Economics)란 무엇인가요?",
+        acceptedAnswer: {
+          "@type": "Answer",
+          text: "AI와 대규모 언어 모델(LLM)에서 토큰 이코노믹스(Tokenomics · Token Economics, 토큰 경제학)는 모델 호출과 멀티턴 에이전트 루프 전반에서 입력·캐시·출력·추론 토큰의 과금 구조를 분석하고, 답변 품질 저하 없이 컨텍스트 예산과 비용 대비 성능을 최적화하는 엔지니어링 분야입니다. agent-tokenomics는 트랙 A(VS Code Copilot 토큰 이코노믹스 및 cctx 개발 가속)와 트랙 B(에이전트 토큰 이코노믹스 6단계 절차 및 tokprof 프로파일러)로 이를 체계화합니다.",
+        },
+      },
+      {
+        "@type": "Question",
+        name: "tokprof는 어떻게 설치하고 실행하나요?",
+        acceptedAnswer: {
+          "@type": "Answer",
+          text: "Python 환경에서 'pip install tokprof' 또는 'uv tool install tokprof'(설치 없이 바로 실행할 때는 'uvx tokprof')로 설치할 수 있습니다. 'tokprof start'로 백그라운드 프로파일링(Linux eBPF 및 로컬 게이트웨이/훅 지원)을 시작하고, 작업 후 'tokprof stop'을 실행하면 세션·턴·호출별 입력 토큰 구성(시스템 프롬프트, 대화 이력, 사용자 프롬프트, 도구 정의 및 결과)과 대화형 HTML 리포트(.tokprof/latest.html)가 생성됩니다.",
+        },
+      },
+      {
+        "@type": "Question",
+        name: "VS Code GitHub Copilot에서 토큰과 AI 크레딧을 줄이면서 개발 속도를 높이려면 어떻게 하나요?",
+        acceptedAnswer: {
+          "@type": "Answer",
+          text: "작업마다 새 채팅을 시작해 불필요한 대화 이력 재전송을 막고, 사용하지 않는 MCP 서버와 도구를 비활성화하며, #file·#selection으로 필요한 컨텍스트만 지정합니다. 또한 VS Code Marketplace에서 Code Context(cctx, dotnetpower.code-context-native)를 설치하면 다단계 grep + view 탐색을 블록 클램핑 1회 조회로 대체해 탐색 속도를 15.20배 가속하고 작업 완료 시간을 24.7% 단축하면서 상태 표시줄과 'cctx usage --hours 24'에서 실시간 절감 비용(AIC/USD)을 확인할 수 있습니다.",
+        },
+      },
+      {
+        "@type": "Question",
+        name: "LLM 에이전트의 토큰 비용 문제는 어떤 순서로 해결하나요?",
+        acceptedAnswer: {
+          "@type": "Answer",
+          text: "추측 대신 6단계 절차를 따릅니다: 0. 개념 이해 → 1. 진단(Diagnose, tokprof로 기준선 측정) → 2. 분리(Isolate, 한 번에 변수 하나씩 원인 특정) → 3. 증명(Prove, 고정된 작업 집합에서 반복 측정) → 4. 개선(Improve, 마이크로 스킬·도구 가지치기·루프 가드·프롬프트 캐싱 적용) → 5. 결과(Result, 비용과 품질을 함께 재측정해 유지/되돌리기 결정) → 6. 골든 데이터셋과 루브릭 평가.",
+        },
+      },
+    ]
+  : [
+      {
+        "@type": "Question",
+        name: "What is tokenomics (token economics) in LLMs and AI agents?",
+        acceptedAnswer: {
+          "@type": "Answer",
+          text: "In AI and large language models, tokenomics (token economics) is the engineering discipline of measuring, pricing, budgeting, and optimizing input, cached, output, and reasoning tokens across model calls and multi-turn agent loops without degrading answer quality. agent-tokenomics organizes this into two tracks: Track A (VS Code Copilot Tokenomics with the cctx Marketplace extension) and Track B (6-stage Agent Tokenomics troubleshooting with the tokprof zero-code Rust profiler).",
+        },
+      },
+      {
+        "@type": "Question",
+        name: "How do I install and run tokprof to profile LLM agent tokens?",
+        acceptedAnswer: {
+          "@type": "Answer",
+          text: "Install prebuilt native wheels from PyPI with 'pip install tokprof' or 'uv tool install tokprof' (or run directly via 'uvx tokprof'). Run 'tokprof start' (auto-attaches Linux eBPF or uses a local gateway and Python/Node hooks), execute your agent workload, and run 'tokprof stop' to get a terminal breakdown and an interactive HTML Edition Dossier (.tokprof/latest.html) attributing input tokens to system prompt, history, user prompt, and tool schemas/results.",
+        },
+      },
+      {
+        "@type": "Question",
+        name: "What are the highest-impact ways to save tokens and speed up coding in VS Code GitHub Copilot?",
+        acceptedAnswer: {
+          "@type": "Answer",
+          text: "Start a new chat per task (or use /fork for side questions) so stale conversation history is not re-sent on every turn, disable unused MCP servers and tool definitions, and scope attachments with #file and #selection. In addition, install Code Context (cctx, dotnetpower.code-context-native) from the VS Code Marketplace to replace multi-turn grep + view loops with single-call block-clamped lookups (15.20x faster warm retrieval and 24.7% faster task completion, as reported) and inspect live AIC/USD savings in the VS Code status bar and 'cctx usage --hours 24'.",
+        },
+      },
+      {
+        "@type": "Question",
+        name: "How do you troubleshoot high token cost in a custom LLM agent?",
+        acceptedAnswer: {
+          "@type": "Answer",
+          text: "Follow a disciplined 6-stage engineering procedure: 0. Concepts → 1. Diagnose (measure baseline input/output/cached tokens and fixed overhead with tokprof) → 2. Isolate (attribute waste to unused tools, failure loops, bloated tool outputs, or history growth one variable at a time) → 3. Prove (quantify on a fixed task set with repeat runs) → 4. Improve (apply micro-skills, tool pruning, loop guards, or prompt caching) → 5. Result (verify cost reduction alongside a Golden Dataset quality rubric).",
+        },
+      },
+    ];
+
+const orgNode = {
+  "@type": "Organization",
+  "@id": `${SITE_ROOT_URL}#organization`,
+  name: "agent-tokenomics",
+  url: "https://github.com/dotnetpower/agent-tokenomics",
+  logo: `${SITE_ROOT_URL}favicon.svg`,
+  sameAs: [
+    "https://github.com/dotnetpower/agent-tokenomics",
+    "https://pypi.org/project/tokprof/",
+  ],
+};
+
+const websiteNode = {
+  "@type": "WebSite",
+  "@id": `${SITE_ROOT_URL}#website`,
+  url: SITE_ROOT_URL,
+  name: "agent-tokenomics",
+  alternateName: [
+    "Tokenomics",
+    "Token Economics",
+    "LLM Tokenomics",
+    "AI Token Economics",
+    "Agent Tokenomics",
+    "Copilot Tokenomics",
+    "토큰 이코노믹스",
+    "토큰 경제학",
+    "tokprof",
+  ],
+  keywords: seoKeywords,
+  description: defaultDescription,
+  inLanguage: ["en", "ko"],
+  publisher: { "@id": `${SITE_ROOT_URL}#organization` },
+};
+
+const definedTermSetNode = {
+  "@type": "DefinedTermSet",
+  "@id": `${SITE_ROOT_URL}${isKo ? "ko/" : ""}glossary/#tokenomics-terms`,
+  name: isKo ? "토큰 이코노믹스 (Tokenomics · Token Economics) 용어집" : "Tokenomics & Token Economics Glossary",
+  url: `${SITE_ROOT_URL}${isKo ? "ko/" : ""}glossary/`,
+  hasDefinedTerm: [
+    {
+      "@type": "DefinedTerm",
+      name: isKo ? "토큰 이코노믹스 (Tokenomics / Token Economics)" : "Tokenomics (Token Economics)",
+      termCode: "tokenomics",
+      description: isKo
+        ? "응답 품질을 유지하면서 LLM 요청과 AI 에이전트 루프 전반의 입력·캐시·출력·추론 토큰 과금, 예산, 프롬프트 캐싱, 컨텍스트 효율을 측정하고 최적화하는 엔지니어링 분야입니다."
+        : "The engineering discipline of measuring, pricing, budgeting, and optimizing input, cached, output, and reasoning tokens across LLM requests and AI agent loops without degrading output quality.",
+    },
+    {
+      "@type": "DefinedTerm",
+      name: "Token Economics",
+      termCode: "token-economics",
+      description: isKo
+        ? "LLM 및 AI 에이전트에서 토큰 단위 과금 구조(입력, 캐시 적중, 출력, 추론 토큰)와 컨텍스트 윈도우 비용 대비 성능을 분석·최적화하는 토큰 경제학입니다."
+        : "Cost-performance analysis and optimization of token-billed LLM workloads, covering BPE tokenization, prompt caching prefixes, tool schema taxes, and multi-turn history growth.",
+    },
+  ],
+};
+
+const webpageNode = {
+  "@type": "WebPage",
+  "@id": `${canonicalHref}#webpage`,
+  url: canonicalHref,
+  name: finalTitle,
+  description: finalDescription,
+  inLanguage: isKo ? "ko-KR" : "en-US",
+  isPartOf: { "@id": `${SITE_ROOT_URL}#website` },
+  publisher: { "@id": `${SITE_ROOT_URL}#organization` },
+  mainEntityOfPage: { "@id": canonicalHref },
+  ...(verifiedIso ? { dateModified: verifiedIso } : {}),
+};
+
+const tokprofSoftwareNode = {
+  "@type": "SoftwareApplication",
+  "@id": `${SITE_ROOT_URL}#tokprof`,
+  name: "tokprof",
+  description: isKo
+    ? "에이전트 코드 수정 없이 세션별·턴별·호출별 LLM 입력 토큰을 시스템 프롬프트, 대화 이력, 사용자 프롬프트, 도구 스키마 및 결과로 분해하는 네이티브 Rust 단일 바이너리 프로파일러입니다."
+    : "Zero-code native Rust single-binary LLM agent token profiler that decomposes every call into system prompt, conversation history, user prompt, and tool definitions/results.",
+  applicationCategory: "DeveloperApplication",
+  operatingSystem: "Linux, macOS, Windows",
+  softwareVersion: "0.2.0",
+  url: `${SITE_ROOT_URL}${isKo ? "ko/" : ""}agent-tokenomics/tokprof/`,
+  downloadUrl: "https://pypi.org/project/tokprof/",
+  codeRepository: "https://github.com/dotnetpower/agent-tokenomics/tree/main/profiler",
+  license: "https://opensource.org/licenses/MIT",
+  publisher: { "@id": `${SITE_ROOT_URL}#organization` },
+  offers: {
+    "@type": "Offer",
+    price: "0",
+    priceCurrency: "USD",
+  },
+};
+
+const cctxSoftwareNode = {
+  "@type": "SoftwareApplication",
+  "@id": `${SITE_ROOT_URL}#cctx`,
+  name: "Code Context (cctx)",
+  description: isKo
+    ? "VS Code Marketplace에서 설치하는 네이티브 Language Model Tools 확장(dotnetpower.code-context-native)으로, 블록 클램핑 1회 코드 조회를 통해 Copilot 토큰을 절감하고 개발 속도를 가속하며 상태 표시줄과 cctx usage에서 실시간 AIC/USD 절감량을 보여줍니다."
+    : "VS Code Native Language Model Tools extension (dotnetpower.code-context-native) backed by a shared Rust trigram index that cuts Copilot lookup tokens, accelerates coding tasks, and displays live AIC/USD savings.",
+  applicationCategory: "DeveloperApplication",
+  operatingSystem: "Linux, macOS, Windows, WSL",
+  url: `${SITE_ROOT_URL}${isKo ? "ko/" : ""}copilot-tokenomics/cctx/`,
+  downloadUrl: "https://marketplace.visualstudio.com/items?itemName=dotnetpower.code-context-native",
+  codeRepository: "https://github.com/dotnetpower/code-context",
+  license: "https://opensource.org/licenses/MIT",
+  publisher: { "@id": `${SITE_ROOT_URL}#organization` },
+  offers: {
+    "@type": "Offer",
+    price: "0",
+    priceCurrency: "USD",
+  },
+};
+
+const graphNodes: Record<string, unknown>[] = [orgNode, websiteNode, webpageNode];
+
+if (isHome) {
+  graphNodes.push(definedTermSetNode);
+  graphNodes.push(tokprofSoftwareNode);
+  graphNodes.push(cctxSoftwareNode);
+  graphNodes.push({
+    "@type": "FAQPage",
+    "@id": `${canonicalHref}#faq`,
+    mainEntity: homeFaqEntities,
+  });
+} else if (!is404) {
+  const isTokprofPage = id.endsWith("agent-tokenomics/tokprof");
+  const isCctxPage = id.endsWith("copilot-tokenomics/cctx");
+  const isGlossaryPage = id === "glossary" || id === "ko/glossary";
+  if (isGlossaryPage) {
+    graphNodes.push(definedTermSetNode);
+  }
+  if (isTokprofPage) {
+    graphNodes.push(tokprofSoftwareNode);
+  }
+  if (isCctxPage) {
+    graphNodes.push(cctxSoftwareNode);
+  }
+  graphNodes.push({
+    "@type": "TechArticle",
+    "@id": `${canonicalHref}#article`,
+    headline: String(data.title || finalTitle),
+    description: finalDescription,
+    keywords: seoKeywords,
+    url: canonicalHref,
+    inLanguage: isKo ? "ko-KR" : "en-US",
+    author: { "@id": `${SITE_ROOT_URL}#organization` },
+    publisher: { "@id": `${SITE_ROOT_URL}#organization` },
+    isPartOf: { "@id": `${SITE_ROOT_URL}#website` },
+    mainEntityOfPage: { "@id": canonicalHref },
+    ...(verifiedIso ? { datePublished: verifiedIso, dateModified: verifiedIso } : {}),
+    ...(data.track
+      ? {
+          articleSection:
+            data.track === "copilot"
+              ? isKo
+                ? "Track A: Copilot 토큰 절약"
+                : "Track A: Copilot Tokenomics"
+              : isKo
+                ? "Track B: 에이전트 토큰 절약"
+                : "Track B: Agent Tokenomics",
+        }
+      : {}),
+  });
+
+  // Build BreadcrumbList for inner pages
+  const homeUrl = isKo ? `${SITE_ROOT_URL}ko/` : SITE_ROOT_URL;
+  const crumbs: Array<{ name: string; url: string }> = [
+    { name: "agent-tokenomics", url: homeUrl },
+  ];
+  const cleanId = isKo ? id.replace(/^ko\/?/, "") : id;
+  if (cleanId.startsWith("copilot-tokenomics/") && cleanId !== "copilot-tokenomics") {
+    crumbs.push({
+      name: isKo ? "Copilot 토큰 절약" : "Copilot Tokenomics",
+      url: `${homeUrl}copilot-tokenomics/`,
+    });
+  } else if (cleanId.startsWith("agent-tokenomics/") && cleanId !== "agent-tokenomics") {
+    crumbs.push({
+      name: isKo ? "에이전트 토큰 절약" : "Agent Tokenomics",
+      url: `${homeUrl}agent-tokenomics/`,
+    });
+  }
+  crumbs.push({
+    name: String(data.title || finalTitle),
+    url: canonicalHref,
+  });
+
+  graphNodes.push({
+    "@type": "BreadcrumbList",
+    "@id": `${canonicalHref}#breadcrumb`,
+    itemListElement: crumbs.map((c, idx) => ({
+      "@type": "ListItem",
+      position: idx + 1,
+      name: c.name,
+      item: c.url,
+    })),
+  });
+}
+
+const jsonLdString = JSON.stringify({
+  "@context": "https://schema.org",
+  "@graph": graphNodes,
+})
+  .replace(/</g, "\\u003c")
+  .replace(/\u2028/g, "\\u2028")
+  .replace(/\u2029/g, "\\u2029");
+---
+
+<title>{finalTitle}</title>
+<meta name="description" content={finalDescription} />
+<meta name="keywords" content={seoKeywords} />
+<meta
+  name="robots"
+  content={is404
+    ? "noindex, nofollow"
+    : "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"}
+/>
+<meta name="theme-color" content="#0f121d" />
+<meta name="application-name" content="agent-tokenomics" />
+<link rel="canonical" href={canonicalHref} />
+{!is404 && <link rel="alternate" hreflang="x-default" href={enAlternateHref} />}
+<link
+  rel="alternate"
+  type="text/plain"
+  href={`${SITE_ROOT_URL}llms.txt`}
+  title="LLM-friendly documentation index (llms.txt)"
+/>
+<link
+  rel="alternate"
+  type="text/plain"
+  href={`${SITE_ROOT_URL}llms-full.txt`}
+  title="Full documentation corpus for LLMs (llms-full.txt)"
+/>
+
+<meta property="og:title" content={finalTitle} />
+<meta property="og:description" content={finalDescription} />
+<meta property="og:url" content={canonicalHref} />
+<meta property="og:type" content={isHome ? "website" : "article"} />
+<meta property="og:locale" content={isKo ? "ko_KR" : "en_US"} />
+<meta property="og:locale:alternate" content={isKo ? "en_US" : "ko_KR"} />
+<meta property="og:image" content={ogImageUrl} />
+<meta property="og:image:secure_url" content={ogImageUrl} />
+<meta property="og:image:type" content="image/png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content={ogImageAlt} />
+
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content={finalTitle} />
+<meta name="twitter:description" content={finalDescription} />
+<meta name="twitter:image" content={ogImageUrl} />
+<meta name="twitter:image:alt" content={ogImageAlt} />
+
+{filteredHead.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
+
+{!is404 && <script type="application/ld+json" set:html={jsonLdString} />}

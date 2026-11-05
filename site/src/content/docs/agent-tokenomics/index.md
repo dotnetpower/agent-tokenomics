@@ -1,11 +1,11 @@
 ---
-title: Agent Tokenomics
-description: A troubleshooting procedure for reducing the token cost of LLM agents.
+title: "Agent Tokenomics (Token Economics)"
+description: "LLM agent tokenomics and token economics troubleshooting guide: Diagnose, Isolate, Prove, Improve, and verify quality with tokprof and golden datasets."
 track: agent
 verified: 2026-11-03
 ---
 
-Track B is for engineers who **build or operate** LLM agents. Treat high token cost like a production
+Track B covers **Agent Tokenomics (LLM token economics)** for engineers who **build or operate** LLM agents. Treat high token cost like a production
 incident: do not guess, follow a procedure.
 
 New here? Start with [0. Concepts](00-concepts/) — how an agent spends tokens — then follow the procedure:
@@ -23,6 +23,7 @@ Diagnose → Isolate → Prove → Improve → Result
 | [3. Prove](03-prove/) | Is that cause real and how big? | A reproduced, quantified waste |
 | [4. Improve](04-improve/) | What targeted fix removes it? | One change, one experiment |
 | [5. Result](05-result/) | Did cost fall without hurting quality? | Keep / revert decision |
+| [6. Golden dataset and rubric evaluation](06-golden-dataset-and-rubric/) | How do you grade single-turn and multi-turn quality (keywords + intent)? | Excel (CSV) dataset & hybrid rubric |
 
 Plus [tokprof: Install & Usage](tokprof/), a [case study of TokenEconomizer](case-tokeneconomizer/), the [ranked paper list](../papers/) behind the fixes, and a runnable
 [measurement script](https://github.com/dotnetpower/agent-tokenomics/tree/main/examples).

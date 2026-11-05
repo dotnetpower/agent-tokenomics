@@ -7,8 +7,11 @@
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
-    "build": "astro build",
+    "build": "astro build && node scripts/build-seo-geo.mjs",
+    "gen-og": "node scripts/gen-og-image.mjs",
+    "build:seo": "node scripts/build-seo-geo.mjs",
     "check:pairs": "node scripts/check-pairs.mjs",
+    "check:seo": "node scripts/check-seo-geo.mjs",
     "preview": "astro preview",
     "astro": "astro"
   },

@@ -29,6 +29,7 @@ costs the most.
 6. **Personalized tips** — run `/chronicle:cost-tips` in a chat session for recommendations based on
    your recent activity. This requires a recent VS Code / Copilot Chat build with the Chronicle cost-tips participant enabled. If it is unavailable, use Agent Debug Logs → **Summary** and **Cache Explorer** directly.
 7. **Model cost** — the model picker's hover shows cost per token type and a Low / Medium / High tier.
+8. **Live retrieval & multi-session savings (`cctx`)** — if you install the [Code Context (`cctx`) VS Code extension](../cctx/) from the Marketplace (`dotnetpower.code-context-native`), hover over the `CCTX N` status bar badge or run `cctx usage --hours 24` in the terminal to see per-model token spend, prompt-cache hit rates, lookup latency, and estimated AIC/USD savings across recent sessions.
 
 <figure class="at-doc-figure">
   <div class="at-doc-figure-grid">
