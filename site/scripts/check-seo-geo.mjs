@@ -118,9 +118,18 @@ if (!existsSync(sitemapXmlPath)) {
   for (const m of xml.matchAll(/<loc>([^<]+)<\/loc>/g)) {
     sitemapUrls.add(m[1].trim());
   }
-  if (!xml.includes("<lastmod>")) {
-    failures.push("sitemap_missing_lastmod");
+  if (!xml.includes("<lastmod>2026-11-06T")) {
+    failures.push("sitemap_missing_fresh_iso_lastmod");
   }
+  if (xml.includes("<lastmod>2026-11-03")) {
+    failures.push("sitemap_contains_stale_2026_11_03_lastmod");
+  }
+  if (!xml.includes('hreflang="x-default"')) {
+    failures.push("sitemap_missing_hreflang_x_default");
+  }
+}
+if (!existsSync(path.join(distDir, "4f8b9c2d1e6a3b7c8d9e0f1a2b3c4d5e.txt"))) {
+  failures.push("missing_asset:indexnow_key");
 }
 if (!existsSync(rssXmlPath)) {
   failures.push("missing_asset:rss.xml");

@@ -100,9 +100,16 @@ function xmlEscape(value) {
 }
 
 const sections = [header];
-const urlLastmod = new Map();
 const rssItems = [];
-const DEFAULT_DATE = "2026-11-06";
+const BUILD_ISO = "2026-11-06T03:00:00Z";
+const BUILD_PUBDATE = new Date(BUILD_ISO).toUTCString();
+const INDEXNOW_KEY = "4f8b9c2d1e6a3b7c8d9e0f1a2b3c4d5e";
+
+// Write IndexNow verification key file to public/ and dist/
+writeFileSync(path.join(publicDir, `${INDEXNOW_KEY}.txt`), `${INDEXNOW_KEY}\n`, "utf8");
+if (existsSync(distDir)) {
+  writeFileSync(path.join(distDir, `${INDEXNOW_KEY}.txt`), `${INDEXNOW_KEY}\n`, "utf8");
+}
 
 for (const { fullPath, relPath } of orderedDocs) {
   const raw = readFileSync(fullPath, "utf8");
@@ -114,17 +121,14 @@ for (const { fullPath, relPath } of orderedDocs) {
     meta.description ||
     "Tokenomics and token economics guide for LLMs & AI agents: cut token costs in VS Code Copilot, speed up coding with cctx, and profile calls with tokprof.";
   const description = meta.description ? `\n> ${meta.description}\n` : "";
-  const verifiedDate = /^\d{4}-\d{2}-\d{2}$/.test(meta.verified || "") ? meta.verified : DEFAULT_DATE;
-  urlLastmod.set(url, verifiedDate);
 
-  const pubDate = new Date(`${verifiedDate}T00:00:00Z`).toUTCString();
   rssItems.push(
     `    <item>\n` +
       `      <title>${xmlEscape(title)}</title>\n` +
       `      <link>${xmlEscape(url)}</link>\n` +
       `      <guid isPermaLink="true">${xmlEscape(url)}</guid>\n` +
       `      <description>${xmlEscape(descText)}</description>\n` +
-      `      <pubDate>${pubDate}</pubDate>\n` +
+      `      <pubDate>${BUILD_PUBDATE}</pubDate>\n` +
       `    </item>`,
   );
 
@@ -140,56 +144,66 @@ if (existsSync(distDir)) {
   writeFileSync(path.join(distDir, "llms-full.txt"), fullCorpus, "utf8");
 }
 
-// 3. Normalize sitemap-0.xml (trailing slash + hreflang + lastmod + demo report) and emit dist/sitemap.xml & sitemap-index.xml
+// 3. Generate clean, standards-compliant sitemap-0.xml, sitemap.xml, and sitemap-index.xml
+//    with full ISO-8601 <lastmod> and reciprocal en / ko / x-default hreflang links.
 if (existsSync(distDir)) {
   const sitemap0 = path.join(distDir, "sitemap-0.xml");
   const sitemapAlias = path.join(distDir, "sitemap.xml");
   const sitemapIndex = path.join(distDir, "sitemap-index.xml");
   const demoUrl = `${BASE_URL}/demo/tokprof-sample.html`;
-  urlLastmod.set(demoUrl, DEFAULT_DATE);
 
-  if (existsSync(sitemap0)) {
-    let xml = readFileSync(sitemap0, "utf8");
-    const homeAlternates = `<xhtml:link rel="alternate" hreflang="en" href="${BASE_URL}/"/><xhtml:link rel="alternate" hreflang="ko" href="${BASE_URL}/ko/"/>`;
-    xml = xml.replace(
-      `<url><loc>${BASE_URL}</loc></url>`,
-      `<url><loc>${BASE_URL}/</loc>${homeAlternates}</url>`,
+  const urlNodes = [];
+  for (const { relPath } of orderedDocs) {
+    const loc = docCanonicalUrl(relPath);
+    const baseRel = relPath.startsWith("ko/") ? relPath.slice(3) : relPath;
+    const enHref = docCanonicalUrl(baseRel);
+    const koHref = docCanonicalUrl(`ko/${baseRel}`);
+    urlNodes.push(
+      `  <url>\n` +
+        `    <loc>${xmlEscape(loc)}</loc>\n` +
+        `    <lastmod>${BUILD_ISO}</lastmod>\n` +
+        `    <xhtml:link rel="alternate" hreflang="en" href="${xmlEscape(enHref)}"/>\n` +
+        `    <xhtml:link rel="alternate" hreflang="ko" href="${xmlEscape(koHref)}"/>\n` +
+        `    <xhtml:link rel="alternate" hreflang="x-default" href="${xmlEscape(enHref)}"/>\n` +
+        `  </url>`,
     );
-    xml = xml.replace(
-      `<url><loc>${BASE_URL}/ko/</loc></url>`,
-      `<url><loc>${BASE_URL}/ko/</loc>${homeAlternates}</url>`,
-    );
-    if (!xml.includes(`<loc>${demoUrl}</loc>`)) {
-      xml = xml.replace("</urlset>", `<url><loc>${demoUrl}</loc></url></urlset>`);
-    }
-    xml = xml.replace(/<url><loc>([^<]+)<\/loc>(?!<lastmod>)/g, (_m, loc) => {
-      const lastmod = urlLastmod.get(loc) || DEFAULT_DATE;
-      return `<url><loc>${loc}</loc><lastmod>${lastmod}</lastmod>`;
-    });
-    writeFileSync(sitemap0, xml, "utf8");
-    writeFileSync(sitemapAlias, xml, "utf8");
   }
+  urlNodes.push(
+    `  <url>\n` +
+      `    <loc>${xmlEscape(demoUrl)}</loc>\n` +
+      `    <lastmod>${BUILD_ISO}</lastmod>\n` +
+      `  </url>`,
+  );
 
-  if (existsSync(sitemapIndex)) {
-    let idxXml = readFileSync(sitemapIndex, "utf8");
-    idxXml = idxXml.replace(
-      /<sitemap><loc>([^<]+)<\/loc><\/sitemap>/g,
-      `<sitemap><loc>$1</loc><lastmod>${DEFAULT_DATE}</lastmod></sitemap>`,
-    );
-    writeFileSync(sitemapIndex, idxXml, "utf8");
-  }
+  const sitemapXml =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">\n` +
+    `${urlNodes.join("\n")}\n` +
+    `</urlset>\n`;
+
+  writeFileSync(sitemap0, sitemapXml, "utf8");
+  writeFileSync(sitemapAlias, sitemapXml, "utf8");
+
+  const idxXml =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+    `  <sitemap>\n` +
+    `    <loc>${BASE_URL}/sitemap-0.xml</loc>\n` +
+    `    <lastmod>${BUILD_ISO}</lastmod>\n` +
+    `  </sitemap>\n` +
+    `</sitemapindex>\n`;
+  writeFileSync(sitemapIndex, idxXml, "utf8");
 
   // 4. Generate dist/rss.xml for search engine & AI feed aggregators
-  const demoPubDate = new Date(`${DEFAULT_DATE}T00:00:00Z`).toUTCString();
   rssItems.push(
     `    <item>\n` +
       `      <title>${xmlEscape("tokprof Edition Report Sample — Interactive LLM Token Profile")}</title>\n` +
       `      <link>${xmlEscape(demoUrl)}</link>\n` +
       `      <guid isPermaLink="true">${xmlEscape(demoUrl)}</guid>\n` +
       `      <description>${xmlEscape(
-        "Interactive tokprof HTML Edition Dossier sample showing per-session, per-turn, and per-call LLM input token breakdown, prompt inspector, and detected waste findings.",
+        "Interactive tokprof HTML Edition Dossier sample: per-session, per-turn, and per-call LLM input token breakdown, prompt inspector, and waste findings.",
       )}</description>\n` +
-      `      <pubDate>${demoPubDate}</pubDate>\n` +
+      `      <pubDate>${BUILD_PUBDATE}</pubDate>\n` +
       `    </item>`,
   );
 
@@ -201,7 +215,7 @@ if (existsSync(distDir)) {
     `    <link>${BASE_URL}/</link>\n` +
     `    <description>Tokenomics and token economics guide for LLMs &amp; AI agents: cut token costs in VS Code Copilot, speed up coding with cctx, and profile calls with tokprof.</description>\n` +
     `    <language>en</language>\n` +
-    `    <lastBuildDate>${demoPubDate}</lastBuildDate>\n` +
+    `    <lastBuildDate>${BUILD_PUBDATE}</lastBuildDate>\n` +
     `    <atom:link href="${BASE_URL}/rss.xml" rel="self" type="application/rss+xml"/>\n` +
     `${rssItems.join("\n")}\n` +
     `  </channel>\n` +
