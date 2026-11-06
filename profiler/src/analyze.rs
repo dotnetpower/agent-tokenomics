@@ -1232,7 +1232,71 @@ pub fn findings(
     }
 
     let poor = q_counts.get("poor").copied().unwrap_or(0);
+    let usage_only = q_counts.get("usage_only").copied().unwrap_or(0);
     let q_total: usize = q_counts.values().sum();
+    if usage_only > 0 {
+        out.push(Finding {
+            severity: "medium".to_string(),
+            text: format!(
+                "{usage_only} of {} call(s) had prompt content recording disabled in Application Insights (usage-only mode; segment breakdown omitted). Set AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=true or OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true to enable full 7-segment attribution",
+                ordered.len()
+            ),
+            see: doc_link("diagnose"),
+        });
+    }
+    let mut sampled_calls = 0usize;
+    let mut max_item_count = 1i64;
+    let mut truncated_repaired = 0usize;
+    let mut max_ingest_lag_ms = 0i64;
+    for r in ordered {
+        if let Some(det) = r.detect.as_ref().and_then(|v| v.as_object()) {
+            if let Some(ic) = det.get("sampled_item_count").and_then(|v| v.as_i64()) {
+                if ic > 1 {
+                    sampled_calls += 1;
+                    max_item_count = max_item_count.max(ic);
+                }
+            }
+            if det
+                .get("truncated_repaired")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                truncated_repaired += 1;
+            }
+            if let Some(lag) = det.get("ingestion_lag_ms").and_then(|v| v.as_i64()) {
+                max_ingest_lag_ms = max_ingest_lag_ms.max(lag);
+            }
+        }
+    }
+    if sampled_calls > 0 {
+        out.push(Finding {
+            severity: "medium".to_string(),
+            text: format!(
+                "Application Insights adaptive sampling was detected on {sampled_calls} call(s) (itemCount up to {max_item_count}x): some LLM calls or message events in the session may have been dropped; set GenAI trace sampling to 100%"
+            ),
+            see: doc_link("diagnose"),
+        });
+    }
+    if truncated_repaired > 0 {
+        out.push(Finding {
+            severity: "info".to_string(),
+            text: format!(
+                "{truncated_repaired} call(s) had request/response JSON truncated by the 32 KB log property limit and were auto-repaired; use per-message OTel events or TOKPROF_STDOUT_LOG=1 for lossless capture"
+            ),
+            see: doc_link("diagnose"),
+        });
+    }
+    if max_ingest_lag_ms >= 60_000 {
+        out.push(Finding {
+            severity: "info".to_string(),
+            text: format!(
+                "Log Analytics ingestion lag reached {:.1}s ({} ms): if recent AppTraces message events are still in transit, run `tokprof pull --wait-ingest 5m` or `tokprof pull --resume`",
+                (max_ingest_lag_ms as f64) / 1000.0,
+                format_with_commas_i64(max_ingest_lag_ms)
+            ),
+            see: doc_link("diagnose"),
+        });
+    }
     if poor > 0 && (poor as f64) / (q_total.max(1) as f64) > 0.3 {
         let note = if neg_poor > 0 {
             " (reported input is smaller than counted segments on some calls; servers such as Ollama report only newly evaluated tokens in prompt_eval_count and omit KV-cached prefix tokens)"

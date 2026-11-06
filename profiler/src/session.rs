@@ -213,7 +213,10 @@ pub fn serve(
     rand::thread_rng().fill_bytes(&mut run_b);
     let mut tok_b = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut tok_b);
-    let token = hex::encode(tok_b);
+    let token = std::env::var("TOKPROF_INGEST_TOKEN")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| hex::encode(tok_b));
 
     let w_clone = writer.clone();
     let gw = Gateway::new(

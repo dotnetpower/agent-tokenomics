@@ -5,14 +5,23 @@
 // It never modifies requests or responses and swallows its own errors.
 "use strict";
 
+const crypto = require("crypto");
+const fs = require("fs");
 const http = require("http");
 const https = require("https");
 const zlib = require("zlib");
 
 const PORT = process.env.TOKPROF_PORT;
-const TOKEN = process.env.TOKPROF_TOKEN;
+const TOKEN = process.env.TOKPROF_TOKEN || "";
+const INGEST_URL = process.env.TOKPROF_INGEST_URL || "";
+const STDOUT_LOG = String(process.env.TOKPROF_STDOUT_LOG || "").trim().toLowerCase();
+const STDOUT_FILE = String(process.env.TOKPROF_STDOUT_FILE || "").trim();
+const HAS_STDOUT = ["1", "true", "stdout", "stderr"].includes(STDOUT_LOG) || Boolean(STDOUT_FILE);
+const ACTIVE = Boolean((PORT && TOKEN) || INGEST_URL || HAS_STDOUT);
+const CHUNK_MAX_CHARS = 20000;
 const CAP = 32 * 1024 * 1024;
 const origHttpRequest = http.request;
+const origHttpsRequest = https.request;
 // Pre-filter only; tokprof's detector decides. Keep identical to tokprof.detect.plausible (tests/vectors/prefilter.json).
 const EXCLUDED_PATH = /\/(embeddings?|moderations?|rerank|tokenize|detokenize|count_tokens|audio\/(speech|transcriptions|translations)|images?\/(generations|edits|variations)|files|batches|fine_tuning|uploads|vector_stores|assistants|threads|realtime)(\/|$)|:(embedContent|batchEmbedContents|countTokens)$/i;
 const PLAUSIBLE_KEYS = /"(?:messages|contents|chat_history)"\s*:\s*\[|"(?:prompt|input|inputs|preamble|message)"\s*:/;
@@ -39,14 +48,60 @@ function warn(msg) {
   }
 }
 
+function emitStdoutChunks(payload) {
+  try {
+    const raw = Buffer.from(JSON.stringify(payload), "utf8");
+    const b64 = zlib.gzipSync(raw).toString("base64");
+    const cid = crypto.createHash("sha256").update(raw).update(String(Date.now())).digest("hex").slice(0, 12);
+    const total = Math.max(1, Math.ceil(b64.length / CHUNK_MAX_CHARS));
+    let out = "";
+    for (let i = 0; i < total; i++) {
+      const part = b64.slice(i * CHUNK_MAX_CHARS, (i + 1) * CHUNK_MAX_CHARS);
+      out += "[TOKPROF_CHUNK] " + JSON.stringify({ id: cid, seq: i, total, data: part }) + "\n";
+    }
+    if (STDOUT_FILE) {
+      fs.appendFileSync(STDOUT_FILE, out, "utf8");
+    } else if (STDOUT_LOG === "stdout") {
+      process.stdout.write(out);
+    } else {
+      process.stderr.write(out);
+    }
+  } catch (e) {
+    warn("could not emit stdout chunks: " + e.message);
+  }
+}
+
 function send(payload) {
   try {
+    if (HAS_STDOUT) {
+      emitStdoutChunks(payload);
+      if (!((PORT && TOKEN) || INGEST_URL)) return;
+    }
     const body = Buffer.from(JSON.stringify(payload), "utf8");
-    const req = origHttpRequest.call(http, {
-      host: "127.0.0.1", port: Number(PORT), path: "/__tokprof/ingest", method: "POST",
-      headers: { "Content-Type": "application/json", "Content-Length": body.length, "X-Tokprof-Token": TOKEN },
-      agent: false,
-    }, (res) => res.resume());
+    let reqOpts;
+    let reqFn = origHttpRequest;
+    let reqMod = http;
+    if (INGEST_URL) {
+      const u = new URL(INGEST_URL);
+      const isHttps = u.protocol === "https:";
+      reqFn = isHttps ? origHttpsRequest : origHttpRequest;
+      reqMod = isHttps ? https : http;
+      reqOpts = {
+        host: u.hostname,
+        port: Number(u.port) || (isHttps ? 443 : 80),
+        path: u.pathname || "/__tokprof/ingest",
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Content-Length": body.length, "X-Tokprof-Token": TOKEN },
+        agent: false,
+      };
+    } else {
+      reqOpts = {
+        host: "127.0.0.1", port: Number(PORT), path: "/__tokprof/ingest", method: "POST",
+        headers: { "Content-Type": "application/json", "Content-Length": body.length, "X-Tokprof-Token": TOKEN },
+        agent: false,
+      };
+    }
+    const req = reqFn.call(reqMod, reqOpts, (res) => res.resume());
     req.on("error", (e) => warn("could not deliver a captured call: " + e.message));
     req.setTimeout(5000, () => req.destroy());
     req.end(body);
@@ -173,7 +228,7 @@ function wrapHttpModule(mod, defaultProto) {
   mod.request = wrappedRequest;
 }
 
-if (PORT && TOKEN) {
+if (ACTIVE) {
   wrapHttpModule(http, "http:");
   wrapHttpModule(https, "https:");
 }
@@ -185,7 +240,7 @@ function bodyText(body) {
   return null; // streams, FormData, Blob: not captured
 }
 
-if (PORT && TOKEN && typeof globalThis.fetch === "function") {
+if (ACTIVE && typeof globalThis.fetch === "function") {
   const origFetch = globalThis.fetch;
   globalThis.fetch = async function tokprofFetch(input, init) {
     let capture = null;

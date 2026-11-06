@@ -54,7 +54,7 @@ static BOUNDARY_RE: Lazy<Regex> = Lazy::new(|| {
 
 static SECRET_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"(?i)(?:Bearer\s+[A-Za-z0-9._\-]{16,}|sk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_\-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_\-]{35}|xox[baprs]-[0-9A-Za-z\-]{10,}|eyJ[A-Za-z0-9_\-]{16,}\.eyJ[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,})",
+        r"(?i)(?:Bearer\s+[A-Za-z0-9._\-]{16,}|sk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_\-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_\-]{35}|xox[baprs]-[0-9A-Za-z\-]{10,}|eyJ[A-Za-z0-9_\-]{16,}\.eyJ[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}|(?:AccountKey|SharedAccessKey|ApiKey)=[A-Za-z0-9+/=_\-]{20,}|sig=[A-Za-z0-9%+/=_\-]{24,})",
     )
     .unwrap()
 });
@@ -74,6 +74,13 @@ const SECRET_MARKERS: &[&str] = &[
     "AIza",
     "xox",
     "eyJ",
+    "AccountKey=",
+    "accountkey=",
+    "SharedAccessKey=",
+    "sharedaccesskey=",
+    "ApiKey=",
+    "apikey=",
+    "sig=",
 ];
 
 #[inline]

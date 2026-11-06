@@ -1,4 +1,11 @@
 use crate::analyze::{compare, summarize, to_legacy};
+use crate::appinsights::{
+    build_app_insights_kql_ext, build_dependencies_only_kql_ext, checkpoint_path,
+    cloud_shell_persistent_dir, inspect_records_content, is_cloud_shell, load_pull_checkpoint,
+    merge_and_upgrade_records, obtain_azure_bearer_token, parse_app_insights_payload,
+    query_azure_logs_with_resilience, report_candidate_ports, resolve_azure_cloud_endpoints,
+    save_pull_checkpoint, strip_records_content, IngestOptions, PullCheckpoint,
+};
 use crate::detect::explain;
 use crate::doctor::run_doctor;
 use crate::ebpf::run_ebpf;
@@ -28,6 +35,8 @@ const SUBCOMMANDS: &[&str] = &[
     "shell",
     "ebpf",
     "mitm",
+    "pull",
+    "import",
     "explain",
     "report",
     "compare",
@@ -47,7 +56,53 @@ fn default_out() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    if let Some(cs_dir) = cloud_shell_persistent_dir() {
+        return cs_dir
+            .join(format!("run-{secs}.jsonl"))
+            .to_string_lossy()
+            .into_owned();
+    }
     format!(".tokprof/run-{secs}.jsonl")
+}
+
+fn parse_duration_secs_f64(spec: &str, default_s: f64) -> f64 {
+    let s = spec.trim().to_ascii_lowercase();
+    if s.is_empty() {
+        return default_s;
+    }
+    if let Some(ms) = s.strip_suffix("ms") {
+        return ms
+            .trim()
+            .parse::<f64>()
+            .map(|v| (v / 1000.0).max(0.01))
+            .unwrap_or(default_s);
+    }
+    if let Some(m) = s.strip_suffix('m') {
+        return m
+            .trim()
+            .parse::<f64>()
+            .map(|v| (v * 60.0).max(0.01))
+            .unwrap_or(default_s);
+    }
+    if let Some(sec) = s.strip_suffix('s') {
+        return sec
+            .trim()
+            .parse::<f64>()
+            .map(|v| v.max(0.01))
+            .unwrap_or(default_s);
+    }
+    s.parse::<f64>().map(|v| v.max(0.01)).unwrap_or(default_s)
+}
+
+fn write_records_atomic(out: &str, records: &[crate::model::CallRecord]) -> std::io::Result<()> {
+    let mut buf = String::with_capacity(records.len() * 512);
+    for r in records {
+        if let Ok(line) = serde_json::to_string(r) {
+            buf.push_str(&line);
+            buf.push('\n');
+        }
+    }
+    atomic_write_0600(out, &buf)
 }
 
 fn find_latest_jsonl(dir: &str) -> Option<String> {
@@ -117,6 +172,7 @@ fn open_url_in_browser(url: &str) {
     if std::env::var("CI").is_ok()
         || std::env::var("GITHUB_ACTIONS").is_ok()
         || std::env::var("TOKPROF_NO_BROWSER").is_ok()
+        || is_cloud_shell()
     {
         return;
     }
@@ -193,15 +249,17 @@ pub fn ensure_report_server(html_path: &str) -> Option<String> {
     let dir = abs.parent()?;
     let dir_str = dir.to_string_lossy().into_owned();
     let file_name = abs.file_name()?.to_string_lossy().into_owned();
+    let cloud_shell = is_cloud_shell();
+    let cand_ports = report_candidate_ports(None, cloud_shell);
 
-    for port in 18765..=18775 {
+    for &port in &cand_ports {
         if probe_report_port(port, &dir_str, &file_name) {
             return Some(format!("http://127.0.0.1:{port}/{file_name}"));
         }
     }
 
     let mut chosen_port = None;
-    for port in 18765..=18775 {
+    for &port in &cand_ports {
         if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
             drop(listener);
             chosen_port = Some(port);
@@ -387,7 +445,21 @@ fn write_html_dashboard(
     eprintln!("tokprof: HTML dashboard written to {dest}");
     if let Some(url) = ensure_report_server(&serve_target) {
         eprintln!("tokprof: Report server live at {url}");
+        if is_cloud_shell() {
+            let port_str = url
+                .split("127.0.0.1:")
+                .nth(1)
+                .and_then(|s| s.split('/').next())
+                .unwrap_or("8080");
+            eprintln!(
+                "tokprof: Azure Cloud Shell detected — open [Web Preview] -> [Configure] on port {port_str}, or run: download {dest}"
+            );
+        }
         open_url_in_browser(&url);
+    } else if is_cloud_shell() {
+        eprintln!(
+            "tokprof: Azure Cloud Shell detected — download the HTML dashboard with: download {dest}"
+        );
     } else if open_browser {
         let abs = fs::canonicalize(&dest)
             .unwrap_or_else(|_| PathBuf::from(&dest))
@@ -495,7 +567,10 @@ fn run_report(
     }
 
     let mut stats = ReadStats::default();
-    let records = read_jsonl(&resolved_path, Some(&mut stats));
+    let mut records = read_jsonl(&resolved_path, Some(&mut stats));
+    if std::env::var("TOKPROF_NO_CONTENT").ok().as_deref() == Some("1") {
+        strip_records_content(&mut records);
+    }
     let price_map = load_prices(prices);
     let summary = if records.is_empty() {
         None
@@ -632,7 +707,25 @@ struct CliOpts {
     no_auto_env: bool,
     record_hosts: bool,
     no_content: bool,
+    usage_only: bool,
+    limit: Option<usize>,
     tokenizer: Option<String>,
+    workspace: Option<String>,
+    app_insights: Option<String>,
+    resource_id: Option<String>,
+    cloud: Option<String>,
+    since: Option<String>,
+    conv: Option<String>,
+    endpoint: Option<String>,
+    token: Option<String>,
+    kql: Option<String>,
+    print_kql: bool,
+    wait_ingest: Option<String>,
+    poll_interval: Option<String>,
+    min_calls: Option<usize>,
+    resume: bool,
+    listen: Option<String>,
+    port: Option<u16>,
     positionals: Vec<String>,
     command_tail: Vec<String>,
 }
@@ -856,9 +949,72 @@ fn parse_args(argv: &[String]) -> Result<CliOpts, String> {
             "--no-auto-env" => opts.no_auto_env = true,
             "--record-hosts" => opts.record_hosts = true,
             "--no-content" => opts.no_content = true,
+            "--usage-only" => opts.usage_only = true,
+            "--limit" => {
+                i += 1;
+                opts.limit = pre.get(i).and_then(|s| s.parse::<usize>().ok());
+            }
             "--tokenizer" => {
                 i += 1;
                 opts.tokenizer = pre.get(i).cloned();
+            }
+            "--workspace" => {
+                i += 1;
+                opts.workspace = pre.get(i).cloned();
+            }
+            "--app-insights" => {
+                i += 1;
+                opts.app_insights = pre.get(i).cloned();
+            }
+            "--resource-id" => {
+                i += 1;
+                opts.resource_id = pre.get(i).cloned();
+            }
+            "--cloud" => {
+                i += 1;
+                opts.cloud = pre.get(i).cloned();
+            }
+            "--since" => {
+                i += 1;
+                opts.since = pre.get(i).cloned();
+            }
+            "--conv" => {
+                i += 1;
+                opts.conv = pre.get(i).cloned();
+            }
+            "--endpoint" => {
+                i += 1;
+                opts.endpoint = pre.get(i).cloned();
+            }
+            "--token" => {
+                i += 1;
+                opts.token = pre.get(i).cloned();
+            }
+            "--kql" => {
+                i += 1;
+                opts.kql = pre.get(i).cloned();
+            }
+            "--print-kql" => opts.print_kql = true,
+            "--wait-ingest" => {
+                i += 1;
+                opts.wait_ingest = pre.get(i).cloned();
+            }
+            "--poll-interval" => {
+                i += 1;
+                opts.poll_interval = pre.get(i).cloned();
+            }
+            "--min-calls" => {
+                i += 1;
+                opts.min_calls = pre.get(i).and_then(|s| s.parse::<usize>().ok());
+            }
+            "--resume" => opts.resume = true,
+            "--listen" => {
+                i += 1;
+                opts.listen = pre.get(i).cloned();
+            }
+            "--port" => {
+                i += 1;
+                opts.port = pre.get(i).and_then(|s| s.parse::<u16>().ok());
             }
             _ => {
                 if opts.cmd.is_none() && !tok.starts_with('-') && SUBCOMMANDS.contains(&tok.as_str()) {
@@ -934,6 +1090,15 @@ fn apply_detect_env(opts: &CliOpts) {
     }
     if let Some(ref tok) = opts.tokenizer {
         std::env::set_var("TOKPROF_TOKENIZER", tok);
+    }
+    if let Some(ref l) = opts.listen {
+        std::env::set_var("TOKPROF_LISTEN", l);
+    }
+    if let Some(p) = opts.port {
+        std::env::set_var("TOKPROF_REPORT_PORT", p.to_string());
+    }
+    if let Some(ref t) = opts.token {
+        std::env::set_var("TOKPROF_INGEST_TOKEN", t);
     }
 }
 
@@ -1301,6 +1466,340 @@ pub fn run_cli(argv: &[String]) -> i32 {
                 }
                 rc
             }
+        }
+        "pull" => {
+            let cp_file = checkpoint_path(None);
+            let prev_cp = if opts.resume {
+                load_pull_checkpoint(&cp_file)
+            } else {
+                None
+            };
+            let eff_workspace = opts
+                .workspace
+                .clone()
+                .or_else(|| prev_cp.as_ref().and_then(|c| c.workspace.clone()));
+            let eff_app_insights = opts
+                .app_insights
+                .clone()
+                .or_else(|| prev_cp.as_ref().and_then(|c| c.app_insights.clone()));
+            let eff_resource_id = opts
+                .resource_id
+                .clone()
+                .or_else(|| prev_cp.as_ref().and_then(|c| c.resource_id.clone()));
+            let eff_cloud = opts
+                .cloud
+                .clone()
+                .or_else(|| prev_cp.as_ref().and_then(|c| c.cloud.clone()));
+
+            let since = opts.since.as_deref().unwrap_or("24h");
+            let comm_opt = if opts.comm.is_empty() {
+                None
+            } else {
+                Some(opts.comm.as_str())
+            };
+            let resume_watermark_ts = prev_cp.as_ref().and_then(|c| {
+                if c.last_ts > 0.0 {
+                    if c.usage_only_calls > 0 {
+                        Some((c.last_ts - 300.0).max(0.0))
+                    } else {
+                        Some(c.last_ts)
+                    }
+                } else {
+                    None
+                }
+            });
+            let dep_only_kql = build_dependencies_only_kql_ext(
+                since,
+                opts.conv.as_deref(),
+                comm_opt,
+                resume_watermark_ts,
+                opts.limit,
+            );
+            let kql = opts.kql.clone().unwrap_or_else(|| {
+                if opts.usage_only {
+                    dep_only_kql.clone()
+                } else {
+                    build_app_insights_kql_ext(
+                        since,
+                        opts.conv.as_deref(),
+                        comm_opt,
+                        resume_watermark_ts,
+                        opts.limit,
+                    )
+                }
+            });
+            if opts.print_kql {
+                println!("{kql}");
+                return 0;
+            }
+            if eff_workspace.is_none() && eff_app_insights.is_none() && eff_resource_id.is_none() {
+                eprintln!(
+                    "tokprof: pull requires --workspace <WORKSPACE_ID>, --app-insights <APP_ID>, or --resource-id <ARM_RESOURCE_ID> (or --resume / --print-kql)"
+                );
+                return 2;
+            }
+            let (la_res, ai_res) = resolve_azure_cloud_endpoints(eff_cloud.as_deref());
+            let resource = if eff_workspace.is_some() || eff_resource_id.is_some() {
+                la_res
+            } else {
+                ai_res
+            };
+            let bearer = match obtain_azure_bearer_token(opts.token.as_deref(), resource) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("tokprof: {e}");
+                    return 2;
+                }
+            };
+            let comps = match load_components(&opts.components) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("tokprof: {e}");
+                    return 2;
+                }
+            };
+            let ingest_opts = IngestOptions {
+                salt: b"tokprof-az".to_vec(),
+                components: comps,
+                use_tiktoken: !opts.no_tiktoken,
+                include_text: if opts.no_content { Some(false) } else { None },
+                usage_only: opts.usage_only,
+                run_id: Some("az-pull".to_string()),
+                conv_filter: opts.conv.clone(),
+                comm_filter: if opts.comm.is_empty() {
+                    None
+                } else {
+                    Some(opts.comm.clone())
+                },
+            };
+
+            let out = opts
+                .out
+                .clone()
+                .or_else(|| prev_cp.as_ref().map(|c| c.out_path.clone()))
+                .unwrap_or_else(default_out);
+
+            let mut accumulated_records = if opts.resume && Path::new(&out).is_file() {
+                read_jsonl(&out, None)
+            } else {
+                Vec::new()
+            };
+
+            // Cap wait duration at 25m (1500s) in Cloud Shell to stay safely under the 30m idle timeout
+            let max_wait_s = if let Some(ref w) = opts.wait_ingest {
+                let raw_s = parse_duration_secs_f64(w, 0.0);
+                if is_cloud_shell() {
+                    raw_s.min(1500.0)
+                } else {
+                    raw_s
+                }
+            } else {
+                0.0
+            };
+            let poll_s = opts
+                .poll_interval
+                .as_deref()
+                .map(|p| parse_duration_secs_f64(p, 5.0))
+                .unwrap_or(5.0);
+            let min_calls = opts.min_calls.unwrap_or(1);
+
+            let start_inst = Instant::now();
+            let mut total_upgraded = 0usize;
+            let mut last_stats;
+            let mut poll_idx = 0usize;
+
+            loop {
+                poll_idx += 1;
+                let (raw_resp, used_rbac_fallback) = match query_azure_logs_with_resilience(
+                    opts.endpoint.as_deref(),
+                    eff_workspace.as_deref(),
+                    eff_app_insights.as_deref(),
+                    eff_resource_id.as_deref(),
+                    eff_cloud.as_deref(),
+                    &bearer,
+                    &kql,
+                    if opts.kql.is_none() {
+                        Some(dep_only_kql.as_str())
+                    } else {
+                        None
+                    },
+                ) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("tokprof: {e}");
+                        return 1;
+                    }
+                };
+                let (batch_recs, mut st) = match parse_app_insights_payload(&raw_resp, &ingest_opts)
+                {
+                    Ok(res) => res,
+                    Err(e) => {
+                        eprintln!("tokprof: failed to parse Application Insights response: {e}");
+                        return 1;
+                    }
+                };
+                st.table_rbac_fallback = used_rbac_fallback;
+                let (merged, upg) = merge_and_upgrade_records(&accumulated_records, batch_recs);
+                accumulated_records = merged;
+                total_upgraded += upg;
+                st.upgraded_from_usage_only = total_upgraded;
+                last_stats = st;
+
+                // Persist records and checkpoint after every poll so Cloud Shell 30m timeout never loses data
+                if let Err(e) = write_records_atomic(&out, &accumulated_records) {
+                    eprintln!("tokprof: cannot write {out}: {e}");
+                    return 2;
+                }
+                let usage_only_rem = accumulated_records
+                    .iter()
+                    .filter(|r| r.quality.as_deref() == Some("usage_only"))
+                    .count();
+                let cp = PullCheckpoint {
+                    workspace: eff_workspace.clone(),
+                    app_insights: eff_app_insights.clone(),
+                    resource_id: eff_resource_id.clone(),
+                    cloud: eff_cloud.clone(),
+                    out_path: out.clone(),
+                    last_ts: accumulated_records.last().map(|r| r.ts).unwrap_or(0.0),
+                    total_calls: accumulated_records.len(),
+                    usage_only_calls: usage_only_rem,
+                    updated_epoch_s: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_secs_f64())
+                        .unwrap_or(0.0),
+                };
+                save_pull_checkpoint(&cp, &cp_file);
+
+                let have_enough = accumulated_records.len() >= min_calls;
+                let all_settled = usage_only_rem == 0 || last_stats.table_rbac_fallback;
+                if max_wait_s <= 0.0
+                    || (have_enough && all_settled)
+                    || start_inst.elapsed().as_secs_f64() >= max_wait_s
+                {
+                    break;
+                }
+                eprintln!(
+                    "tokprof: [wait-ingest poll #{poll_idx}] {} call(s) ({} waiting for AppTraces ingestion); polling again in {:.1}s (checkpoint saved to {})...",
+                    accumulated_records.len(),
+                    usage_only_rem,
+                    poll_s,
+                    cp_file
+                );
+                thread::sleep(Duration::from_secs_f64(poll_s));
+            }
+
+            if last_stats.table_rbac_fallback {
+                eprintln!(
+                    "tokprof: NOTE: AppTraces table access was denied by RBAC; automatically fell back to AppDependencies-only query (usage-only mode)"
+                );
+            }
+            if let Some(ref pw) = last_stats.partial_error_warning {
+                eprintln!("tokprof: WARNING: Azure returned PartialError: {pw}");
+            }
+            eprintln!(
+                "tokprof: pulled {} LLM call(s) from Azure logs ({} full-segment, {} usage-only, {} upgraded-late-traces, {} deduplicated, {} lossless-chunk, {} truncated-repaired, max lag {}ms) -> {}",
+                accumulated_records.len(),
+                last_stats.tier1_full_calls,
+                accumulated_records
+                    .iter()
+                    .filter(|r| r.quality.as_deref() == Some("usage_only"))
+                    .count(),
+                last_stats.upgraded_from_usage_only,
+                last_stats.deduplicated_spans,
+                last_stats.lossless_chunk_calls,
+                last_stats.truncated_repaired_calls,
+                last_stats.max_ingestion_lag_ms,
+                out
+            );
+            let ci = inspect_records_content(&accumulated_records);
+            eprintln!(
+                "tokprof: content verification — mode={}, segments_with_text={}/{}, stored_prompt_chars={}, stored_response_chars={}, 32k_preview_capped={}, appinsights_32kb_repaired={}",
+                ci.mode,
+                ci.segments_with_text,
+                ci.total_segments,
+                ci.stored_prompt_chars,
+                ci.stored_response_chars,
+                ci.preview_32k_capped_segments,
+                ci.appinsights_32kb_repaired_calls
+            );
+            finish_run(&out, &opts, true, true);
+            0
+        }
+        "import" => {
+            let raw_input = if let Some(file) = opts.positionals.first() {
+                match fs::read_to_string(file) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("tokprof: cannot read {file}: {e}");
+                        return 2;
+                    }
+                }
+            } else if !std::io::stdin().is_terminal() {
+                let mut s = String::new();
+                if std::io::stdin().read_to_string(&mut s).is_err() {
+                    eprintln!("tokprof: cannot read stdin");
+                    return 2;
+                }
+                s
+            } else {
+                eprintln!("tokprof: import requires <file> (JSON, NDJSON, or container log) or stdin");
+                return 2;
+            };
+            let comps = match load_components(&opts.components) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("tokprof: {e}");
+                    return 2;
+                }
+            };
+            let ingest_opts = IngestOptions {
+                salt: b"tokprof-az".to_vec(),
+                components: comps,
+                use_tiktoken: !opts.no_tiktoken,
+                include_text: if opts.no_content { Some(false) } else { None },
+                usage_only: opts.usage_only,
+                run_id: Some("az-import".to_string()),
+                conv_filter: opts.conv.clone(),
+                comm_filter: if opts.comm.is_empty() {
+                    None
+                } else {
+                    Some(opts.comm.clone())
+                },
+            };
+            let (records, st) = match parse_app_insights_payload(&raw_input, &ingest_opts) {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("tokprof: failed to parse input logs: {e}");
+                    return 1;
+                }
+            };
+            let out = opts.out.clone().unwrap_or_else(default_out);
+            if let Err(e) = write_records_atomic(&out, &records) {
+                eprintln!("tokprof: cannot open {out}: {e}");
+                return 2;
+            }
+            eprintln!(
+                "tokprof: imported {} LLM call(s) ({} full-segment, {} usage-only, {} lossless-chunk, {} truncated-repaired) -> {}",
+                records.len(),
+                st.tier1_full_calls,
+                st.tier2_usage_only_calls,
+                st.lossless_chunk_calls,
+                st.truncated_repaired_calls,
+                out
+            );
+            let ci = inspect_records_content(&records);
+            eprintln!(
+                "tokprof: content verification — mode={}, segments_with_text={}/{}, stored_prompt_chars={}, stored_response_chars={}, 32k_preview_capped={}, appinsights_32kb_repaired={}",
+                ci.mode,
+                ci.segments_with_text,
+                ci.total_segments,
+                ci.stored_prompt_chars,
+                ci.stored_response_chars,
+                ci.preview_32k_capped_segments,
+                ci.appinsights_32kb_repaired_calls
+            );
+            finish_run(&out, &opts, opts.report, true);
+            0
         }
         "explain" => {
             let Some(url) = opts.positionals.first() else {

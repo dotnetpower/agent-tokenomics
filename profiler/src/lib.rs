@@ -1,4 +1,5 @@
 pub mod analyze;
+pub mod appinsights;
 pub mod cli;
 pub mod counting;
 pub mod detect;

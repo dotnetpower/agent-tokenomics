@@ -8,6 +8,12 @@ use std::sync::Arc;
 use std::thread;
 
 use tokprof::analyze::summarize;
+use tokprof::appinsights::{
+    build_app_insights_kql, classify_azure_error, inspect_records_content,
+    parse_app_insights_payload, repair_truncated_json, report_candidate_ports,
+    resolve_azure_cloud_endpoints, IngestOptions,
+};
+use tokprof::cli::run_cli;
 use tokprof::detect::{Detector, plausible};
 use tokprof::gateway::{Gateway, GatewayServer, Route};
 use tokprof::help_text::render_detailed_help;
@@ -403,3 +409,770 @@ fn test_python_inprocess_hook_via_runner() {
 
     let _ = fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn test_cloud_shell_detection_and_ports() {
+    let normal_ports = report_candidate_ports(None, false);
+    assert_eq!(normal_ports[0], 18765);
+
+    let cs_ports = report_candidate_ports(None, true);
+    assert_eq!(cs_ports[0], 8080);
+    assert!(cs_ports.contains(&8000));
+    assert!(cs_ports.contains(&8888));
+
+    let custom_ports = report_candidate_ports(Some(8085), true);
+    assert_eq!(custom_ports[0], 8085);
+    assert_eq!(custom_ports[1], 8080);
+
+    let kql = build_app_insights_kql("6h", Some("conv-99"), Some("my-agent"));
+    assert!(kql.contains("AppDependencies"));
+    assert!(kql.contains("AppTraces"));
+    assert!(kql.contains("ago(6h)"));
+    assert!(kql.contains("conv-99"));
+    assert!(kql.contains("my-agent"));
+}
+
+#[test]
+fn test_app_insights_tier1_tier2_truncation_and_sampling() {
+    // 1. Direct unit test of repair_truncated_json
+    let broken = r#"{"model":"gpt-4o","messages":[{"role":"system","content":"You are an Azure agent."},{"role":"user","content":"Analyze logs that got cut off right here"#;
+    let (repaired, flag) = repair_truncated_json(broken);
+    assert!(flag);
+    let parsed_repaired: Value = serde_json::from_str(&repaired).expect("repaired JSON must parse");
+    assert_eq!(parsed_repaired["model"], "gpt-4o");
+    assert!(
+        parsed_repaired["messages"][1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("[truncated by App Insights]")
+    );
+
+    // 2. Build a Log Analytics `tables` response with:
+    //    - Call 1 (op-1, span-1): Full OTel GenAI span + AppTraces message events (system, history, tool_def, tool_call, tool_result, user_prompt, choice)
+    //    - Call 2 (op-1, span-2): APIM / custom `request_body` truncated mid-string at property limit
+    //    - Call 3 (op-2, span-3): Content Recording disabled (Tier 2 usage_only) + adaptive sampling (ItemCount = 4)
+    let tools_json = json!([
+        {
+            "type": "function",
+            "function": {
+                "name": "query_kusto",
+                "description": "Execute a KQL query against Azure Monitor",
+                "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "unused_ restart_vm",
+                "description": "Restart an Azure VM instance",
+                "parameters": {"type": "object", "properties": {"vm_id": {"type": "string"}}}
+            }
+        }
+    ]);
+    let tool_calls_json = json!([
+        {
+            "id": "call_kql_1",
+            "type": "function",
+            "function": {"name": "query_kusto", "arguments": "{\"query\":\"AppTraces | take 5\"}"}
+        }
+    ]);
+
+    let truncated_apim_req = r##"{"model":"gpt-4o","messages":[{"role":"system","content":"# Section A\nSystem rules for APIM routed agent.\n# Section B\nAlways verify metrics."},{"role":"user","content":"Summarize the 32KB truncated payload before it cuts off mid-senten"##;
+
+    let tables_payload = json!({
+        "tables": [
+            {
+                "name": "PrimaryResult",
+                "columns": [
+                    {"name": "TimeGenerated", "type": "datetime"},
+                    {"name": "RecordKind", "type": "string"},
+                    {"name": "OperationId", "type": "string"},
+                    {"name": "SpanId", "type": "string"},
+                    {"name": "ParentId", "type": "string"},
+                    {"name": "Name", "type": "string"},
+                    {"name": "Target", "type": "string"},
+                    {"name": "ResultCode", "type": "string"},
+                    {"name": "DurationMs", "type": "real"},
+                    {"name": "Message", "type": "string"},
+                    {"name": "Properties", "type": "dynamic"},
+                    {"name": "ItemCount", "type": "int"}
+                ],
+                "rows": [
+                    [
+                        "2026-11-06T01:00:00.000Z", "dependency", "op-1", "span-1", "",
+                        "chat gpt-4o", "https://my-aoai.openai.azure.com/openai/deployments/gpt-4o/chat/completions",
+                        "200", 420.0, "",
+                        {
+                            "gen_ai.system": "az.ai.openai",
+                            "gen_ai.request.model": "gpt-4o",
+                            "gen_ai.usage.input_tokens": 310,
+                            "gen_ai.usage.output_tokens": 45,
+                            "gen_ai.usage.cached_tokens": 128,
+                            "gen_ai.request.tools": tools_json
+                        },
+                        1
+                    ],
+                    [
+                        "2026-11-06T01:00:00.010Z", "trace", "op-1", "", "span-1",
+                        "", "", "", 0.0, "gen_ai.system.message",
+                        {"event.name": "gen_ai.system.message", "content": "# Role\nYou are an Azure diagnostics agent.\n# Rules\nBe concise and accurate."},
+                        1
+                    ],
+                    [
+                        "2026-11-06T01:00:00.020Z", "trace", "op-1", "", "span-1",
+                        "", "", "", 0.0, "gen_ai.user.message",
+                        {"event.name": "gen_ai.user.message", "content": "Check recent errors in AppTraces"},
+                        1
+                    ],
+                    [
+                        "2026-11-06T01:00:00.030Z", "trace", "op-1", "", "span-1",
+                        "", "", "", 0.0, "gen_ai.assistant.message",
+                        {"event.name": "gen_ai.assistant.message", "content": "", "tool_calls": tool_calls_json},
+                        1
+                    ],
+                    [
+                        "2026-11-06T01:00:00.040Z", "trace", "op-1", "", "span-1",
+                        "", "", "", 0.0, "gen_ai.tool.message",
+                        {"event.name": "gen_ai.tool.message", "name": "query_kusto", "id": "call_kql_1", "content": "{\"rows\":[{\"err\":\"timeout\"}]}"},
+                        1
+                    ],
+                    [
+                        "2026-11-06T01:00:00.050Z", "trace", "op-1", "", "span-1",
+                        "", "", "", 0.0, "gen_ai.user.message",
+                        {"event.name": "gen_ai.user.message", "content": "What caused the timeout?"},
+                        1
+                    ],
+                    [
+                        "2026-11-06T01:00:00.060Z", "trace", "op-1", "", "span-1",
+                        "", "", "", 0.0, "gen_ai.choice",
+                        {"event.name": "gen_ai.choice", "message": {"role": "assistant", "content": "The timeout occurred in downstream DB."}},
+                        1
+                    ],
+                    [
+                        "2026-11-06T01:00:02.000Z", "dependency", "op-1", "span-2", "",
+                        "POST /chat/completions", "https://apim.azure-api.net/openai/deployments/gpt-4o/chat/completions",
+                        "200", 380.0, "",
+                        {
+                            "gen_ai.system": "openai",
+                            "gen_ai.request.model": "gpt-4o",
+                            "gen_ai.usage.input_tokens": 120,
+                            "gen_ai.usage.output_tokens": 20,
+                            "request_body": truncated_apim_req
+                        },
+                        1
+                    ],
+                    [
+                        "2026-11-06T01:00:10.000Z", "dependency", "op-2", "span-3", "",
+                        "chat gpt-4o-mini", "https://my-aoai.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions",
+                        "200", 190.0, "",
+                        {
+                            "gen_ai.system": "az.ai.openai",
+                            "gen_ai.request.model": "gpt-4o-mini",
+                            "gen_ai.usage.input_tokens": 540,
+                            "gen_ai.usage.output_tokens": 60
+                        },
+                        4
+                    ]
+                ]
+            }
+        ]
+    });
+
+    let opts = IngestOptions::default();
+    let (records, st) =
+        parse_app_insights_payload(&tables_payload.to_string(), &opts).expect("parse app insights");
+
+    assert_eq!(records.len(), 3);
+    assert_eq!(st.tier1_full_calls, 2);
+    assert_eq!(st.tier2_usage_only_calls, 1);
+    assert_eq!(st.truncated_repaired_calls, 1);
+    assert_eq!(st.sampled_calls, 1);
+    assert_eq!(st.max_item_count, 4);
+
+    // Verify Call 1 has all expected segment kinds decomposed
+    let c1_kinds: HashSet<&str> = records[0]
+        .segments
+        .iter()
+        .map(|s| s.kind.as_str())
+        .collect();
+    assert!(c1_kinds.contains("system"));
+    assert!(c1_kinds.contains("history_user"));
+    assert!(c1_kinds.contains("tool_def"));
+    assert!(c1_kinds.contains("tool_call"));
+    assert!(c1_kinds.contains("tool_result"));
+    assert!(c1_kinds.contains("user_prompt"));
+    assert_eq!(
+        records[0].response_text.as_deref(),
+        Some("The timeout occurred in downstream DB.")
+    );
+
+    // Verify Call 3 is usage_only fallback
+    assert_eq!(records[2].quality.as_deref(), Some("usage_only"));
+    assert_eq!(
+        records[2].usage.get("input_total").and_then(|v| v.as_i64()),
+        Some(540)
+    );
+
+    // Verify summarize() findings include content-recording, sampling, and truncation notices
+    let summary = summarize(&records, 5.0);
+    let finding_texts: Vec<&str> = summary.findings.iter().map(|f| f.text.as_str()).collect();
+    assert!(
+        finding_texts
+            .iter()
+            .any(|t| t.contains("AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED=true")),
+        "expected content recording finding, got: {finding_texts:?}"
+    );
+    assert!(
+        finding_texts
+            .iter()
+            .any(|t| t.contains("adaptive sampling was detected")),
+        "expected sampling finding, got: {finding_texts:?}"
+    );
+    assert!(
+        finding_texts
+            .iter()
+            .any(|t| t.contains("32 KB log property limit")),
+        "expected truncation repair finding, got: {finding_texts:?}"
+    );
+}
+
+#[test]
+fn test_lossless_chunk_bridge_and_live_azure_pull() {
+    // 1. Start a mock LLM server and run Python with TOKPROF_STDOUT_LOG=1 + TOKPROF_STDOUT_FILE
+    //    sending a 50KB prompt that exceeds App Insights' 32KB single-property limit.
+    let mock_llm = TcpListener::bind("127.0.0.1:0").expect("bind mock llm");
+    let llm_port = mock_llm.local_addr().unwrap().port();
+    thread::spawn(move || {
+        if let Ok((mut s, _)) = mock_llm.accept() {
+            drain_http_request(&mut s);
+            let body = r#"{"id":"cmpl-big","model":"gpt-4o","choices":[{"message":{"role":"assistant","content":"lossless chunk response ok"}}],"usage":{"prompt_tokens":6400,"completion_tokens":12}}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = s.write_all(resp.as_bytes());
+            let _ = s.flush();
+        }
+    });
+
+    let tmp = std::env::temp_dir().join(format!("tokprof-az-pull-test-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+    let boot_dir = tokprof::runner::materialize_boot_dir();
+    let chunk_file = tmp.join("container_stdout.log");
+    let chunk_file_str = chunk_file.to_string_lossy().into_owned();
+
+    // Create a >45KB request payload (with incompressible random-looking hex blocks so gzip base64 > 20KB -> multiple chunks)
+    let py_code = format!(
+        "import urllib.request, json, hashlib; \
+         big_sys = '# System Header\\n' + '\\n'.join(hashlib.sha256(str(i).encode()).hexdigest() for i in range(900)); \
+         req_data = json.dumps({{'model':'gpt-4o','messages':[{{'role':'system','content':big_sys}},{{'role':'user','content':'verify lossless 50KB chunk bridge'}}]}}).encode(); \
+         req = urllib.request.Request('http://127.0.0.1:{llm_port}/v1/chat/completions', data=req_data, headers={{'Content-Type':'application/json'}}, method='POST'); \
+         urllib.request.urlopen(req).read()"
+    );
+    let py_bin = if cfg!(windows) { "python" } else { "python3" };
+    let status = std::process::Command::new(py_bin)
+        .args(["-c", &py_code])
+        .env("PYTHONPATH", &boot_dir)
+        .env("TOKPROF_STDOUT_LOG", "1")
+        .env("TOKPROF_STDOUT_FILE", &chunk_file_str)
+        .status()
+        .expect("run python with stdout chunk bridge");
+    assert!(status.success());
+
+    let raw_chunks = fs::read_to_string(&chunk_file).expect("read chunk file");
+    let chunk_lines: Vec<&str> = raw_chunks
+        .lines()
+        .filter(|l| l.starts_with("[TOKPROF_CHUNK]"))
+        .collect();
+    assert!(
+        chunk_lines.len() >= 2,
+        "expected multi-chunk emission for >45KB payload, got {} chunk(s)",
+        chunk_lines.len()
+    );
+
+    // 2. Serve those [TOKPROF_CHUNK] lines inside a mock Azure Log Analytics /v1/workspaces/ws-123/query HTTP server
+    let mock_la = TcpListener::bind("127.0.0.1:0").expect("bind mock log analytics");
+    let la_port = mock_la.local_addr().unwrap().port();
+    let rows_vec: Vec<Value> = chunk_lines
+        .iter()
+        .enumerate()
+        .map(|(idx, line)| {
+            json!([
+                format!("2026-11-06T02:00:0{idx}.000Z"),
+                "trace",
+                "op-chunk-1",
+                "",
+                "span-chunk-1",
+                "",
+                "",
+                "",
+                0.0,
+                *line,
+                {},
+                1
+            ])
+        })
+        .collect();
+    let la_response = json!({
+        "tables": [
+            {
+                "name": "PrimaryResult",
+                "columns": [
+                    {"name": "TimeGenerated", "type": "datetime"},
+                    {"name": "RecordKind", "type": "string"},
+                    {"name": "OperationId", "type": "string"},
+                    {"name": "SpanId", "type": "string"},
+                    {"name": "ParentId", "type": "string"},
+                    {"name": "Name", "type": "string"},
+                    {"name": "Target", "type": "string"},
+                    {"name": "ResultCode", "type": "string"},
+                    {"name": "DurationMs", "type": "real"},
+                    {"name": "Message", "type": "string"},
+                    {"name": "Properties", "type": "dynamic"},
+                    {"name": "ItemCount", "type": "int"}
+                ],
+                "rows": rows_vec
+            }
+        ]
+    })
+    .to_string();
+
+    thread::spawn(move || {
+        if let Ok((mut s, _)) = mock_la.accept() {
+            drain_http_request(&mut s);
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                la_response.len(),
+                la_response
+            );
+            let _ = s.write_all(resp.as_bytes());
+            let _ = s.flush();
+        }
+    });
+
+    // 3. Invoke `tokprof pull` end-to-end against the mock Log Analytics server
+    let pulled_jsonl = tmp.join("pulled.jsonl");
+    let pulled_str = pulled_jsonl.to_string_lossy().into_owned();
+    std::env::set_var("TOKPROF_NO_SERVER", "1");
+    std::env::set_var("TOKPROF_NO_BROWSER", "1");
+    let pull_args = vec![
+        "pull".to_string(),
+        "--workspace".to_string(),
+        "ws-123".to_string(),
+        "--endpoint".to_string(),
+        format!("http://127.0.0.1:{la_port}"),
+        "--token".to_string(),
+        "mock-azure-bearer-token".to_string(),
+        "--out".to_string(),
+        pulled_str.clone(),
+        "--no-report".to_string(),
+    ];
+    let rc = run_cli(&pull_args);
+    assert_eq!(rc, 0);
+
+    let pulled_recs = read_jsonl(&pulled_str, None);
+    assert_eq!(pulled_recs.len(), 1);
+    assert_eq!(pulled_recs[0].model.as_deref(), Some("gpt-4o"));
+    assert_eq!(
+        pulled_recs[0].response_text.as_deref(),
+        Some("lossless chunk response ok")
+    );
+    let user_seg = pulled_recs[0]
+        .segments
+        .iter()
+        .find(|s| s.kind == "user_prompt")
+        .expect("user_prompt segment");
+    assert_eq!(
+        user_seg.text.as_deref(),
+        Some("verify lossless 50KB chunk bridge")
+    );
+    let sys_chars: usize = pulled_recs[0]
+        .segments
+        .iter()
+        .filter(|s| s.kind == "system")
+        .map(|s| s.chars)
+        .sum();
+    assert!(
+        sys_chars > 50_000,
+        "expected lossless >50KB system prompt chars, got {sys_chars}"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+fn read_http_request_text(stream: &mut TcpStream) -> String {
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+    let mut buf = Vec::with_capacity(4096);
+    let mut chunk = [0u8; 4096];
+    let mut header_end = None;
+    let mut content_len = 0usize;
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if header_end.is_none() {
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        header_end = Some(pos + 4);
+                        let head = String::from_utf8_lossy(&buf[..pos]);
+                        for line in head.lines() {
+                            if let Some((k, v)) = line.split_once(':') {
+                                if k.trim().eq_ignore_ascii_case("content-length") {
+                                    content_len = v.trim().parse::<usize>().unwrap_or(0);
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(he) = header_end {
+                    if buf.len() >= he + content_len {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+#[test]
+fn test_rbac_fallback_law_latency_wait_resume_and_dedup() {
+    // 1. Verify RBAC / Tenant / NotFound error diagnostics and Sovereign Cloud endpoints
+    let err_401 = classify_azure_error(401, "InvalidAuthenticationTokenTenant: wrong tenant");
+    assert!(err_401.contains("az account set --subscription"));
+    let err_403 = classify_azure_error(403, "InsufficientAccessError: access denied");
+    assert!(err_403.contains("Log Analytics Reader"));
+    assert!(err_403.contains("--resource-id /subscriptions/"));
+    let err_404 = classify_azure_error(404, "WorkspaceNotFound");
+    assert!(err_404.contains("--cloud usgov|china"));
+
+    let (gov_la, gov_ai) = resolve_azure_cloud_endpoints(Some("usgov"));
+    assert_eq!(gov_la, "https://api.loganalytics.us");
+    assert_eq!(gov_ai, "https://api.applicationinsights.us");
+
+    // 2. Test Table-level RBAC automatic fallback (403 on AppTraces -> 200 on AppDependencies-only)
+    //    AND Resource-centric ARM Resource ID routing (/v1/subscriptions/.../query)
+    let mock_rbac = TcpListener::bind("127.0.0.1:0").expect("bind mock rbac server");
+    let rbac_port = mock_rbac.local_addr().unwrap().port();
+    thread::spawn(move || {
+        for _ in 0..2 {
+            if let Ok((mut s, _)) = mock_rbac.accept() {
+                let req_txt = read_http_request_text(&mut s);
+                assert!(
+                    req_txt.starts_with(
+                        "POST /v1/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Insights/components/app-1/query"
+                    ),
+                    "expected ARM resource-id query path, got: {req_txt}"
+                );
+                if req_txt.contains("AppTraces") {
+                    let body = r#"{"error":{"code":"InsufficientAccessError","message":"The provided credentials have insufficient access to perform the requested operation on table AppTraces"}}"#;
+                    let resp = format!(
+                        "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = s.write_all(resp.as_bytes());
+                } else {
+                    let body = json!({
+                        "tables": [{
+                            "name": "PrimaryResult",
+                            "columns": [
+                                {"name": "TimeGenerated", "type": "datetime"},
+                                {"name": "IngestionTime", "type": "string"},
+                                {"name": "RecordKind", "type": "string"},
+                                {"name": "OperationId", "type": "string"},
+                                {"name": "SpanId", "type": "string"},
+                                {"name": "ParentId", "type": "string"},
+                                {"name": "Name", "type": "string"},
+                                {"name": "Target", "type": "string"},
+                                {"name": "ResultCode", "type": "string"},
+                                {"name": "DurationMs", "type": "real"},
+                                {"name": "Message", "type": "string"},
+                                {"name": "Properties", "type": "dynamic"},
+                                {"name": "ItemCount", "type": "int"}
+                            ],
+                            "rows": [[
+                                "2026-11-06T03:00:00.000Z", "2026-11-06T03:02:30.000Z",
+                                "dependency", "op-rbac-1", "span-rbac-1", "",
+                                "chat gpt-4o", "https://aoai.openai.azure.com/openai/deployments/gpt-4o/chat/completions",
+                                "200", 250.0, "",
+                                {"gen_ai.system": "az.ai.openai", "gen_ai.request.model": "gpt-4o", "gen_ai.usage.input_tokens": 300, "gen_ai.usage.output_tokens": 40},
+                                1
+                            ]]
+                        }]
+                    })
+                    .to_string();
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = s.write_all(resp.as_bytes());
+                }
+                let _ = s.flush();
+            }
+        }
+    });
+
+    let tmp = std::env::temp_dir().join(format!("tokprof-resilience-test-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+    let clouddrive_dir = tmp.join("clouddrive");
+    fs::create_dir_all(&clouddrive_dir).unwrap();
+    std::env::set_var(
+        "TOKPROF_CLOUDDRIVE_DIR",
+        clouddrive_dir.to_string_lossy().as_ref(),
+    );
+    std::env::set_var("TOKPROF_NO_SERVER", "1");
+    std::env::set_var("TOKPROF_NO_BROWSER", "1");
+
+    let rbac_out = tmp.join("rbac.jsonl").to_string_lossy().into_owned();
+    let rc_rbac = run_cli(&[
+        "pull".to_string(),
+        "--resource-id".to_string(),
+        "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Insights/components/app-1"
+            .to_string(),
+        "--endpoint".to_string(),
+        format!("http://127.0.0.1:{rbac_port}"),
+        "--token".to_string(),
+        "mock-token".to_string(),
+        "--out".to_string(),
+        rbac_out.clone(),
+        "--no-report".to_string(),
+    ]);
+    assert_eq!(rc_rbac, 0);
+    let rbac_recs = read_jsonl(&rbac_out, None);
+    assert_eq!(rbac_recs.len(), 1);
+    assert_eq!(rbac_recs[0].quality.as_deref(), Some("usage_only"));
+
+    // 3. Test LAW Ingestion Latency (--wait-ingest), HTTP 429 retry, Multi-replica deduplication,
+    //    Split-horizon span upgrade (usage_only -> tier1_full), Azure SAS/AccountKey redaction, and --resume!
+    let mock_lag = TcpListener::bind("127.0.0.1:0").expect("bind mock lag server");
+    let lag_port = mock_lag.local_addr().unwrap().port();
+    thread::spawn(move || {
+        let cols = json!([
+            {"name": "TimeGenerated", "type": "datetime"},
+            {"name": "IngestionTime", "type": "string"},
+            {"name": "RecordKind", "type": "string"},
+            {"name": "OperationId", "type": "string"},
+            {"name": "SpanId", "type": "string"},
+            {"name": "ParentId", "type": "string"},
+            {"name": "Name", "type": "string"},
+            {"name": "Target", "type": "string"},
+            {"name": "ResultCode", "type": "string"},
+            {"name": "DurationMs", "type": "real"},
+            {"name": "Message", "type": "string"},
+            {"name": "Properties", "type": "dynamic"},
+            {"name": "ItemCount", "type": "int"}
+        ]);
+        // Request 1: HTTP 429 Too Many Requests with Retry-After: 0.02
+        if let Ok((mut s, _)) = mock_lag.accept() {
+            let _ = read_http_request_text(&mut s);
+            let body = r#"{"error":{"code":"ThrottledError","message":"Rate limit exceeded"}}"#;
+            let resp = format!(
+                "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 0.02\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = s.write_all(resp.as_bytes());
+            let _ = s.flush();
+        }
+        // Request 2 (Poll #1 after 429 retry): Only AppDependencies has ingested (3 duplicate rows from multi-replica), AppTraces not yet ingested!
+        let dep_row = json!([
+            "2026-11-06T04:00:00.000Z", "2026-11-06T04:03:00.000Z",
+            "dependency", "op-lag-1", "span-lag-1", "",
+            "chat gpt-4o", "https://aoai.openai.azure.com/openai/deployments/gpt-4o/chat/completions",
+            "200", 300.0, "",
+            {"gen_ai.system": "az.ai.openai", "gen_ai.request.model": "gpt-4o", "gen_ai.usage.input_tokens": 180, "gen_ai.usage.output_tokens": 25},
+            1
+        ]);
+        if let Ok((mut s, _)) = mock_lag.accept() {
+            let _ = read_http_request_text(&mut s);
+            let body = json!({
+                "tables": [{
+                    "name": "PrimaryResult",
+                    "columns": cols,
+                    "rows": [dep_row.clone(), dep_row.clone(), dep_row.clone()]
+                }]
+            })
+            .to_string();
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = s.write_all(resp.as_bytes());
+            let _ = s.flush();
+        }
+        // Request 3 (Poll #2): Delayed AppTraces rows have now finished ingesting!
+        if let Ok((mut s, _)) = mock_lag.accept() {
+            let _ = read_http_request_text(&mut s);
+            let body = json!({
+                "tables": [{
+                    "name": "PrimaryResult",
+                    "columns": cols,
+                    "rows": [
+                        dep_row,
+                        [
+                            "2026-11-06T04:00:00.010Z", "2026-11-06T04:04:10.000Z",
+                            "trace", "op-lag-1", "", "span-lag-1",
+                            "", "", "", 0.0, "gen_ai.system.message",
+                            {"event.name": "gen_ai.system.message", "content": "You are an Azure storage assistant."},
+                            1
+                        ],
+                        [
+                            "2026-11-06T04:00:00.020Z", "2026-11-06T04:04:10.000Z",
+                            "trace", "op-lag-1", "", "span-lag-1",
+                            "", "", "", 0.0, "gen_ai.user.message",
+                            {"event.name": "gen_ai.user.message", "content": "Conn: AccountKey=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/== and https://blob.core.windows.net/c?sv=2022&sig=abcdefghijklmnopqrstuvwxyz0123456789%2B%2F%3D"},
+                            1
+                        ],
+                        [
+                            "2026-11-06T04:00:00.030Z", "2026-11-06T04:04:10.000Z",
+                            "trace", "op-lag-1", "", "span-lag-1",
+                            "", "", "", 0.0, "gen_ai.choice",
+                            {"event.name": "gen_ai.choice", "message": {"role": "assistant", "content": "Late trace arrived and upgraded!"}},
+                            1
+                        ]
+                    ]
+                }]
+            })
+            .to_string();
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = s.write_all(resp.as_bytes());
+            let _ = s.flush();
+        }
+    });
+
+    let lag_out = tmp.join("lag.jsonl").to_string_lossy().into_owned();
+    let rc_lag = run_cli(&[
+        "pull".to_string(),
+        "--workspace".to_string(),
+        "ws-lag-1".to_string(),
+        "--endpoint".to_string(),
+        format!("http://127.0.0.1:{lag_port}"),
+        "--token".to_string(),
+        "mock-token".to_string(),
+        "--wait-ingest".to_string(),
+        "5s".to_string(),
+        "--poll-interval".to_string(),
+        "30ms".to_string(),
+        "--out".to_string(),
+        lag_out.clone(),
+        "--no-report".to_string(),
+    ]);
+    assert_eq!(rc_lag, 0);
+
+    let lag_recs = read_jsonl(&lag_out, None);
+    // Must be deduplicated to 1 call and upgraded in-place from usage_only to full segments!
+    assert_eq!(lag_recs.len(), 1);
+    assert_ne!(lag_recs[0].quality.as_deref(), Some("usage_only"));
+    assert_eq!(lag_recs[0].segments.len(), 2);
+    assert_eq!(
+        lag_recs[0].response_text.as_deref(),
+        Some("Late trace arrived and upgraded!")
+    );
+    // Verify Azure AccountKey and SAS sig were redacted
+    let user_txt = lag_recs[0]
+        .segments
+        .iter()
+        .find(|s| s.kind == "user_prompt")
+        .and_then(|s| s.text.as_deref())
+        .unwrap_or("");
+    assert!(
+        user_txt.contains("***REDACTED***") && !user_txt.contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+        "expected Azure secrets to be redacted, got: {user_txt}"
+    );
+    // Verify ingestion lag (250s = 250,000ms) was recorded and triggers a finding
+    let lag_summary = summarize(&lag_recs, 5.0);
+    assert!(
+        lag_summary
+            .findings
+            .iter()
+            .any(|f| f.text.contains("Log Analytics ingestion lag reached")),
+        "expected ingestion lag finding, got: {:?}",
+        lag_summary.findings
+    );
+
+    // Verify Cloud Shell checkpoint file was saved in clouddrive/.tokprof/pull-checkpoint.json
+    let cp_path = clouddrive_dir.join(".tokprof").join("pull-checkpoint.json");
+    assert!(cp_path.is_file(), "expected checkpoint at {cp_path:?}");
+
+    // 4. Test Azure Portal CSV export ingestion with Foundry `gen_ai.request.instructions` and `gen_ai.tool.call.result`
+    let csv_export = "\u{feff}TimeGenerated [UTC],RecordKind,OperationId,SpanId,ParentId,Name,Target,ResultCode,DurationMs,Message,Properties,ItemCount\r\n\
+2026-11-06T05:00:00.000Z,dependency,op-csv-1,sp-csv-1,,responses gpt-4.1,https://foundry.services.ai.azure.com/models/chat/completions,200,310,,\"{\"\"gen_ai.system\"\":\"\"az.ai.inference\"\",\"\"gen_ai.request.model\"\":\"\"gpt-4.1\"\",\"\"gen_ai.request.instructions\"\":\"\"You are a Foundry agent.\"\",\"\"gen_ai.usage.input_tokens\"\":220,\"\"gen_ai.usage.output_tokens\"\":35,\"\"gen_ai.usage.cache_creation_input_tokens\"\":128}\",1\r\n\
+2026-11-06T05:00:00.010Z,trace,op-csv-1,,sp-csv-1,,,,0,gen_ai.tool.message,\"{\"\"event.name\"\":\"\"gen_ai.tool.message\"\",\"\"gen_ai.tool.call.name\"\":\"\"fetch_metrics\"\",\"\"gen_ai.tool.call.id\"\":\"\"tc_9\"\",\"\"gen_ai.tool.call.result\"\":\"\"{\\\"\"cpu\\\"\":42}\"\"}\",1\r\n\
+2026-11-06T05:00:00.020Z,trace,op-csv-1,,sp-csv-1,,,,0,gen_ai.user.message,\"{\"\"event.name\"\":\"\"gen_ai.user.message\"\",\"\"content\"\":\"\"Summarize CPU usage\"\"}\",1\r\n\
+2026-11-06T05:00:00.030Z,trace,op-csv-1,,sp-csv-1,,,,0,gen_ai.choice,\"{\"\"event.name\"\":\"\"gen_ai.choice\"\",\"\"content\"\":\"\"CPU is at 42%.\"\"}\",1\r\n";
+
+    let (csv_recs, csv_st) =
+        parse_app_insights_payload(csv_export, &IngestOptions::default()).expect("parse csv export");
+    assert_eq!(csv_recs.len(), 1);
+    assert_eq!(csv_st.tier1_full_calls, 1);
+    assert_eq!(csv_recs[0].model.as_deref(), Some("gpt-4.1"));
+    assert_eq!(
+        csv_recs[0].usage.get("cache_write").and_then(|v| v.as_i64()),
+        Some(128)
+    );
+    let csv_kinds: HashSet<&str> = csv_recs[0]
+        .segments
+        .iter()
+        .map(|s| s.kind.as_str())
+        .collect();
+    assert!(csv_kinds.contains("system"));
+    assert!(csv_kinds.contains("tool_result"));
+    assert!(csv_kinds.contains("user_prompt"));
+
+    // 5. Verify prompt inclusion vs `--no-content` vs `--usage-only` on the same dataset
+    let ci_full = inspect_records_content(&csv_recs);
+    assert_eq!(ci_full.mode, "full-prompts");
+    assert!(ci_full.segments_with_text > 0);
+    assert!(ci_full.stored_prompt_chars > 0);
+    assert!(ci_full.stored_response_chars > 0);
+
+    let (no_content_recs, _) = parse_app_insights_payload(
+        csv_export,
+        &IngestOptions {
+            include_text: Some(false),
+            ..IngestOptions::default()
+        },
+    )
+    .expect("parse no-content");
+    let ci_nc = inspect_records_content(&no_content_recs);
+    assert_eq!(ci_nc.mode, "no-content");
+    assert_eq!(ci_nc.total_segments, ci_full.total_segments);
+    assert_eq!(ci_nc.segments_with_text, 0);
+    assert_eq!(ci_nc.stored_prompt_chars, 0);
+    assert_eq!(ci_nc.stored_response_chars, 0);
+    assert_eq!(no_content_recs[0].est_input, csv_recs[0].est_input);
+    assert_eq!(no_content_recs[0].sysfp, csv_recs[0].sysfp);
+
+    let (usage_only_recs, _) = parse_app_insights_payload(
+        csv_export,
+        &IngestOptions {
+            usage_only: true,
+            ..IngestOptions::default()
+        },
+    )
+    .expect("parse usage-only");
+    let ci_uo = inspect_records_content(&usage_only_recs);
+    assert_eq!(ci_uo.mode, "usage-only");
+    assert_eq!(ci_uo.total_segments, 0);
+    assert_eq!(
+        usage_only_recs[0]
+            .usage
+            .get("input_total")
+            .and_then(|v| v.as_i64()),
+        Some(220)
+    );
+
+    std::env::remove_var("TOKPROF_CLOUDDRIVE_DIR");
+    let _ = fs::remove_dir_all(&tmp);
+}
+

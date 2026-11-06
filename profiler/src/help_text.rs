@@ -61,6 +61,8 @@ COMMANDS
   shell      Open an interactive subshell where all child processes are profiled
   ebpf       Linux: capture LLM calls (HTTPS & plain HTTP/h2c) of running processes via eBPF
   mitm       Windows/macOS/Linux: capture LLM calls via mitmproxy (--local or --mode)
+  pull       Pull LLM calls from Azure Application Insights / Log Analytics (--workspace or --app-insights)
+  import     Import exported Application Insights, OpenTelemetry GenAI, APIM, or container logs into JSONL
   compare    Compare two JSONL runs (input tokens/request and calls/request with 95% CI)
   export     Export records in the legacy examples/token_report.py JSONL schema
   explain    Show how tokprof classifies a request URL + JSON body and why
@@ -141,8 +143,10 @@ pub const HELP_KO: &str = "\
                --watch                                   실시간 터미널 대시보드 모드
   run        로컬 게이트웨이 및 프로세스 내부 훅(Python/Node)을 통해 명령 실행 및 캡처
   shell      하위 프로세스가 모두 프로파일링되는 대화형 셸 열기
-  ebpf       Linux: 재시작 없이 실행 중인 프로세스의 HTTPS/HTTP/HTTP2 호출을 eBPF로 직접 캡처
+  ebpf       Linux: 재시작 없이 실행 중인 프로세스의 TLS/평문 HTTP 호출을 eBPF로 직접 캡처
   mitm       Windows/macOS/Linux: mitmproxy를 통한 프로세스별 로컬 캡처 (--local 또는 --mode)
+  pull       Azure Application Insights / Log Analytics에서 배포된 에이전트 로그를 직접 조회·분석
+  import     내보낸 Application Insights, OpenTelemetry GenAI, APIM, 컨테이너 로그 파일을 JSONL로 변환
   compare    개선 전(before)과 후(after) 두 JSONL 실행의 요청당 토큰·호출 수 변화 검증
   export     examples/token_report.py 호환 JSONL 스키마로 내보내기
   explain    특정 URL과 요청 본문이 LLM 호출로 판정되는지(또는 제외되는지) 점수와 이유 설명
@@ -184,6 +188,8 @@ pub fn subcommand_help_ko(subcmd: &str) -> Option<&'static str> {
         "run" => Some("LLM 기본 URL 환경변수 리다이렉트 및 Python/Node 프로세스 내부 훅을 적용하여 명령을 실행합니다.\n  예시:\n    tokprof run --report --csv -- python agent.py"),
         "ebpf" => Some("Linux: 이미 실행 중인 프로세스 및 컨테이너의 TLS/평문 HTTP 호출을 eBPF로 캡처합니다.\n  예시:\n    tokprof ebpf --comm fdai --report\n    tokprof ebpf --all --duration 1m --report"),
         "mitm" => Some("mitmproxy를 사용해 선택된 프로세스의 LLM 호출을 캡처합니다 (Windows/macOS/Linux).\n  예시:\n    tokprof mitm --trust-help\n    tokprof mitm --local python,node --report"),
+        "pull" => Some("Azure Application Insights 또는 Log Analytics 워크스페이스에서 배포된 에이전트의 LLM 호출 로그를 가져와 세그먼트 분해 및 리포트를 생성합니다.\n  예시:\n    tokprof pull --workspace <WORKSPACE_ID> --since 24h\n    tokprof pull --app-insights <APP_ID> --since 2h --conv <OPERATION_ID>\n    tokprof pull --print-kql --since 6h"),
+        "import" => Some("Application Insights, OpenTelemetry GenAI, APIM, 또는 컨테이너 로그([TOKPROF_CHUNK]) 파일을 tokprof JSONL로 변환하고 분석합니다.\n  예시:\n    tokprof import appinsights_export.json --report\n    tokprof import container_stdout.log --out .tokprof/run.jsonl --report"),
         "compare" => Some("최적화 전(before)과 후(after) 두 실행 기록을 95% 부트스트랩 신뢰구간으로 비교합니다.\n  예시:\n    tokprof compare before.jsonl after.jsonl"),
         "explain" => Some("특정 URL과 요청 본문 JSON이 어떻게 분류되는지 점수와 판정 이유를 설명합니다.\n  예시:\n    tokprof explain http://vllm.internal:8000/v1/chat/completions --body req.json"),
         "doctor" => Some("현재 환경의 토크나이저, Linux eBPF 커널 지원, mitmproxy 설치 여부를 점검합니다."),

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "tokprof"
-version = "0.2.0"
+version = "0.3.0"
 description = "Zero-code LLM agent token profiler (native Rust single-binary implementation)"
 readme = "README.md"
 license = { text = "MIT" }

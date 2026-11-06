@@ -48,6 +48,8 @@ tokprof run -- python my_agent.py      # run a command with LLM base URLs routed
 tokprof shell                          # a shell whose child processes are profiled
 tokprof report run.jsonl --prices prices.json   # add a cost estimate (per 1M tokens, your prices)
 tokprof compare before.jsonl after.jsonl        # per-request change with a 95% bootstrap interval
+tokprof pull --workspace <WS_ID> --since 6h     # pull & decompose LLM calls from Azure Application Insights / Log Analytics
+tokprof import appinsights.json --report        # import exported App Insights, OTel GenAI, APIM, or [TOKPROF_CHUNK] logs
 tokprof export run.jsonl --out legacy.jsonl     # schema of examples/token_report.py
 tokprof doctor                         # what works on this machine
 tokprof selftest                       # verify the pipeline with a local mock LLM
@@ -222,3 +224,34 @@ tokprof mitm --mode regular@8080 --duration 300   # stop by itself after 5 minut
 - **Verified:** the addon and the command with real mitmproxy 12.3 in regular proxy mode (plain HTTP and TLS, gzip responses, SSE
   pass-through) on Linux, and in CI on Windows, macOS and Linux (regular mode). **Not verified:** `--local` capture itself on Windows
   and macOS, which needs administrator rights or a system-extension approval that CI cannot give; it is mitmproxy's own feature.
+
+## Azure deployed agents: `tokprof pull`, `tokprof import`, and Cloud Shell
+
+For agents already running on Azure App Service, Container Apps (ACA), Azure Functions, or Azure AI Foundry Hosted Agents where host eBPF is unavailable, `tokprof` pulls and decomposes OpenTelemetry GenAI / OpenInference / APIM / `[TOKPROF_CHUNK]` telemetry directly from Log Analytics and Application Insights:
+
+```bash
+# Pull & decompose LLM calls from Log Analytics or Application Insights (uses `az` CLI token automatically)
+tokprof pull --workspace <WORKSPACE_ID> --since 6h
+tokprof pull --app-insights <APP_ID> --since 2h --conv <OPERATION_ID>
+
+# Resource-centric RBAC (Monitoring Reader on the App Insights resource without Workspace permission)
+tokprof pull --resource-id /subscriptions/<SUB>/resourceGroups/<RG>/providers/Microsoft.Insights/components/<APP> --since 6h
+
+# Wait for Log Analytics ingestion latency (2–15m) and upgrade usage-only spans when AppTraces arrive
+tokprof pull --workspace <WORKSPACE_ID> --since 30m --wait-ingest 5m --poll-interval 15s
+
+# Resume after an Azure Cloud Shell 30m timeout from ~/clouddrive/.tokprof/pull-checkpoint.json
+tokprof pull --resume
+
+# Control prompt inclusion & handle oversized workspaces:
+#   1) Full prompts (default)
+#   2) --no-content: full 7-segment token counts & sysfp hashes, 0 prompt/response chars stored
+#   3) --usage-only: skip AppTraces completely and query only AppDependencies token totals
+tokprof pull --workspace <WORKSPACE_ID> --since 6h --no-content
+tokprof pull --workspace <WORKSPACE_ID> --since 7d --usage-only --limit 50000
+tokprof report .tokprof/full.jsonl --no-content --html shareable.html --csv shareable.csv
+
+# Import exported JSON, Azure Portal CSV, NDJSON, or container stdout logs offline
+tokprof import portal_export.csv --report
+```
+

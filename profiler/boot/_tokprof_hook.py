@@ -6,7 +6,9 @@ tokprof process. It never modifies requests or responses and swallows its own er
 """
 
 import atexit
+import base64
 import gzip
+import hashlib
 import http.client
 import json
 import os
@@ -20,6 +22,10 @@ from urllib.parse import urlsplit
 
 _PORT = os.environ.get("TOKPROF_PORT", "")
 _TOKEN = os.environ.get("TOKPROF_TOKEN", "")
+_INGEST_URL = os.environ.get("TOKPROF_INGEST_URL", "")
+_STDOUT_LOG = os.environ.get("TOKPROF_STDOUT_LOG", "").strip().lower()
+_STDOUT_FILE = os.environ.get("TOKPROF_STDOUT_FILE", "").strip()
+_CHUNK_MAX_CHARS = 20000
 # Pre-filter only; tokprof's detector decides. Keep identical to tokprof.detect.plausible (tests/vectors/prefilter.json).
 _EXCLUDED_PATH = re.compile(
     r"/(embeddings?|moderations?|rerank|tokenize|detokenize|count_tokens|"
@@ -47,10 +53,38 @@ def _warn(msg):
             pass
 
 
+def _emit_stdout_chunks(payload):
+    try:
+        raw_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        comp = gzip.compress(raw_bytes)
+        b64 = base64.b64encode(comp).decode("ascii")
+        cid = hashlib.sha256(raw_bytes + str(time.time()).encode("ascii")).hexdigest()[:12]
+        total = max(1, (len(b64) + _CHUNK_MAX_CHARS - 1) // _CHUNK_MAX_CHARS)
+        lines = []
+        for idx in range(total):
+            part = b64[idx * _CHUNK_MAX_CHARS : (idx + 1) * _CHUNK_MAX_CHARS]
+            rec = json.dumps({"id": cid, "seq": idx, "total": total, "data": part}, separators=(",", ":"))
+            lines.append("[TOKPROF_CHUNK] " + rec + "\n")
+        out_text = "".join(lines)
+        with _lock:
+            if _STDOUT_FILE:
+                with open(_STDOUT_FILE, "a", encoding="utf-8") as fh:
+                    fh.write(out_text)
+            elif _STDOUT_LOG == "stdout":
+                sys.stdout.write(out_text)
+                sys.stdout.flush()
+            else:
+                sys.stderr.write(out_text)
+                sys.stderr.flush()
+    except Exception as exc:
+        _warn("could not emit stdout chunks: %r" % (exc,))
+
+
 def _worker():
     global _inflight
     conn = None
     port_num = int(_PORT) if _PORT.isdigit() else 0
+    ingest_parts = urlsplit(_INGEST_URL) if _INGEST_URL else None
     while True:
         payload = _q.get()
         try:
@@ -59,9 +93,19 @@ def _worker():
             delivered = False
             for _attempt in range(2):
                 try:
-                    if conn is None:
-                        conn = http.client.HTTPConnection("127.0.0.1", port_num, timeout=5)
-                    conn.request("POST", "/__tokprof/ingest", body=body_bytes, headers=headers)
+                    if ingest_parts and ingest_parts.hostname:
+                        h_port = ingest_parts.port or (443 if ingest_parts.scheme == "https" else 80)
+                        h_path = ingest_parts.path or "/__tokprof/ingest"
+                        if conn is None:
+                            if ingest_parts.scheme == "https":
+                                conn = http.client.HTTPSConnection(ingest_parts.hostname, h_port, timeout=5)
+                            else:
+                                conn = http.client.HTTPConnection(ingest_parts.hostname, h_port, timeout=5)
+                        conn.request("POST", h_path, body=body_bytes, headers=headers)
+                    else:
+                        if conn is None:
+                            conn = http.client.HTTPConnection("127.0.0.1", port_num, timeout=5)
+                        conn.request("POST", "/__tokprof/ingest", body=body_bytes, headers=headers)
                     conn.getresponse().read()
                     delivered = True
                     break
@@ -98,6 +142,10 @@ if hasattr(os, "register_at_fork"):
 
 def _send(payload):
     global _started, _inflight
+    if _STDOUT_LOG in ("1", "true", "stdout", "stderr") or _STDOUT_FILE:
+        _emit_stdout_chunks(payload)
+        if not ((_PORT and _TOKEN) or _INGEST_URL):
+            return
     if not _started:
         with _lock:
             if not _started:
@@ -626,7 +674,8 @@ class _Finder:
 
 
 def install():
-    if not (_PORT and _TOKEN):
+    has_stdout = _STDOUT_LOG in ("1", "true", "stdout", "stderr") or bool(_STDOUT_FILE)
+    if not ((_PORT and _TOKEN) or _INGEST_URL or has_stdout):
         return
     missing = False
     for name, patcher in _PATCHERS.items():

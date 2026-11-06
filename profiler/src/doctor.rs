@@ -1,3 +1,4 @@
+use crate::appinsights::is_cloud_shell;
 use crate::counting::get_counter;
 use crate::ebpf::{find_helper, is_root, which_exe};
 use crate::mitm::find_mitmdump;
@@ -83,6 +84,20 @@ pub fn run_doctor() -> i32 {
                     .to_string()
             }),
     ));
+    let cloud_shell = is_cloud_shell();
+    let az_cli = which_exe("az");
+    rows.push((
+        "Azure CLI / Cloud Shell (tokprof pull)",
+        az_cli.is_some() || cloud_shell,
+        format!(
+            "az={}; cloud_shell={} (Web Preview ports 8080, 8000-8090)",
+            az_cli
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "not found".to_string()),
+            if cloud_shell { "yes" } else { "no" }
+        ),
+    ));
 
     println!("tokprof {} doctor (Rust)", env!("CARGO_PKG_VERSION"));
     for (name, ok, detail) in &rows {
@@ -103,6 +118,14 @@ pub fn run_doctor() -> i32 {
             "possible"
         } else {
             "install mitmproxy first"
+        }
+    );
+    println!(
+        "  Azure Application Insights / Log Analytics pull (tokprof pull / import): {}",
+        if az_cli.is_some() {
+            "ready (via az CLI or --token)"
+        } else {
+            "ready with --token or tokprof import"
         }
     );
     0

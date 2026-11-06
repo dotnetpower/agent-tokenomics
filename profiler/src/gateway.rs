@@ -438,6 +438,23 @@ impl Gateway {
         routes.sort_by_key(|b| std::cmp::Reverse(b.prefix.len()));
         let rec_hosts =
             record_hosts || std::env::var("TOKPROF_RECORD_HOSTS").ok().as_deref() == Some("1");
+        let (bind_host, bind_port) = std::env::var("TOKPROF_LISTEN")
+            .ok()
+            .and_then(|s| {
+                let st = s.trim();
+                if st.is_empty() {
+                    return None;
+                }
+                if let Some((h, p)) = st.rsplit_once(':') {
+                    let pn = p.parse::<usize>().unwrap_or(0);
+                    Some((if h.is_empty() { "0.0.0.0".to_string() } else { h.to_string() }, pn))
+                } else if let Ok(pn) = st.parse::<usize>() {
+                    Some(("127.0.0.1".to_string(), pn))
+                } else {
+                    Some((st.to_string(), 0))
+                }
+            })
+            .unwrap_or_else(|| ("127.0.0.1".to_string(), 0));
         Arc::new(Self {
             routes,
             sink,
@@ -449,8 +466,8 @@ impl Gateway {
                 .iter()
                 .map(|s| (*s).to_string())
                 .collect(),
-            host: "127.0.0.1".to_string(),
-            port: AtomicUsize::new(0),
+            host: bind_host,
+            port: AtomicUsize::new(bind_port),
             use_tiktoken,
             ingest_token,
             detector: detector.unwrap_or_else(|| Arc::new(Detector::default())),
@@ -1091,7 +1108,8 @@ pub struct GatewayServer {
 
 impl GatewayServer {
     pub fn start(gateway: Arc<Gateway>) -> std::io::Result<Self> {
-        let listener = TcpListener::bind((gateway.host.as_str(), 0))?;
+        let req_port = gateway.port.load(Ordering::SeqCst) as u16;
+        let listener = TcpListener::bind((gateway.host.as_str(), req_port))?;
         let port = listener.local_addr()?.port();
         gateway.port.store(port as usize, Ordering::SeqCst);
         let stop = gateway.shutdown_flag.clone();
