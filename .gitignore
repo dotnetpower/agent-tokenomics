@@ -1,12 +1,38 @@
+# Node / Astro Starlight
 node_modules/
 dist/
 .astro/
-.DS_Store
 
-# profiler
-profiler/.venv/
-profiler/target/
-.tokprof/
-*.egg-info/
+# Python bytecode, caches, virtualenvs, and packaging
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+.venv*/
+venv/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+wheels/
+*.egg-info/
+*.egg
+*.whl
+
+# Rust / Cargo / eBPF build artifacts
+target/
+profiler/target/
+profiler/ebpf/bin/
+
+# tokprof runtime recordings & local environment
+.tokprof/
+.env
+.env.*
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
