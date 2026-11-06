@@ -1,6 +1,6 @@
 ---
 title: "Copilot Tokenomics (Token Economics)"
-description: "Practical tokenomics and token economics for GitHub Copilot in VS Code: save tokens and AI credits, trim context and MCP overhead, and speed up coding with cctx."
+description: "Practical tokenomics and token economics for GitHub Copilot in VS Code: save tokens and AI credits, trim MCP overhead, and speed up coding with cctx."
 track: copilot
 verified: 2026-11-03
 ---

@@ -1,6 +1,6 @@
 ---
 title: "4. 개선"
-description: 증명된 원인에 대응하는 수정 하나를 적용합니다.
+description: "LLM 에이전트 토큰 이코노믹스 4단계(개선): 마이크로 스킬, 도구 가지치기, 루프 가드, 도구 출력 축소, 프롬프트 캐싱을 실험당 하나씩 적용합니다."
 track: agent
 stage: improve
 verified: 2026-11-03

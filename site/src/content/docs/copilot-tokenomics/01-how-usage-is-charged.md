@@ -1,6 +1,6 @@
 ---
 title: How Copilot usage is charged
-description: Usage-based billing with AI credits, and why tokens matter.
+description: "Copilot tokenomics & token economics billing guide: understand GitHub AI Credits (input, cached, output token rates) vs. legacy Premium Request multipliers."
 track: copilot
 verified: 2026-11-03
 sidebar:

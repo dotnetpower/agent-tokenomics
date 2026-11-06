@@ -1,6 +1,6 @@
 ---
 title: Keep context lean
-description: New chats, forks, compaction, focused attachments, and exclusions.
+description: "Reduce GitHub Copilot token usage with context hygiene: new chats per task, /fork, /compact, focused #file attachments, workspace exclusions, and cctx."
 track: copilot
 verified: 2026-11-03
 sidebar:

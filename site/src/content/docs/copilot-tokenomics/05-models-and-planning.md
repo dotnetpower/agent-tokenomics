@@ -1,6 +1,6 @@
 ---
 title: Models, planning, delegation
-description: Pick models on evidence, plan before coding, and delegate bounded work.
+description: "Optimize LLM token economics in VS Code Copilot: choose models by cost per completed task, plan before coding, and isolate exploration in subagents."
 track: copilot
 verified: 2026-11-03
 sidebar:

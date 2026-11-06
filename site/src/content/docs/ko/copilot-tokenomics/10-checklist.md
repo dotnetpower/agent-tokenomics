@@ -1,6 +1,6 @@
 ---
-title: 체크리스트
-description: Copilot 비용을 낮추기 위한 한 페이지 분량의 점검 루틴입니다.
+title: "체크리스트"
+description: "VS Code GitHub Copilot 토큰과 AI 크레딧 비용을 낮추기 위해 세션 시작 전·중·후에 점검하는 한 페이지 토큰 이코노믹스 루틴입니다."
 track: copilot
 verified: 2026-11-03
 sidebar:

@@ -1,6 +1,6 @@
 ---
 title: Checklist
-description: A one-page routine for lower Copilot cost.
+description: "One-page Copilot tokenomics checklist: high-impact habits before, during, and after VS Code GitHub Copilot sessions to cut token and AI credit spend."
 track: copilot
 verified: 2026-11-03
 sidebar:

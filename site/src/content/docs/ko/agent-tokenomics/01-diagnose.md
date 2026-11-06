@@ -1,6 +1,6 @@
 ---
 title: "1. 현재 상태 진단"
-description: 아무것도 바꾸기 전에 토큰이 어디에 쓰이는지 측정합니다.
+description: "LLM 에이전트 토큰 이코노믹스 1단계(진단): 요청별 입력·캐시·출력·추론 토큰, 첫 호출 고정 오버헤드, 턴별 컨텍스트 증가 곡선을 측정합니다."
 track: agent
 stage: diagnose
 verified: 2026-11-03

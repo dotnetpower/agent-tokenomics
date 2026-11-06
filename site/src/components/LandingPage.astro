@@ -24,11 +24,13 @@ const demoReportUrl = `${base}demo/tokprof-sample.html`;
       <h1 id="_top" data-page-title="" class="at-hero-title">
         {isKo ? (
           <>
+            <span class="at-h1-kicker">LLM · 에이전트 토큰 이코노믹스 (Tokenomics · Token Economics)</span>
             AI 도구의 품질은 유지하면서,<br />
             <span class="at-accent-text">불필요한 토큰 사용을 줄이세요.</span>
           </>
         ) : (
           <>
+            <span class="at-h1-kicker">LLM &amp; Agent Tokenomics (Token Economics)</span>
             Spend fewer tokens,<br />
             <span class="at-accent-text">without making your AI tools worse.</span>
           </>
@@ -705,10 +707,14 @@ Assistant: Patched boundary check (&gt;= 100); 14 passed.</pre>
         <ul class="at-lever-list">
           <li><a href={docUrl("copilot-tokenomics/01-how-usage-is-charged/")}><span>01. {isKo ? "과금 방식과 모델별 배수" : "How Usage Is Charged"}</span><span>→</span></a></li>
           <li><a href={docUrl("copilot-tokenomics/02-measure-usage/")}><span>02. {isKo ? "사용량 측정: Debug Logs" : "Measure Usage"}</span><span>→</span></a></li>
-          <li><a href={docUrl("copilot-tokenomics/03-context-hygiene/")}><span>03. {isKo ? "필요한 컨텍스트만 포함하기: #file" : "Context Hygiene"}</span><span>→</span></a></li>
+          <li><a href={docUrl("copilot-tokenomics/03-context-hygiene/")}><span>03. {isKo ? "컨텍스트 위생: #file · /compact" : "Context Hygiene"}</span><span>→</span></a></li>
           <li><a href={docUrl("copilot-tokenomics/04-instructions-and-tools/")}><span>04. {isKo ? "지침 파일과 도구 선택" : "Instructions & Tools"}</span><span>→</span></a></li>
-          <li><a href={docUrl("copilot-tokenomics/08-agent-modes-and-budget/")}><span>08. {isKo ? "에이전트 모드와 예산" : "Agent Modes & Budget"}</span><span>→</span></a></li>
-          <li><a href={docUrl("copilot-tokenomics/09-mcp-audit/")}><span>09. {isKo ? "MCP 서버의 토큰 사용량 점검" : "MCP Server Audit"}</span><span>→</span></a></li>
+          <li><a href={docUrl("copilot-tokenomics/05-models-and-planning/")}><span>05. {isKo ? "모델 선택, 계획, 서브에이전트 위임" : "Models, Planning & Delegation"}</span><span>→</span></a></li>
+          <li><a href={docUrl("copilot-tokenomics/06-prompt-and-output-style/")}><span>06. {isKo ? "프롬프트·수식 압축과 출력 제한" : "Prompt & Output Style"}</span><span>→</span></a></li>
+          <li><a href={docUrl("copilot-tokenomics/07-language-and-tokenization/")}><span>07. {isKo ? "언어별 BPE 토큰화와 비용" : "Language & Tokenization"}</span><span>→</span></a></li>
+          <li><a href={docUrl("copilot-tokenomics/08-agent-modes-and-budget/")}><span>08. {isKo ? "에이전트 모드와 예산 가드" : "Agent Modes & Budget"}</span><span>→</span></a></li>
+          <li><a href={docUrl("copilot-tokenomics/09-mcp-audit/")}><span>09. {isKo ? "MCP 서버 스키마 점검" : "MCP Server Audit"}</span><span>→</span></a></li>
+          <li><a href={docUrl("copilot-tokenomics/10-checklist/")}><span>10. {isKo ? "한 페이지 점검 체크리스트" : "One-Page Checklist"}</span><span>→</span></a></li>
           <li><a href={docUrl("copilot-tokenomics/cctx/")}><span>11. {isKo ? "cctx: 토큰 절감 및 개발 가속 (VS Code)" : "cctx: Token Saver & Accelerator (VS Code)"}</span><span>→</span></a></li>
         </ul>
         <div>
@@ -729,13 +735,15 @@ Assistant: Patched boundary check (&gt;= 100); 14 passed.</pre>
           </p>
         </div>
         <ul class="at-lever-list">
-          <li><a href={docUrl("agent-tokenomics/00-concepts/")}><span>00. {isKo ? "핵심 개념: 요청마다 컨텍스트 다시 보내기" : "Core Concepts"}</span><span>→</span></a></li>
+          <li><a href={docUrl("agent-tokenomics/00-concepts/")}><span>00. {isKo ? "핵심 개념: 무상태 재전송과 캐싱" : "Core Concepts (Token Economics)"}</span><span>→</span></a></li>
           <li><a href={docUrl("agent-tokenomics/01-diagnose/")}><span>01. {isKo ? "현재 사용량 진단: tokprof" : "Diagnose Usage"}</span><span>→</span></a></li>
-          <li><a href={docUrl("agent-tokenomics/02-isolate/")}><span>02. {isKo ? "토큰 낭비의 주요 원인 찾기" : "Isolate the Cause"}</span><span>→</span></a></li>
-          <li><a href={docUrl("agent-tokenomics/03-prove/")}><span>03. {isKo ? "반복 측정으로 원인 확인하기" : "Prove with Baseline"}</span><span>→</span></a></li>
-          <li><a href={docUrl("agent-tokenomics/04-improve/")}><span>04. {isKo ? "원인에 맞게 개선하기" : "Targeted Fixes"}</span><span>→</span></a></li>
+          <li><a href={docUrl("agent-tokenomics/02-isolate/")}><span>02. {isKo ? "토큰 낭비의 주요 원인 분리" : "Isolate the Cause"}</span><span>→</span></a></li>
+          <li><a href={docUrl("agent-tokenomics/03-prove/")}><span>03. {isKo ? "반복 측정으로 원인 증명" : "Prove with Baseline"}</span><span>→</span></a></li>
+          <li><a href={docUrl("agent-tokenomics/04-improve/")}><span>04. {isKo ? "원인별 맞춤 개선 적용" : "Targeted Fixes"}</span><span>→</span></a></li>
           <li><a href={docUrl("agent-tokenomics/05-result/")}><span>05. {isKo ? "결과 확인 후 유지 또는 되돌리기" : "Verify & Report"}</span><span>→</span></a></li>
-          <li><a href={docUrl("agent-tokenomics/tokprof/")}><span>06. {isKo ? "tokprof 설치 및 사용법 (PyPI)" : "tokprof: Install & Usage (PyPI)"}</span><span>→</span></a></li>
+          <li><a href={docUrl("agent-tokenomics/06-golden-dataset-and-rubric/")}><span>06. {isKo ? "골든 데이터셋과 루브릭 품질 평가" : "Golden Dataset & Rubric Eval"}</span><span>→</span></a></li>
+          <li><a href={docUrl("agent-tokenomics/tokprof/")}><span>07. {isKo ? "tokprof 설치 및 사용법 (PyPI)" : "tokprof: Install & Usage (PyPI)"}</span><span>→</span></a></li>
+          <li><a href={docUrl("agent-tokenomics/case-tokeneconomizer/")}><span>08. {isKo ? "사례 연구: TokenEconomizer" : "Case Study: TokenEconomizer"}</span><span>→</span></a></li>
         </ul>
         <div>
           <a class="at-btn at-btn-secondary" href={docUrl("agent-tokenomics/")}>
@@ -877,12 +885,121 @@ Assistant: Patched boundary check (&gt;= 100); 14 passed.</pre>
         <a class="at-btn at-btn-secondary" href={docUrl("glossary/")}>
           {isKo ? "한영 용어집" : "Glossary"}
         </a>
+        <a class="at-btn at-btn-secondary" href={isKo ? base : `${base}ko/`}>
+          {isKo ? "English Guide" : "한국어 가이드"}
+        </a>
         <a class="at-btn at-btn-ghost" href={`${base}llms.txt`}>
           llms.txt
         </a>
         <a class="at-btn at-btn-ghost" href={`${base}llms-full.txt`}>
           llms-full.txt
         </a>
+        <a class="at-btn at-btn-ghost" href={`${base}rss.xml`}>
+          rss.xml
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4B. What Is Tokenomics (Token Economics) in AI & LLMs? (Search Authority & Entity Disambiguation) -->
+  <section id="what-is-tokenomics" aria-labelledby="what-is-tokenomics-title">
+    <div class="at-sec-head">
+      <span class="at-eyebrow">
+        <i class="at-eyebrow-dot" aria-hidden="true"></i>
+        {isKo
+          ? "토큰 이코노믹스 · 토큰 경제학의 정의와 4대 핵심 축"
+          : "DEFINITION & FOUR PILLARS · AI TOKENOMICS & TOKEN ECONOMICS"}
+      </span>
+      <h2 id="what-is-tokenomics-title">
+        {isKo
+          ? "AI와 LLM에서 토큰 이코노믹스(Tokenomics · Token Economics)란 무엇인가요?"
+          : "What Is Tokenomics (Token Economics) in AI, LLMs, and Coding Agents?"}
+      </h2>
+      <p>
+        {isKo
+          ? "AI 엔지니어링에서 토큰 이코노믹스(Tokenomics, 또는 토큰 경제학 · Token Economics)는 모델이 읽고 생성하는 토큰(입력, 캐시 적중 입력, 출력, 추론 토큰)의 과금 구조와 컨텍스트 윈도우 예산을 분석하여, 작업 성공률과 응답 품질을 떨어뜨리지 않고 작업당 총비용과 지연 시간을 최적화하는 기술 분야입니다(디지털 자산의 발행·분배를 다루는 암호화폐 토큰노믹스와는 구분됩니다)."
+          : "In AI engineering, tokenomics (also called AI token economics) is the discipline of measuring, pricing, budgeting, and optimizing the tokens a language model reads and generates (input, cached input, output, and reasoning tokens) so teams reduce cost and latency per completed task without sacrificing quality. It is distinct from cryptocurrency/Web3 tokenomics, which studies digital asset supply."}
+      </p>
+    </div>
+
+    <div class="at-principles-grid">
+      <div class="at-principle-card">
+        <span class="at-principle-num">PILLAR 01 / TOKEN UTILITY &amp; ROI</span>
+        <h3>
+          {isKo ? "1. 완료된 작업당 비용과 품질" : "1. Cost per completed task"}
+        </h3>
+        <p>
+          {isKo ? (
+            <>
+              단순히 토큰 단가가 가장 낮은 모델이 아니라, 재시도 없이 한 번에 문제를 해결하는 총비용과{" "}
+              <a href={docUrl("agent-tokenomics/06-golden-dataset-and-rubric/")}>골든 데이터셋 품질 기준선</a>을 함께 평가합니다.
+            </>
+          ) : (
+            <>
+              Optimize for total tokens spent per successful outcome — not raw price per token — verified against a{" "}
+              <a href={docUrl("agent-tokenomics/06-golden-dataset-and-rubric/")}>Golden Dataset &amp; Rubric</a>.
+            </>
+          )}
+        </p>
+      </div>
+      <div class="at-principle-card">
+        <span class="at-principle-num">PILLAR 02 / PROMPT CACHING PREFIX</span>
+        <h3>
+          {isKo ? "2. 접두부 안정성과 프롬프트 캐싱" : "2. Prefix stability & caching"}
+        </h3>
+        <p>
+          {isKo ? (
+            <>
+              변하지 않는 시스템 프롬프트와 도구 스키마를 요청 앞부분에 고정해{" "}
+              <a href={docUrl("agent-tokenomics/00-concepts/")}>프롬프트 캐시 적중률</a>을 높이고 입력 단가와 프리필 지연 시간을 낮춥니다.
+            </>
+          ) : (
+            <>
+              Keep system instructions and tool schemas stable at the start of every request to maximize{" "}
+              <a href={docUrl("agent-tokenomics/00-concepts/")}>prompt cache hit rates</a> and cut prefill latency.
+            </>
+          )}
+        </p>
+      </div>
+      <div class="at-principle-card">
+        <span class="at-principle-num">PILLAR 03 / CONTEXT &amp; TOOL TAX</span>
+        <h3>
+          {isKo ? "3. 컨텍스트 위생과 도구 스키마 절감" : "3. Context & tool schema hygiene"}
+        </h3>
+        <p>
+          {isKo ? (
+            <>
+              미사용 <a href={docUrl("copilot-tokenomics/09-mcp-audit/")}>MCP 도구 정의</a>를 줄이고,{" "}
+              <a href={docUrl("copilot-tokenomics/cctx/")}><code>cctx</code></a>의 블록 클램핑 1회 조회와{" "}
+              <a href={docUrl("copilot-tokenomics/06-prompt-and-output-style/")}>BPE 수식 프롬프트</a>로 고정 세금을 제거합니다.
+            </>
+          ) : (
+            <>
+              Prune unused <a href={docUrl("copilot-tokenomics/09-mcp-audit/")}>MCP tool schemas</a>, clamp code lookups with{" "}
+              <a href={docUrl("copilot-tokenomics/cctx/")}><code>cctx</code></a>, and compact rules with{" "}
+              <a href={docUrl("copilot-tokenomics/06-prompt-and-output-style/")}>BPE-aligned formula prompts</a>.
+            </>
+          )}
+        </p>
+      </div>
+      <div class="at-principle-card">
+        <span class="at-principle-num">PILLAR 04 / AGENT LOOP &amp; PROFILING</span>
+        <h3>
+          {isKo ? "4. 에이전트 루프 팬아웃 제어와 프로파일링" : "4. Agent loop fan-out & profiling"}
+        </h3>
+        <p>
+          {isKo ? (
+            <>
+              멀티턴 에이전트는 매 단계 이전 기록을 재전송하므로(<code style="font-size:0.75rem">n × prefix + Σ history</code>),{" "}
+              <a href={docUrl("agent-tokenomics/tokprof/")}><code>tokprof</code></a>로 낭비 구간을 측정하고 루프 가드를 적용합니다.
+            </>
+          ) : (
+            <>
+              Because agent loops re-send history on every step (<code style="font-size:0.75rem">n × prefix + Σ history</code>), profile calls with{" "}
+              <a href={docUrl("agent-tokenomics/tokprof/")}><code>tokprof</code></a> and bound failure loops.
+            </>
+          )}
+        </p>
       </div>
     </div>
   </section>

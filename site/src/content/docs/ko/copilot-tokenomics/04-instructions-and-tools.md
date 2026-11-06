@@ -1,6 +1,6 @@
 ---
 title: "지침과 도구"
-description: "모든 요청에 전송되는 사용자 지정 지침과 도구 목록을 줄입니다."
+description: "매 요청마다 반복 전송되는 사용자 지정 지침(copilot-instructions.md, AGENTS.md)과 도구 스키마 목록을 줄여 고정 토큰 세금을 낮춥니다."
 track: copilot
 verified: 2026-11-03
 sidebar:

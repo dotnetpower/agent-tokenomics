@@ -370,6 +370,16 @@ html:has(.at-landing) main > .content-panel > .sl-container {
   text-wrap: balance;
 }
 
+.at-h1-kicker {
+  display: block;
+  font-size: clamp(0.88rem, 1.25vw, 1.05rem);
+  font-weight: 750;
+  color: var(--sl-color-accent);
+  letter-spacing: 0.01em;
+  line-height: 1.35;
+  margin-bottom: 0.3rem;
+}
+
 .at-accent-text {
   background: linear-gradient(135deg, #4f46e5, #0d9488);
   -webkit-background-clip: text;

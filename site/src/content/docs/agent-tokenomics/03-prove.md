@@ -1,6 +1,6 @@
 ---
 title: "3. Prove the problem"
-description: Reproduce the waste on a fixed task set and quantify it.
+description: "LLM agent tokenomics Stage 3 (Prove): reproduce token waste on a frozen task set and quantify cost and confidence intervals across repeat runs."
 track: agent
 stage: prove
 verified: 2026-11-03

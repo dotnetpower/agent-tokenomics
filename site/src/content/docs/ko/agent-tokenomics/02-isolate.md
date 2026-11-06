@@ -1,6 +1,6 @@
 ---
 title: "2. 문제 분리"
-description: 변수를 한 번에 하나씩 바꾸어 비용의 원인을 좁힙니다.
+description: "LLM 에이전트 토큰 이코노믹스 2단계(분리): 미사용 도구, 실패 루프, 과대한 도구 출력, 대화 기록 누적 중 비용 원인을 변수 하나씩 좁힙니다."
 track: agent
 stage: isolate
 verified: 2026-11-03

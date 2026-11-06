@@ -1,6 +1,6 @@
 ---
 title: "5. Result"
-description: Re-measure against the baseline and decide keep or revert.
+description: "LLM agent tokenomics Stage 5 (Result): re-measure token cost, task pass rate (quality guardrail), and latency against baseline to decide keep or revert."
 track: agent
 stage: result
 verified: 2026-11-03

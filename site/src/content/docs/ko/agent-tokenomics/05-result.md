@@ -1,6 +1,6 @@
 ---
 title: "5. 결과"
-description: 기준선과 비교해 다시 측정하고 유지할지 되돌릴지 결정합니다.
+description: "LLM 에이전트 토큰 이코노믹스 5단계(결과): 기준선과 비교해 토큰 비용, 작업 성공률(품질 가드레일), 지연 시간을 재측정하고 유지 여부를 결정합니다."
 track: agent
 stage: result
 verified: 2026-11-03

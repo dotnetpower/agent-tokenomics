@@ -1,6 +1,6 @@
 ---
 title: "컨텍스트를 가볍게 유지하기"
-description: "새 채팅, 포크, 컨텍스트 압축, 필요한 항목만 첨부, 제외 설정을 활용합니다."
+description: "새 채팅, /fork, /compact 컨텍스트 압축, #file 첨부, 제외 설정, cctx 블록 클램핑 조회로 VS Code Copilot 토큰 낭비를 줄입니다."
 track: copilot
 verified: 2026-11-03
 sidebar:

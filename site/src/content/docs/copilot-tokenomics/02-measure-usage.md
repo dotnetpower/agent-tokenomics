@@ -1,6 +1,6 @@
 ---
 title: Measure your usage
-description: Find the expensive requests with VS Code's built-in views.
+description: "Measure GitHub Copilot tokenomics and AI credit spend in VS Code using Agent Debug Logs, Cache Explorer, context window controls, and cctx usage telemetry."
 track: copilot
 verified: 2026-11-03
 sidebar:

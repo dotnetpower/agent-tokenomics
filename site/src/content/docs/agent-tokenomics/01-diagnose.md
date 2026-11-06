@@ -1,6 +1,6 @@
 ---
 title: "1. Diagnose the current state"
-description: Measure where tokens go before changing anything.
+description: "LLM agent tokenomics Stage 1 (Diagnose): measure per-request input, cached, output, and reasoning tokens, fixed prompt overhead, and turn growth curves."
 track: agent
 stage: diagnose
 verified: 2026-11-03

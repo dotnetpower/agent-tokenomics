@@ -1,6 +1,6 @@
 ---
 title: "사용량 측정"
-description: "VS Code 기본 제공 뷰로 비용이 큰 요청을 찾습니다."
+description: "VS Code Agent Debug Logs, Cache Explorer, 컨텍스트 윈도우 컨트롤, cctx usage 대시보드로 Copilot 토큰과 AI 크레딧 소비를 측정합니다."
 track: copilot
 verified: 2026-11-03
 sidebar:

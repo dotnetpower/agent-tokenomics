@@ -1,6 +1,6 @@
 ---
 title: "cctx: VS Code Copilot Token Saver & Accelerator"
-description: Install Code Context (cctx) from the VS Code Marketplace to cut Copilot lookup tokens, accelerate coding agent task completion, and inspect live AIC/USD savings.
+description: "Install Code Context (cctx) from the VS Code Marketplace to cut Copilot lookup tokens, speed up coding tasks, and inspect live AIC/USD cost savings."
 track: copilot
 verified: 2026-11-06
 sidebar:

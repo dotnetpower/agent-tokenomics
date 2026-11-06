@@ -21,7 +21,7 @@ const canonicalHref = rawCanonical.endsWith("/") || /\.[a-z0-9]+$/i.test(rawCano
 
 const defaultDescription = isKo
   ? "LLM과 AI 에이전트를 위한 토큰 이코노믹스(Tokenomics · Token Economics, 토큰 경제학) 실전 가이드: VS Code Copilot 토큰 절약, cctx 개발 가속, tokprof 프로파일링."
-  : "Tokenomics and token economics guide for LLMs & AI agents: cut token costs in VS Code GitHub Copilot, accelerate coding with cctx, and profile calls with tokprof.";
+  : "Tokenomics and token economics guide for LLMs & AI agents: cut token costs in VS Code Copilot, speed up coding with cctx, and profile calls with tokprof.";
 
 const finalDescription = String(data.description || defaultDescription).replace(/\s+/g, " ").trim();
 
@@ -72,14 +72,17 @@ const enAlternateHref = typeof enAlternateEntry?.attrs?.href === "string"
 // Filter out tags from Starlight's default head that we replace with normalized SEO/GEO versions.
 const filteredHead = head.filter((item) => {
   if (item.tag === "title") return false;
-  if (item.tag === "link" && item.attrs?.rel === "canonical") return false;
+  if (item.tag === "link" && (item.attrs?.rel === "canonical" || item.attrs?.rel === "sitemap")) return false;
   if (item.tag === "meta") {
+    if (item.attrs?.charset !== undefined) return false;
     const key = String(item.attrs?.name || item.attrs?.property || "");
     if (
       [
+        "viewport",
         "description",
         "keywords",
         "robots",
+        "google-site-verification",
         "og:title",
         "og:description",
         "og:url",
@@ -187,6 +190,8 @@ const orgNode = {
   sameAs: [
     "https://github.com/dotnetpower/agent-tokenomics",
     "https://pypi.org/project/tokprof/",
+    "https://marketplace.visualstudio.com/items?itemName=dotnetpower.code-context-native",
+    "https://github.com/dotnetpower/code-context",
   ],
 };
 
@@ -387,6 +392,8 @@ const jsonLdString = JSON.stringify({
   .replace(/\u2029/g, "\\u2029");
 ---
 
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>{finalTitle}</title>
 <meta name="description" content={finalDescription} />
 <meta name="keywords" content={seoKeywords} />
@@ -396,10 +403,19 @@ const jsonLdString = JSON.stringify({
     ? "noindex, nofollow"
     : "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"}
 />
+<meta name="google-site-verification" content="jHE9O63_qT7gVGACSA-OA_2d1wzkue6urJ99MGSCzY8" />
 <meta name="theme-color" content="#0f121d" />
 <meta name="application-name" content="agent-tokenomics" />
 <link rel="canonical" href={canonicalHref} />
 {!is404 && <link rel="alternate" hreflang="x-default" href={enAlternateHref} />}
+<link rel="sitemap" type="application/xml" href={`${SITE_ROOT_URL}sitemap-index.xml`} />
+<link rel="sitemap" type="application/xml" href={`${SITE_ROOT_URL}sitemap.xml`} />
+<link
+  rel="alternate"
+  type="application/rss+xml"
+  href={`${SITE_ROOT_URL}rss.xml`}
+  title="agent-tokenomics RSS Feed (Tokenomics & Token Economics)"
+/>
 <link
   rel="alternate"
   type="text/plain"

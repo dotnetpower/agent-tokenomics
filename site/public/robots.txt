@@ -5,6 +5,7 @@
 #
 # Structured LLM index: https://dotnetpower.github.io/agent-tokenomics/llms.txt
 # Full LLM corpus:      https://dotnetpower.github.io/agent-tokenomics/llms-full.txt
+# RSS 2.0 feed:         https://dotnetpower.github.io/agent-tokenomics/rss.xml
 
 User-agent: *
 Allow: /

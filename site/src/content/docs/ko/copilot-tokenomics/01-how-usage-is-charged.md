@@ -1,6 +1,6 @@
 ---
 title: "Copilot 사용량은 어떻게 과금되는가"
-description: "AI 크레딧 기반 사용량 과금과 토큰이 중요한 이유를 설명합니다."
+description: "VS Code GitHub Copilot 토큰 이코노믹스 과금 가이드: AI 크레딧 기반 사용량 과금(입력·캐시·출력 토큰 요율)과 프리미엄 요청 배수를 설명합니다."
 track: copilot
 verified: 2026-11-03
 sidebar:

@@ -1,6 +1,6 @@
 ---
 title: "4. Improve"
-description: Apply one targeted fix mapped to the proven cause.
+description: "LLM agent tokenomics Stage 4 (Improve): apply one targeted fix per experiment — micro-skills, tool pruning, loop guards, output truncation, or prompt caching."
 track: agent
 stage: improve
 verified: 2026-11-03

@@ -101,11 +101,13 @@ if (!existsSync(robotsPath)) {
   }
 }
 
-// 3. Check sitemaps
+// 3. Check sitemaps & rss.xml
 const sitemapIndexPath = path.join(distDir, "sitemap-index.xml");
 const sitemap0Path = path.join(distDir, "sitemap-0.xml");
 const sitemapXmlPath = path.join(distDir, "sitemap.xml");
+const rssXmlPath = path.join(distDir, "rss.xml");
 const sitemapUrls = new Set();
+const rssUrls = new Set();
 
 if (!existsSync(sitemapIndexPath)) failures.push("missing_asset:sitemap-index.xml");
 if (!existsSync(sitemap0Path)) failures.push("missing_asset:sitemap-0.xml");
@@ -115,6 +117,17 @@ if (!existsSync(sitemapXmlPath)) {
   const xml = readFileSync(sitemapXmlPath, "utf8");
   for (const m of xml.matchAll(/<loc>([^<]+)<\/loc>/g)) {
     sitemapUrls.add(m[1].trim());
+  }
+  if (!xml.includes("<lastmod>")) {
+    failures.push("sitemap_missing_lastmod");
+  }
+}
+if (!existsSync(rssXmlPath)) {
+  failures.push("missing_asset:rss.xml");
+} else {
+  const rssText = readFileSync(rssXmlPath, "utf8");
+  for (const m of rssText.matchAll(/<guid isPermaLink="true">([^<]+)<\/guid>/g)) {
+    rssUrls.add(m[1].trim());
   }
 }
 
@@ -195,6 +208,13 @@ for (const file of htmlFiles) {
     expectedCanonical = `${SITE_ROOT}/${rel}`;
   }
 
+  const headPos = html.search(/<head\b[^>]*>/i);
+  const charsetPos = html.search(/<meta\s+charset=["']?utf-8["']?\s*\/?>/i);
+  const titlePos = html.search(/<title\b[^>]*>/i);
+  if (charsetPos < 0 || charsetPos > titlePos || (headPos >= 0 && charsetPos - headPos > 256)) {
+    failures.push(`${rel}:charset_not_first_in_head`);
+  }
+
   const titleMatches = [...html.matchAll(/<title\b[^>]*>([\s\S]*?)<\/title>/gi)];
   if (titleMatches.length !== 1) {
     failures.push(`${rel}:title_count:${titleMatches.length}`);
@@ -209,8 +229,11 @@ for (const file of htmlFiles) {
   const getMeta = (key) => metas.find((a) => (a.name || a.property) === key)?.content;
 
   const description = getMeta("description");
-  if (!description || description.length < 10) {
-    failures.push(`${rel}:missing_or_short_description`);
+  if (!description || description.length < 10 || description.length > 160) {
+    failures.push(`${rel}:invalid_description_length:${description?.length ?? 0}`);
+  }
+  if (!getMeta("google-site-verification")) {
+    failures.push(`${rel}:missing_google_site_verification`);
   }
 
   const robots = getMeta("robots") ?? "";
@@ -248,6 +271,9 @@ for (const file of htmlFiles) {
   if (!is404) {
     if (!sitemapUrls.has(expectedCanonical)) {
       failures.push(`${rel}:missing_from_sitemap:${expectedCanonical}`);
+    }
+    if (!rssUrls.has(expectedCanonical)) {
+      failures.push(`${rel}:missing_from_rss:${expectedCanonical}`);
     }
     if (!isDemo) {
       const xDefault = links.find((a) => a.rel === "alternate" && a.hreflang === "x-default");
@@ -300,6 +326,7 @@ const summary = {
   html_files: htmlFiles.length,
   indexable_pages: indexableCount,
   sitemap_urls: sitemapUrls.size,
+  rss_items: rssUrls.size,
   failures,
   passed: failures.length === 0,
 };

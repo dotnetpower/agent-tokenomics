@@ -1,6 +1,6 @@
 ---
 title: Instructions and tools
-description: Trim what is sent on every request - custom instructions and the tool catalog.
+description: "Cut recurring input token overhead in VS Code GitHub Copilot by trimming always-on custom instructions (copilot-instructions.md, AGENTS.md) and tool schemas."
 track: copilot
 verified: 2026-11-03
 sidebar:

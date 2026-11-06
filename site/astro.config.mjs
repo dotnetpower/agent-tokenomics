@@ -9,20 +9,22 @@ const SITE_URL = process.env.SITE_URL ?? "https://dotnetpower.github.io";
 const IS_PROD = process.env.NODE_ENV === "production";
 const BASE_PATH = process.env.BASE_PATH ?? (IS_PROD ? "/agent-tokenomics" : "/");
 
-/** Open document content links (except same-page #anchors) in a new tab. */
+/** Open external document content links in a new tab while keeping internal links in the same tab. */
 function rehypeDocumentLinksNewTab() {
+  const isExternalHref = (href) =>
+    /^https?:\/\//i.test(href) && !href.startsWith("https://dotnetpower.github.io/agent-tokenomics");
   const visit = (node) => {
     if (!node || typeof node !== "object") return;
     if (node.type === "element" && node.tagName === "a") {
       const props = (node.properties ??= {});
       const href = String(props.href ?? "").trim();
-      if (href && !href.startsWith("#")) {
+      if (isExternalHref(href)) {
         props.target = "_blank";
         props.rel = "noopener noreferrer";
       }
     } else if (node.type === "raw" && typeof node.value === "string" && node.value.includes("<a ")) {
       node.value = node.value.replace(
-        /<a\s+(?![^>]*\btarget=)([^>]*\bhref=["'](?!#)[^"']+["'][^>]*)>/gi,
+        /<a\s+(?![^>]*\btarget=)([^>]*\bhref=["'](https?:\/\/(?!dotnetpower\.github\.io\/agent-tokenomics)[^"']+)["'][^>]*)>/gi,
         '<a target="_blank" rel="noopener noreferrer" $1>',
       );
     }

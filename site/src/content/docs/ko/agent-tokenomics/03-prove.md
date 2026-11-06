@@ -1,6 +1,6 @@
 ---
 title: "3. 문제 증명"
-description: 고정된 작업 집합에서 낭비를 재현하고 정량화합니다.
+description: "LLM 에이전트 토큰 이코노믹스 3단계(증명): 고정된 작업 집합에서 반복 실행을 통해 토큰 낭비 규모와 신뢰구간을 정량적으로 입증합니다."
 track: agent
 stage: prove
 verified: 2026-11-03

@@ -1,6 +1,6 @@
 ---
 title: "0. Concepts: Tokenomics & Token Economics for LLM Agents"
-description: "Core concepts of LLM tokenomics and token economics: stateless re-sending, request anatomy, agent loop fan-out, pricing dimensions, prompt caching, and context rot."
+description: "Core concepts of LLM tokenomics and token economics: stateless re-sending, request anatomy, agent loop fan-out, pricing, prompt caching, and context rot."
 track: agent
 verified: 2026-11-03
 sidebar:
