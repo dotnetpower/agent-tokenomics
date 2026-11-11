@@ -1611,7 +1611,8 @@ fn try_external_log_to_event(obj: &Map<String, Value>) -> Option<Value> {
         let inp_v = obj.get("input").or_else(|| obj.get("inputs"))?;
         let req_val = if inp_v.is_array() {
             json!({ "model": if model.is_empty() { "gpt-4o" } else { &model }, "messages": inp_v })
-        } else if let Some(io) = inp_v.as_object() {
+        } else {
+            let io = inp_v.as_object()?;
             if io.contains_key("messages") || io.contains_key("prompt") || io.contains_key("contents") {
                 let mut cloned = io.clone();
                 if !model.is_empty() && !cloned.contains_key("model") {
@@ -1621,8 +1622,6 @@ fn try_external_log_to_event(obj: &Map<String, Value>) -> Option<Value> {
             } else {
                 return None;
             }
-        } else {
-            return None;
         };
         let out_txt = obj
             .get("output")
@@ -3196,10 +3195,9 @@ fn split_kql_window_halves(kql: &str) -> Option<(String, String)> {
         d.parse::<i64>().ok()? * 1440
     } else if let Some(h) = spec.strip_suffix('h') {
         h.parse::<i64>().ok()? * 60
-    } else if let Some(m) = spec.strip_suffix('m') {
-        m.parse::<i64>().ok()?
     } else {
-        return None;
+        let m = spec.strip_suffix('m')?;
+        m.parse::<i64>().ok()?
     };
     if mins < 4 {
         return None;
