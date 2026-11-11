@@ -221,10 +221,12 @@ func runTrace(args []string) {
 			}
 			if p.Attach != "yes" {
 				if st.watched || sel.all {
-					if !st.done && (!sel.all || *verbose) {
-						logf("watching pid %d (%s) for plain HTTP (no TLS library visible)", pid, p.Comm)
+					if st.tries == 0 && (!sel.all || *verbose) {
+						logf("watching pid %d (%s) for plain HTTP (%s)", pid, p.Comm, firstNonEmpty(p.Note, "no TLS library visible yet"))
 					}
-					st.done = true
+					if st.tries++; st.tries >= maxTries {
+						st.done = true
+					}
 					continue
 				}
 				if st.tries++; st.tries >= maxTries {
@@ -303,6 +305,9 @@ drain:
 		select {
 		case ev := <-events:
 			asm.Feed(ev.PID, ev.Comm, ev.SSL, int(ev.Dir), ev.Data, ev.Time)
+			if ev.Total > tap.MaxCapture && ev.Off+uint32(len(ev.Data)) >= tap.MaxCapture {
+				asm.MarkDamaged(ev.PID, ev.SSL, int(ev.Dir))
+			}
 		case <-readerDone:
 			break drain
 		}
@@ -310,6 +315,9 @@ drain:
 	for len(events) > 0 {
 		ev := <-events
 		asm.Feed(ev.PID, ev.Comm, ev.SSL, int(ev.Dir), ev.Data, ev.Time)
+		if ev.Total > tap.MaxCapture && ev.Off+uint32(len(ev.Data)) >= tap.MaxCapture {
+			asm.MarkDamaged(ev.PID, ev.SSL, int(ev.Dir))
+		}
 	}
 	asm.Close()
 	_ = out.Flush()

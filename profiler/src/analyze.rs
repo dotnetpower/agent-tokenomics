@@ -5,13 +5,21 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 pub const DOCS_BASE: &str = "https://dotnetpower.github.io/agent-tokenomics";
 
+pub fn is_korean_locale() -> bool {
+    std::env::var("TOKPROF_LANG")
+        .ok()
+        .map(|s| s.trim().eq_ignore_ascii_case("ko") || s.trim().to_ascii_lowercase().starts_with("ko"))
+        .unwrap_or(false)
+}
+
 pub fn doc_link(stage: &str) -> String {
+    let prefix = if is_korean_locale() { "/ko" } else { "" };
     match stage {
-        "concepts" => format!("{DOCS_BASE}/agent-tokenomics/00-concepts/"),
-        "diagnose" => format!("{DOCS_BASE}/agent-tokenomics/01-diagnose/"),
-        "isolate" => format!("{DOCS_BASE}/agent-tokenomics/02-isolate/"),
-        "improve" => format!("{DOCS_BASE}/agent-tokenomics/04-improve/"),
-        _ => DOCS_BASE.to_string(),
+        "concepts" => format!("{DOCS_BASE}{prefix}/agent-tokenomics/00-concepts/"),
+        "diagnose" => format!("{DOCS_BASE}{prefix}/agent-tokenomics/01-diagnose/"),
+        "isolate" => format!("{DOCS_BASE}{prefix}/agent-tokenomics/02-isolate/"),
+        "improve" => format!("{DOCS_BASE}{prefix}/agent-tokenomics/04-improve/"),
+        _ => format!("{DOCS_BASE}{prefix}"),
     }
 }
 
@@ -25,6 +33,20 @@ pub fn rec_input(r: &CallRecord) -> i64 {
 pub fn rec_cached(r: &CallRecord) -> i64 {
     r.usage
         .get("cached")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0)
+}
+
+pub fn rec_cache_write(r: &CallRecord) -> i64 {
+    r.usage
+        .get("cache_write")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0)
+}
+
+pub fn rec_reasoning(r: &CallRecord) -> i64 {
+    r.usage
+        .get("reasoning")
         .and_then(|v| v.as_i64())
         .unwrap_or(0)
 }
@@ -97,11 +119,37 @@ pub fn sorted_records(records: &[CallRecord]) -> Vec<CallRecord> {
 }
 
 pub fn group_requests_ref<'a>(ordered: &'a [CallRecord], gap_s: f64) -> Vec<Vec<&'a CallRecord>> {
+    let distinct_convs: HashSet<&str> = ordered.iter().filter_map(|r| r.conv.as_deref()).collect();
+    if distinct_convs.len() >= 2 {
+        let mut by_stream: BTreeMap<&str, Vec<&'a CallRecord>> = BTreeMap::new();
+        for r in ordered {
+            by_stream
+                .entry(r.conv.as_deref().unwrap_or("_unscoped"))
+                .or_default()
+                .push(r);
+        }
+        let mut all_groups: Vec<(f64, Vec<&'a CallRecord>)> = Vec::new();
+        for stream_recs in by_stream.into_values() {
+            for g in group_single_stream(&stream_recs, gap_s) {
+                let first_ts = g
+                    .first()
+                    .map(|r| if r.ts.is_finite() { r.ts } else { 0.0 })
+                    .unwrap_or(0.0);
+                all_groups.push((first_ts, g));
+            }
+        }
+        all_groups.sort_by(|a, b| a.0.total_cmp(&b.0));
+        return all_groups.into_iter().map(|(_, g)| g).collect();
+    }
+    group_single_stream(&ordered.iter().collect::<Vec<_>>(), gap_s)
+}
+
+fn group_single_stream<'a>(ordered: &[&'a CallRecord], gap_s: f64) -> Vec<Vec<&'a CallRecord>> {
     let mut groups: Vec<Vec<&'a CallRecord>> = Vec::new();
     let mut last_end: Option<f64> = None;
     let mut seen_step: HashMap<(&str, &str), Option<&str>> = HashMap::new();
 
-    for r in ordered {
+    for &r in ordered {
         let start = if r.ts.is_finite() { r.ts } else { 0.0 };
         let end = start + (r.latency_ms.unwrap_or(0).max(0) as f64) / 1000.0;
         let step_key = (
@@ -276,7 +324,11 @@ pub struct CallDetail {
     pub residual: i64,
     pub input_total: i64,
     pub cached: i64,
+    #[serde(default)]
+    pub cache_write: i64,
     pub output: i64,
+    #[serde(default)]
+    pub reasoning: i64,
     pub latency_ms: Option<i64>,
     pub status: Option<i64>,
     pub inferred_history: bool,
@@ -299,7 +351,11 @@ pub struct TurnSummary {
     pub residual: i64,
     pub input_total: i64,
     pub cached_total: i64,
+    #[serde(default)]
+    pub cache_write_total: i64,
     pub output_total: i64,
+    #[serde(default)]
+    pub reasoning_total: i64,
     pub latency_ms: i64,
     pub user_text: String,
     pub history_text: String,
@@ -321,7 +377,11 @@ pub struct SessionSummary {
     pub residual: i64,
     pub input_total: i64,
     pub cached_total: i64,
+    #[serde(default)]
+    pub cache_write_total: i64,
     pub output_total: i64,
+    #[serde(default)]
+    pub reasoning_total: i64,
     pub turns: Vec<TurnSummary>,
 }
 
@@ -330,7 +390,11 @@ pub struct SummaryReport {
     pub calls: usize,
     pub input_total: i64,
     pub output_total: i64,
+    #[serde(default)]
+    pub reasoning_total: i64,
     pub cached_total: i64,
+    #[serde(default)]
+    pub cache_write_total: i64,
     pub by_kind: BTreeMap<String, i64>,
     pub steps: Vec<StepRow>,
     pub endpoints: Vec<EndpointRow>,
@@ -638,7 +702,9 @@ fn build_call_detail(
         residual: rec.residual.unwrap_or(0),
         input_total: rec_input(rec),
         cached: rec_cached(rec),
+        cache_write: rec_cache_write(rec),
         output: rec_output(rec),
+        reasoning: rec_reasoning(rec),
         latency_ms: rec.latency_ms,
         status: rec.status,
         inferred_history: inferred_hist > 0,
@@ -727,7 +793,9 @@ pub fn session_turn_breakdown(
         let mut s_res = 0i64;
         let mut s_in = 0i64;
         let mut s_cached = 0i64;
+        let mut s_cwrite = 0i64;
         let mut s_out = 0i64;
+        let mut s_reas = 0i64;
 
         for (local_ti, (orig_ti, g)) in s_turns.into_iter().enumerate() {
             let turn_num = local_ti + 1;
@@ -778,7 +846,9 @@ pub fn session_turn_breakdown(
             let t_res: i64 = t_slice.iter().map(|c| c.residual).sum();
             let t_in: i64 = t_slice.iter().map(|c| c.input_total).sum();
             let t_cached: i64 = t_slice.iter().map(|c| c.cached).sum();
+            let t_cwrite: i64 = t_slice.iter().map(|c| c.cache_write).sum();
             let t_out: i64 = t_slice.iter().map(|c| c.output).sum();
+            let t_reas: i64 = t_slice.iter().map(|c| c.reasoning).sum();
             let t_lat: i64 = t_slice.iter().map(|c| c.latency_ms.unwrap_or(0)).sum();
 
             s_calls_count += t_slice.len();
@@ -790,7 +860,9 @@ pub fn session_turn_breakdown(
             s_res += t_res;
             s_in += t_in;
             s_cached += t_cached;
+            s_cwrite += t_cwrite;
             s_out += t_out;
+            s_reas += t_reas;
 
             turns_out.push(TurnSummary {
                 session: sid.clone(),
@@ -807,7 +879,9 @@ pub fn session_turn_breakdown(
                 residual: t_res,
                 input_total: t_in,
                 cached_total: t_cached,
+                cache_write_total: t_cwrite,
                 output_total: t_out,
+                reasoning_total: t_reas,
                 latency_ms: t_lat,
                 user_text: user_preview,
                 history_text: hist_preview,
@@ -828,7 +902,9 @@ pub fn session_turn_breakdown(
             residual: s_res,
             input_total: s_in,
             cached_total: s_cached,
+            cache_write_total: s_cwrite,
             output_total: s_out,
+            reasoning_total: s_reas,
             turns: Vec::new(),
         });
     }
@@ -1033,10 +1109,31 @@ pub fn findings(
 
     let tr = by_kind.get("tool_result").copied().unwrap_or(0);
     if (tr as f64) / (total_in as f64) > 0.4 {
+        let mut by_tool_res: HashMap<&str, i64> = HashMap::new();
+        for r in ordered {
+            for s in &r.segments {
+                if s.kind == "tool_result" {
+                    let nm = s.name.as_deref().unwrap_or("unnamed");
+                    *by_tool_res.entry(nm).or_insert(0) += s.tokens;
+                }
+            }
+        }
+        let mut top_tr: Vec<(&str, i64)> = by_tool_res.into_iter().collect();
+        top_tr.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        let culprits: Vec<String> = top_tr
+            .into_iter()
+            .take(3)
+            .map(|(n, t)| format!("{n} ({})", format_with_commas_i64(t)))
+            .collect();
+        let suffix = if culprits.is_empty() {
+            String::new()
+        } else {
+            format!(" [top sources: {}]", culprits.join(", "))
+        };
         out.push(Finding {
             severity: "high".to_string(),
             text: format!(
-                "Tool results are {:.1}% of input tokens: truncate, paginate, or search before reading",
+                "Tool results are {:.1}% of input tokens{suffix}: truncate, paginate, or search before reading",
                 100.0 * (tr as f64) / (total_in as f64)
             ),
             see: doc_link("improve"),
@@ -1104,29 +1201,45 @@ pub fn findings(
     }
 
     for conv_recs in by_conv.values() {
-        let mut streak_name: Option<String> = None;
+        let mut streak_sig: Option<(String, String)> = None;
         let mut streak_len = 0usize;
         let mut streak_tokens = 0i64;
+        let mut seq_names: Vec<(String, i64)> = Vec::with_capacity(conv_recs.len());
+
         for r in conv_recs {
-            let tcs: Vec<String> = if !r.tool_calls.is_empty() {
-                r.tool_calls.clone()
-            } else {
-                r.segments
-                    .iter()
-                    .filter(|s| s.kind == "tool_call")
-                    .filter_map(|s| s.name.clone())
-                    .collect()
-            };
-            let sig = if tcs.is_empty() {
+            let mut names = Vec::new();
+            let mut arg_hashes = Vec::new();
+            for s in &r.segments {
+                if s.kind == "tool_call" && s.turn.is_none_or(|t| t >= 0) {
+                    if let Some(ref nm) = s.name {
+                        names.push(nm.clone());
+                        arg_hashes.push(s.hash.clone());
+                    }
+                }
+            }
+            if !r.tool_calls.is_empty() {
+                names = r.tool_calls.clone();
+                arg_hashes.clear();
+            }
+            let cur = if names.is_empty() {
                 None
             } else {
-                Some(tcs.join(","))
+                let nm_joined = names.join(",");
+                let h_joined = if arg_hashes.is_empty() {
+                    nm_joined.clone()
+                } else {
+                    format!("{nm_joined}:{}", arg_hashes.join(","))
+                };
+                Some((nm_joined, h_joined))
             };
-            if sig.is_some() && sig == streak_name {
+            if let Some((ref nm_j, _)) = cur {
+                seq_names.push((nm_j.clone(), rec_input(r)));
+            }
+            if cur.is_some() && cur.as_ref().map(|x| &x.1) == streak_sig.as_ref().map(|x| &x.1) {
                 streak_len += 1;
                 streak_tokens += rec_input(r);
             } else {
-                if let Some(ref sn) = streak_name {
+                if let Some((ref sn, _)) = streak_sig {
                     if streak_len >= 3 {
                         out.push(Finding {
                             severity: "high".to_string(),
@@ -1138,18 +1251,18 @@ pub fn findings(
                         });
                     }
                 }
-                if sig.is_some() {
-                    streak_name = sig;
+                if let Some(c) = cur {
+                    streak_sig = Some(c);
                     streak_len = 1;
                     streak_tokens = rec_input(r);
                 } else {
-                    streak_name = None;
+                    streak_sig = None;
                     streak_len = 0;
                     streak_tokens = 0;
                 }
             }
         }
-        if let Some(ref sn) = streak_name {
+        if let Some((ref sn, _)) = streak_sig {
             if streak_len >= 3 {
                 out.push(Finding {
                     severity: "high".to_string(),
@@ -1159,6 +1272,31 @@ pub fn findings(
                     ),
                     see: doc_link("improve"),
                 });
+            }
+        }
+        if seq_names.len() >= 6 {
+            let mut idx = 0usize;
+            while idx + 5 < seq_names.len() {
+                let a = &seq_names[idx].0;
+                let b = &seq_names[idx + 1].0;
+                if a != b
+                    && seq_names[idx + 2].0 == *a
+                    && seq_names[idx + 3].0 == *b
+                    && seq_names[idx + 4].0 == *a
+                    && seq_names[idx + 5].0 == *b
+                {
+                    let loop_toks: i64 = seq_names[idx..idx + 6].iter().map(|x| x.1).sum();
+                    out.push(Finding {
+                        severity: "high".to_string(),
+                        text: format!(
+                            "Alternating tool loop '{a} -> {b}' repeated 3 cycles ({} input tokens): add a ping-pong failure loop guard",
+                            format_with_commas_i64(loop_toks)
+                        ),
+                        see: doc_link("improve"),
+                    });
+                    break;
+                }
+                idx += 1;
             }
         }
     }
@@ -1176,10 +1314,31 @@ pub fn findings(
         let min_hashes = 3usize.max((0.8 * (sys_per_call.len() as f64)) as usize);
         let max_spread = 32i64.max((0.08 * (med as f64)) as i64);
         if med >= 200 && hashes.len() >= min_hashes && (max_t - min_t) <= max_spread {
+            let mut sec_hashes: BTreeMap<&str, HashSet<&str>> = BTreeMap::new();
+            for r in ordered {
+                for s in &r.segments {
+                    if s.kind == "system" && !s.hash.is_empty() {
+                        if let Some(ref nm) = s.name {
+                            sec_hashes.entry(nm.as_str()).or_default().insert(s.hash.as_str());
+                        }
+                    }
+                }
+            }
+            let dynamic_secs: Vec<&str> = sec_hashes
+                .into_iter()
+                .filter(|(_, hs)| hs.len() >= 2)
+                .map(|(nm, _)| nm)
+                .take(3)
+                .collect();
+            let where_hint = if dynamic_secs.is_empty() {
+                String::new()
+            } else {
+                format!(" (mutating section: {})", dynamic_secs.join(", "))
+            };
             out.push(Finding {
                 severity: "high".to_string(),
                 text: format!(
-                    "System prompt hash changed on {} of {} calls while its size stayed ~{} tokens: a dynamic value (timestamp, UUID, or unsorted keys) is busting the prefix cache",
+                    "System prompt hash changed on {} of {} calls while its size stayed ~{} tokens{where_hint}: a dynamic value (timestamp, UUID, or unsorted keys) is busting the prefix cache",
                     hashes.len(),
                     sys_per_call.len(),
                     format_with_commas_i64(med)
@@ -1187,6 +1346,70 @@ pub fn findings(
                 see: doc_link("improve"),
             });
         }
+    }
+
+    if by_conv.len() >= 3 {
+        let mut tr_convs: HashMap<&str, (HashSet<&str>, Option<&str>, i64)> = HashMap::new();
+        for (ck, crecs) in &by_conv {
+            for r in crecs {
+                for s in &r.segments {
+                    if s.kind == "tool_result" && s.tokens >= 150 && !s.hash.is_empty() {
+                        let entry = tr_convs
+                            .entry(s.hash.as_str())
+                            .or_insert_with(|| (HashSet::new(), s.name.as_deref(), s.tokens));
+                        entry.0.insert(*ck);
+                    }
+                }
+            }
+        }
+        if let Some((_, (convs, nm_opt, toks))) = tr_convs
+            .into_iter()
+            .filter(|(_, (cs, _, _))| cs.len() >= 3)
+            .max_by_key(|(_, (cs, _, t))| (cs.len() as i64) * (*t))
+        {
+            let nm_label = nm_opt.map(|n| format!(" from '{n}'")).unwrap_or_default();
+            out.push(Finding {
+                severity: "medium".to_string(),
+                text: format!(
+                    "Identical tool result{nm_label} ({} tokens) was re-fetched across {} separate sessions: promote stable repository facts to short startup instructions",
+                    format_with_commas_i64(toks),
+                    convs.len()
+                ),
+                see: doc_link("improve"),
+            });
+        }
+    }
+
+    let trivial_frontier: Vec<&CallRecord> = ordered
+        .iter()
+        .filter(|r| {
+            let m = r.model.as_deref().unwrap_or("").to_ascii_lowercase();
+            let is_heavy = (m.contains("opus")
+                || m.contains("gpt-5")
+                || m.starts_with("o1")
+                || m.starts_with("o3")
+                || m.contains("-pro"))
+                && !m.contains("mini")
+                && !m.contains("nano")
+                && !m.contains("haiku")
+                && !m.contains("flash");
+            is_heavy
+                && rec_input(r) < 600
+                && rec_output(r) > 0
+                && rec_output(r) < 60
+                && r.tool_calls.is_empty()
+        })
+        .collect();
+    if trivial_frontier.len() >= 3 {
+        let sample_m = trivial_frontier[0].model.as_deref().unwrap_or("frontier");
+        out.push(Finding {
+            severity: "medium".to_string(),
+            text: format!(
+                "{} short non-tool calls (<600 in / <60 out tokens) used frontier model '{sample_m}': route classification or routing steps to a mini/flash/haiku tier",
+                trivial_frontier.len()
+            ),
+            see: doc_link("improve"),
+        });
     }
 
     for conv_recs in by_conv.values() {
@@ -1297,6 +1520,40 @@ pub fn findings(
             see: doc_link("diagnose"),
         });
     }
+    let total_out_tok: i64 = ordered.iter().map(rec_output).sum();
+    let total_reas_tok: i64 = ordered.iter().map(rec_reasoning).sum();
+    if total_reas_tok >= 500 && total_out_tok > 0 {
+        let reas_share = (total_reas_tok as f64) / (total_out_tok as f64);
+        if reas_share >= 0.5 {
+            out.push(Finding {
+                severity: if reas_share >= 0.8 && total_reas_tok >= 2000 {
+                    "high"
+                } else {
+                    "medium"
+                }
+                .to_string(),
+                text: format!(
+                    "Reasoning tokens consumed {} of {} output tokens ({:.1}%): lower reasoning_effort or route routine steps to a non-reasoning model",
+                    format_with_commas_i64(total_reas_tok),
+                    format_with_commas_i64(total_out_tok),
+                    100.0 * reas_share
+                ),
+                see: doc_link("improve"),
+            });
+        }
+    }
+
+    let chained_cnt = q_counts.get("chained").copied().unwrap_or(0);
+    if chained_cnt > 0 {
+        out.push(Finding {
+            severity: "info".to_string(),
+            text: format!(
+                "{chained_cnt} call(s) used server-side state (`previous_response_id`, `conversation`, or `cachedContent`): prior context tokens are billed on the server without being resent in the client body"
+            ),
+            see: doc_link("concepts"),
+        });
+    }
+
     if poor > 0 && (poor as f64) / (q_total.max(1) as f64) > 0.3 {
         let note = if neg_poor > 0 {
             " (reported input is smaller than counted segments on some calls; servers such as Ollama report only newly evaluated tokens in prompt_eval_count and omit KV-cached prefix tokens)"
@@ -1340,7 +1597,9 @@ pub fn summarize(records: &[CallRecord], gap_s: f64) -> SummaryReport {
             .iter()
             .filter_map(|r| r.usage.get("output").and_then(|v| v.as_i64()))
             .sum(),
+        reasoning_total: ordered.iter().map(rec_reasoning).sum(),
         cached_total: ordered.iter().map(rec_cached).sum(),
+        cache_write_total: ordered.iter().map(rec_cache_write).sum(),
         by_kind: by_kind.clone(),
         steps: step_map(ordered),
         endpoints: endpoint_map(ordered),
@@ -1374,17 +1633,77 @@ fn val_as_f64(v: Option<&Value>) -> Option<f64> {
     None
 }
 
+pub fn builtin_prices() -> Map<String, Value> {
+    let doc = json!({
+        "gpt-5": {"input": 1.25, "cached": 0.125, "output": 10.0},
+        "gpt-5-mini": {"input": 0.25, "cached": 0.025, "output": 2.0},
+        "gpt-5-nano": {"input": 0.05, "cached": 0.005, "output": 0.40},
+        "gpt-4.1": {"input": 2.0, "cached": 0.50, "output": 8.0},
+        "gpt-4.1-mini": {"input": 0.40, "cached": 0.10, "output": 1.60},
+        "gpt-4.1-nano": {"input": 0.10, "cached": 0.025, "output": 0.40},
+        "gpt-4o": {"input": 2.50, "cached": 1.25, "output": 10.0},
+        "gpt-4o-mini": {"input": 0.15, "cached": 0.075, "output": 0.60},
+        "o3": {"input": 2.0, "cached": 0.50, "output": 8.0},
+        "o3-mini": {"input": 1.10, "cached": 0.55, "output": 4.40},
+        "o4-mini": {"input": 1.10, "cached": 0.275, "output": 4.40},
+        "o1": {"input": 15.0, "cached": 7.50, "output": 60.0},
+        "claude-opus-4": {"input": 15.0, "cached": 1.50, "cache_write": 18.75, "output": 75.0},
+        "claude-sonnet-4": {"input": 3.0, "cached": 0.30, "cache_write": 3.75, "output": 15.0, "long_context_threshold": 200000, "input_long": 6.0, "output_long": 22.5},
+        "claude-3-7-sonnet": {"input": 3.0, "cached": 0.30, "cache_write": 3.75, "output": 15.0},
+        "claude-3-5-sonnet": {"input": 3.0, "cached": 0.30, "cache_write": 3.75, "output": 15.0},
+        "claude-3-5-haiku": {"input": 0.80, "cached": 0.08, "cache_write": 1.0, "output": 4.0},
+        "gemini-2.5-pro": {"input": 1.25, "cached": 0.3125, "output": 10.0, "long_context_threshold": 200000, "input_long": 2.50, "output_long": 15.0},
+        "gemini-2.5-flash": {"input": 0.30, "cached": 0.075, "output": 2.50},
+        "gemini-2.0-flash": {"input": 0.10, "cached": 0.025, "output": 0.40},
+        "deepseek-chat": {"input": 0.27, "cached": 0.07, "output": 1.10},
+        "deepseek-reasoner": {"input": 0.55, "cached": 0.14, "output": 2.19}
+    });
+    doc.as_object().cloned().unwrap_or_default()
+}
+
+fn resolve_price_entry<'a>(
+    model_key: &str,
+    prices: &'a Map<String, Value>,
+) -> Option<&'a Map<String, Value>> {
+    if let Some(exact) = prices.get(model_key).and_then(|v| v.as_object()) {
+        return Some(exact);
+    }
+    let lower = model_key.trim().to_ascii_lowercase();
+    let tail = lower.rsplit('/').next().unwrap_or(lower.as_str());
+    if let Some(m) = prices.get(tail).and_then(|v| v.as_object()) {
+        return Some(m);
+    }
+    let mut best: Option<(&str, &Map<String, Value>)> = None;
+    for (k, v) in prices {
+        if k == "default" {
+            continue;
+        }
+        let Some(pobj) = v.as_object() else { continue };
+        let kl = k.to_ascii_lowercase();
+        if (tail == kl
+            || tail.starts_with(&format!("{kl}-"))
+            || tail.starts_with(&format!("{kl}:"))
+            || tail.starts_with(&format!("{kl}."))
+            || lower.contains(&kl))
+            && best.is_none_or(|(bk, _)| kl.len() > bk.len())
+        {
+            best = Some((k.as_str(), pobj));
+        }
+    }
+    if let Some((_, pobj)) = best {
+        return Some(pobj);
+    }
+    prices.get("default").and_then(|v| v.as_object())
+}
+
 pub fn estimate_cost(records: &[CallRecord], prices: &Map<String, Value>) -> CostEstimate {
     let mut total = 0.0f64;
     let mut missing = BTreeSet::new();
     for r in records {
         let model_key = r.model.as_deref().unwrap_or("");
-        let p_obj = prices
-            .get(model_key)
-            .or_else(|| prices.get("default"))
-            .and_then(|v| v.as_object());
-        let in_total = r.usage.get("input_total").and_then(|v| v.as_i64());
-        let (Some(p), Some(in_tok)) = (p_obj, in_total) else {
+        let p_obj = resolve_price_entry(model_key, prices);
+        let in_tok = rec_input(r);
+        let Some(p) = p_obj else {
             missing.insert(if model_key.is_empty() {
                 "?".to_string()
             } else {
@@ -1392,18 +1711,34 @@ pub fn estimate_cost(records: &[CallRecord], prices: &Map<String, Value>) -> Cos
             });
             continue;
         };
+        if in_tok <= 0 && rec_output(r) <= 0 {
+            continue;
+        }
         let cached = rec_cached(r).max(0);
-        let uncached = (in_tok - cached).max(0);
-        let out_tok = r
-            .usage
-            .get("output")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0)
-            .max(0);
-        let p_in = val_as_f64(p.get("input")).unwrap_or(0.0);
+        let cwrite = rec_cache_write(r).max(0);
+        let uncached = (in_tok - cached - cwrite).max(0);
+        let out_tok = rec_output(r).max(0);
+
+        let long_thresh = val_as_f64(p.get("long_context_threshold")).map(|v| v as i64);
+        let is_long = long_thresh.is_some_and(|th| in_tok > th);
+        let p_in = if is_long {
+            val_as_f64(p.get("input_long")).or_else(|| val_as_f64(p.get("input")))
+        } else {
+            val_as_f64(p.get("input"))
+        }
+        .unwrap_or(0.0);
         let p_cached = val_as_f64(p.get("cached")).unwrap_or(p_in);
-        let p_out = val_as_f64(p.get("output")).unwrap_or(0.0);
-        total += ((uncached as f64) * p_in + (cached as f64) * p_cached + (out_tok as f64) * p_out)
+        let p_cwrite = val_as_f64(p.get("cache_write")).unwrap_or(p_in * 1.25);
+        let p_out = if is_long {
+            val_as_f64(p.get("output_long")).or_else(|| val_as_f64(p.get("output")))
+        } else {
+            val_as_f64(p.get("output"))
+        }
+        .unwrap_or(0.0);
+        total += ((uncached as f64) * p_in
+            + (cached as f64) * p_cached
+            + (cwrite as f64) * p_cwrite
+            + (out_tok as f64) * p_out)
             / 1_000_000.0;
     }
     CostEstimate {
@@ -1452,6 +1787,36 @@ pub fn bootstrap_diff(a: &[f64], b: &[f64], n: usize, seed: u64) -> Option<(f64,
     Some((point, diffs[lo_idx], diffs[hi_idx]))
 }
 
+pub fn paired_bootstrap_diff(pairs: &[(f64, f64)], n: usize, seed: u64) -> Option<(f64, f64, f64)> {
+    if pairs.is_empty() || n == 0 {
+        return None;
+    }
+    let deltas: Vec<f64> = pairs.iter().map(|(a, b)| b - a).collect();
+    let m = deltas.len();
+    let inv_m = 1.0 / (m as f64);
+    let mut state = seed.wrapping_add(0x9E3779B97F4A7C15);
+    let mut next_u64 = || -> u64 {
+        state = state.wrapping_add(0x9E3779B97F4A7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+        z ^ (z >> 31)
+    };
+    let mut samples = Vec::with_capacity(n);
+    for _ in 0..n {
+        let mut s = 0.0;
+        for _ in 0..m {
+            s += deltas[(next_u64() as usize) % m];
+        }
+        samples.push(s * inv_m);
+    }
+    samples.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    let point = deltas.iter().sum::<f64>() * inv_m;
+    let lo_idx = ((0.025 * (n as f64)) as usize).min(n - 1);
+    let hi_idx = (((0.975 * (n as f64)) as usize).saturating_sub(1)).min(n - 1);
+    Some((point, samples[lo_idx], samples[hi_idx]))
+}
+
 pub fn compare(before: &[CallRecord], after: &[CallRecord], gap_s: f64) -> Value {
     let ga = group_requests(before, gap_s);
     let gb = group_requests(after, gap_s);
@@ -1464,13 +1829,31 @@ pub fn compare(before: &[CallRecord], after: &[CallRecord], gap_s: f64) -> Value
         .iter()
         .map(|g| g.iter().map(rec_input).sum::<i64>() as f64)
         .collect();
+    let out_a: Vec<f64> = ga
+        .iter()
+        .map(|g| g.iter().map(rec_output).sum::<i64>() as f64)
+        .collect();
+    let out_b: Vec<f64> = gb
+        .iter()
+        .map(|g| g.iter().map(rec_output).sum::<i64>() as f64)
+        .collect();
+    let lat_a: Vec<f64> = ga
+        .iter()
+        .map(|g| g.iter().filter_map(|r| r.latency_ms).sum::<i64>() as f64)
+        .collect();
+    let lat_b: Vec<f64> = gb
+        .iter()
+        .map(|g| g.iter().filter_map(|r| r.latency_ms).sum::<i64>() as f64)
+        .collect();
     let calls_a: Vec<f64> = ga.iter().map(|g| g.len() as f64).collect();
     let calls_b: Vec<f64> = gb.iter().map(|g| g.len() as f64).collect();
 
     let mut metrics = Map::new();
     for (name, a, b) in [
         ("input_per_request", &in_a, &in_b),
+        ("output_per_request", &out_a, &out_b),
         ("calls_per_request", &calls_a, &calls_b),
+        ("latency_ms_per_request", &lat_a, &lat_b),
     ] {
         let mean_a = if a.is_empty() {
             0.0
@@ -1514,6 +1897,59 @@ pub fn compare(before: &[CallRecord], after: &[CallRecord], gap_s: f64) -> Value
         }
     }
 
+    let bprices = builtin_prices();
+    let cost_before = estimate_cost(before, &bprices).total;
+    let cost_after = estimate_cost(after, &bprices).total;
+    let err_before = if before.is_empty() {
+        0.0
+    } else {
+        (before
+            .iter()
+            .filter(|r| r.error.is_some() || r.status.unwrap_or(200) >= 400)
+            .count() as f64)
+            / (before.len() as f64)
+    };
+    let err_after = if after.is_empty() {
+        0.0
+    } else {
+        (after
+            .iter()
+            .filter(|r| r.error.is_some() || r.status.unwrap_or(200) >= 400)
+            .count() as f64)
+            / (after.len() as f64)
+    };
+
+    let mut conv_in_a: HashMap<&str, f64> = HashMap::new();
+    let mut conv_in_b: HashMap<&str, f64> = HashMap::new();
+    for r in before {
+        if let Some(ref c) = r.conv {
+            *conv_in_a.entry(c.as_str()).or_insert(0.0) += rec_input(r) as f64;
+        }
+    }
+    for r in after {
+        if let Some(ref c) = r.conv {
+            *conv_in_b.entry(c.as_str()).or_insert(0.0) += rec_input(r) as f64;
+        }
+    }
+    let mut pairs = Vec::new();
+    for (ck, va) in &conv_in_a {
+        if let Some(&vb) = conv_in_b.get(ck) {
+            pairs.push((*va, vb));
+        }
+    }
+    let paired_val = if pairs.len() >= 3 {
+        paired_bootstrap_diff(&pairs, 2000, 0).map(|(diff, lo, hi)| {
+            json!({
+                "matched_sessions": pairs.len(),
+                "input_diff_mean": diff,
+                "ci95": [lo, hi],
+                "significant": lo > 0.0 || hi < 0.0,
+            })
+        })
+    } else {
+        None
+    };
+
     let reliable = ga.len().min(gb.len()) >= 5;
     json!({
         "requests": {
@@ -1521,6 +1957,17 @@ pub fn compare(before: &[CallRecord], after: &[CallRecord], gap_s: f64) -> Value
             "after": gb.len(),
         },
         "metrics": metrics,
+        "cost_usd_est": {
+            "before": cost_before,
+            "after": cost_after,
+            "diff": cost_after - cost_before,
+        },
+        "quality_guardrail": {
+            "before_error_rate": err_before,
+            "after_error_rate": err_after,
+            "error_rate_delta": err_after - err_before,
+        },
+        "paired": paired_val,
         "reliable": reliable,
     })
 }
@@ -1529,7 +1976,17 @@ pub fn to_legacy(records: &[CallRecord], gap_s: f64) -> Vec<Value> {
     let mut rows = Vec::new();
     for (gi, g) in group_requests(records, gap_s).into_iter().enumerate() {
         let turn_num = gi + 1;
-        for r in g {
+        for (ri, r) in g.iter().enumerate() {
+            let mut next_res_tokens: HashMap<&str, i64> = HashMap::new();
+            if let Some(next_r) = g.get(ri + 1) {
+                for s in &next_r.segments {
+                    if s.kind == "tool_result" {
+                        if let Some(ref nm) = s.name {
+                            *next_res_tokens.entry(nm.as_str()).or_insert(0) += s.tokens;
+                        }
+                    }
+                }
+            }
             let defs: Vec<Value> = r
                 .segments
                 .iter()
@@ -1541,14 +1998,19 @@ pub fn to_legacy(records: &[CallRecord], gap_s: f64) -> Vec<Value> {
                     })
                 })
                 .collect();
+            let err_val = r
+                .error
+                .as_ref()
+                .map(|e| Value::String(e.clone()))
+                .unwrap_or(Value::Null);
             let tcs: Vec<Value> = r
                 .tool_calls
                 .iter()
                 .map(|n| {
                     json!({
                         "name": n,
-                        "error": Value::Null,
-                        "output_tokens": 0,
+                        "error": err_val.clone(),
+                        "output_tokens": next_res_tokens.get(n.as_str()).copied().unwrap_or(0),
                     })
                 })
                 .collect();
@@ -1561,9 +2023,11 @@ pub fn to_legacy(records: &[CallRecord], gap_s: f64) -> Vec<Value> {
                 "session": sess,
                 "turn": turn_num,
                 "model": r.model,
-                "input_tokens": rec_input(&r),
-                "cached_input_tokens": rec_cached(&r),
-                "output_tokens": rec_output(&r),
+                "input_tokens": rec_input(r),
+                "cached_input_tokens": rec_cached(r),
+                "cache_write_tokens": rec_cache_write(r),
+                "output_tokens": rec_output(r),
+                "reasoning_tokens": rec_reasoning(r),
                 "tool_defs": defs,
                 "tool_calls": tcs,
             }));

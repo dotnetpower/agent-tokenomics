@@ -1,6 +1,6 @@
 [package]
 name = "tokprof"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Zero-code LLM agent token profiler (native Rust single-binary implementation)"
 license = "MIT"

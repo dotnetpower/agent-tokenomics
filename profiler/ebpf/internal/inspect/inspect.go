@@ -53,6 +53,7 @@ type Process struct {
 	Cmdline   string     `json:"cmdline"`
 	Providers []Provider `json:"providers,omitempty"`
 	GoTLS     bool       `json:"go_tls,omitempty"`
+	AltTLS    string     `json:"alt_tls,omitempty"`
 	Attach    string     `json:"attach"` // "yes" | "go-only" | "no" | "unreadable"
 	Note      string     `json:"note,omitempty"`
 }
@@ -60,6 +61,7 @@ type Process struct {
 type fileInfo struct {
 	provider *Provider
 	goTLS    bool
+	altTLS   string
 	err      error
 }
 
@@ -194,12 +196,26 @@ func scanProcess(procRoot string, pid int, selfMnt string, scanBuf []byte, cache
 		if fi.goTLS {
 			p.GoTLS = true
 		}
+		if fi.altTLS != "" && p.AltTLS == "" {
+			p.AltTLS = fi.altTLS
+		}
+		if p.AltTLS == "" {
+			if strings.Contains(path, "libgnutls") {
+				p.AltTLS = "gnutls"
+			} else if strings.Contains(path, "libnspr") || strings.Contains(path, "libssl3.so") {
+				p.AltTLS = "nss"
+			} else if strings.Contains(path, "libjvm.so") || strings.Contains(path, "libnet.so") {
+				p.AltTLS = "jvm-jsse"
+			}
+		}
 	}
 	switch {
 	case len(p.Providers) > 0:
 		p.Attach = "yes"
 	case p.GoTLS:
 		p.Attach, p.Note = "go-only", "Go crypto/tls: RET offsets not found (unsupported ABI or architecture)"
+	case p.AltTLS != "":
+		p.Note = fmt.Sprintf("uses %s (no OpenSSL/Go TLS symbols); profile via `tokprof run` or OTLP", p.AltTLS)
 	}
 	return p
 }
@@ -305,6 +321,9 @@ func inspectFile(path string) *fileInfo {
 			if isTLS(s.Name) && s.Section != elf.SHN_UNDEF && elf.ST_TYPE(s.Info) == elf.STT_FUNC {
 				found[s.Name] = "exported"
 			}
+			if fi.altTLS == "" {
+				fi.altTLS = classifyAltTLSSymbol(s.Name)
+			}
 		}
 	}
 	var goWrite, goRead *elf.Symbol
@@ -315,6 +334,9 @@ func inspectFile(path string) *fileInfo {
 				if _, ok := found[s.Name]; !ok {
 					found[s.Name] = "local"
 				}
+			}
+			if fi.altTLS == "" {
+				fi.altTLS = classifyAltTLSSymbol(s.Name)
 			}
 			switch s.Name {
 			case GoTLSWriteSym:
@@ -452,6 +474,18 @@ func isTLS(name string) bool {
 		}
 	}
 	return false
+}
+
+func classifyAltTLSSymbol(name string) string {
+	switch {
+	case strings.Contains(name, "rustls") && (strings.Contains(name, "ConnectionCommon") || strings.Contains(name, "ClientConnection")):
+		return "rustls"
+	case name == "gnutls_record_send" || name == "gnutls_record_recv":
+		return "gnutls"
+	case name == "PR_Write" || name == "PR_Send":
+		return "nss"
+	}
+	return ""
 }
 
 // isNonHTTPTLSLib filters out embedded OpenSSL copies inside database, image, or

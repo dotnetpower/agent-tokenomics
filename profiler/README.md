@@ -46,13 +46,14 @@ tokprof report --csv                   # save CSV report to .tokprof/latest.csv 
 tokprof report --watch                 # live-updating terminal dashboard as calls arrive
 tokprof run -- python my_agent.py      # run a command with LLM base URLs routed through the local gateway
 tokprof shell                          # a shell whose child processes are profiled
-tokprof report run.jsonl --prices prices.json   # add a cost estimate (per 1M tokens, your prices)
-tokprof compare before.jsonl after.jsonl        # per-request change with a 95% bootstrap interval
+tokprof report run.jsonl --prices auto          # add a USD cost estimate from built-in model rates (or pass prices.json)
+tokprof compare before.jsonl after.jsonl --max-regression 5   # per-request & paired change with 95% CI + CI gate
 tokprof pull --workspace <WS_ID> --since 6h     # pull & decompose LLM calls from Azure Application Insights / Log Analytics
-tokprof import appinsights.json --report        # import exported App Insights, OTel GenAI, APIM, or [TOKPROF_CHUNK] logs
+tokprof import traces.json.gz --report          # import App Insights, OTel/OTLP, Bedrock, Langfuse/LangSmith, or [TOKPROF_CHUNK] logs
 tokprof export run.jsonl --out legacy.jsonl     # schema of examples/token_report.py
-tokprof doctor                         # what works on this machine
-tokprof selftest                       # verify the pipeline with a local mock LLM
+tokprof clean --keep 5                          # remove older .jsonl/.jsonl.gz/.html/.csv artifacts in .tokprof/
+tokprof doctor                                  # what works on this machine (--json supported)
+tokprof selftest                                # verify the pipeline with a local mock LLM and OTLP trace
 ```
 
 `tokprof run` starts a gateway on `127.0.0.1` and sets `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, and
@@ -135,18 +136,18 @@ are counted and reported with the flag that forces them if they are model endpoi
 
 - Outside the eBPF tap, only processes started through `tokprof` (`run`, `shell`, or the environment from `tokprof env`) are captured.
   Already-running processes need the Linux eBPF tap or `tokprof mitm` (see below).
-- Under `tokprof run`, clients that neither honor the base-URL variables nor use `httpx`, `requests`, `urllib3`, `aiohttp`, `urllib.request`,
-  Node `fetch` or Node `http`/`https` (for example raw `http.client` or compiled non-Python/Node binaries that hard-code their endpoint)
-  are not captured by the gateway or hooks. `tokprof ebpf` (Linux) and `tokprof mitm` see them at the network level.
+- Under `tokprof run`, clients that neither honor base-URL / `OTEL_EXPORTER_OTLP_ENDPOINT` variables nor use `httpx`, `requests`, `urllib3`,
+  `aiohttp`, `urllib.request`, `curl_cffi`, Node `fetch`, Node `http`/`https`, or Node `http2` (for example compiled C++/Rust binaries using `rustls`
+  that hard-code their endpoint without OTel) are not captured by the gateway or hooks; `tokprof mitm` or OTLP export sees them.
 - Non-seekable streaming request bodies (for example a generator passed as `data=`) are not captured by in-process hooks.
-- The gateway opens a new upstream TLS connection per request and asks upstream for uncompressed responses.
+- Upstream HTTP/1.1 Keep-Alive connections are pooled per host; WebSocket upgrades (`Upgrade: websocket`) are tunneled transparently.
 
 ## Develop
 
 ```bash
-uv venv && uv pip install -e ".[dev]"
-pytest
-tokprof selftest
+cargo clippy --manifest-path profiler/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path profiler/Cargo.toml
+cargo run --manifest-path profiler/Cargo.toml -- selftest
 ```
 
 ## Linux eBPF tap (running processes, no restart, no code change)

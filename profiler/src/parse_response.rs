@@ -49,7 +49,7 @@ pub fn usage_openai_chat(u: &Map<String, Value>) -> Usage {
         .and_then(|v| v.as_object())
         .unwrap_or(&empty);
 
-    let in_tok = non_neg_int(u.get("prompt_tokens"))
+    let mut in_tok = non_neg_int(u.get("prompt_tokens"))
         .or_else(|| non_neg_int(u.get("input_tokens")))
         .or_else(|| non_neg_int(u.get("inputTokens")))
         .or_else(|| non_neg_int(nested.get("input_tokens")));
@@ -63,6 +63,24 @@ pub fn usage_openai_chat(u: &Map<String, Value>) -> Usage {
     let cache_write = non_neg_int(d.get("cache_write_tokens"))
         .or_else(|| non_neg_int(u.get("cacheWriteInputTokens")))
         .or_else(|| non_neg_int(u.get("cache_creation_input_tokens")));
+
+    // AWS Bedrock Converse reports non-cached tokens in `inputTokens` separately from cache read/write.
+    if u.contains_key("inputTokens") && !u.contains_key("prompt_tokens") {
+        let cr = cached.unwrap_or(0);
+        let cw = cache_write.unwrap_or(0);
+        if cr > 0 || cw > 0 {
+            if let Some(base_in) = in_tok {
+                let total_tok = non_neg_int(u.get("totalTokens"));
+                let out_v = out_tok.unwrap_or(0);
+                if total_tok == Some(base_in + cr + cw + out_v)
+                    || total_tok.is_none()
+                    || base_in < cr + cw
+                {
+                    in_tok = Some(base_in + cr + cw);
+                }
+            }
+        }
+    }
 
     Usage {
         input_total: in_tok,
@@ -111,8 +129,10 @@ pub fn usage_anthropic(u: &Map<String, Value>, into: &mut Usage) {
 }
 
 pub fn usage_gemini(u: &Map<String, Value>) -> Usage {
+    let prompt = non_neg_int(u.get("promptTokenCount"));
+    let tool_prompt = non_neg_int(u.get("toolUsePromptTokenCount")).unwrap_or(0);
     Usage {
-        input_total: non_neg_int(u.get("promptTokenCount")),
+        input_total: prompt.map(|p| p + tool_prompt),
         cached: non_neg_int(u.get("cachedContentTokenCount")),
         cache_write: None,
         output: non_neg_int(u.get("candidatesTokenCount")),
@@ -447,10 +467,20 @@ pub fn parse_response_json(provider: &str, obj: &Value) -> ParsedResponse {
         if let Some(out_arr) = map.get("output").and_then(|v| v.as_array()) {
             for item in out_arr {
                 let Some(io) = item.as_object() else { continue };
-                if io.get("type").and_then(|v| v.as_str()) == Some("function_call") {
+                let itype = io.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if matches!(itype, "function_call" | "custom_tool_call" | "mcp_call") {
                     if let Some(nm) = io.get("name").and_then(|v| v.as_str()) {
                         r.tool_calls.push(nm.to_string());
                     }
+                } else if matches!(
+                    itype,
+                    "web_search_call"
+                        | "file_search_call"
+                        | "computer_call"
+                        | "code_interpreter_call"
+                        | "local_shell_call"
+                ) {
+                    r.tool_calls.push(itype.to_string());
                 }
                 if let Some(carr) = io.get("content").and_then(|v| v.as_array()) {
                     for part in carr {
@@ -474,7 +504,7 @@ pub fn parse_response_json(provider: &str, obj: &Value) -> ParsedResponse {
             for b in carr {
                 let Some(bo) = b.as_object() else { continue };
                 let btype = bo.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                if btype == "tool_use" {
+                if matches!(btype, "tool_use" | "server_tool_use" | "mcp_tool_use") {
                     if let Some(nm) = bo.get("name").and_then(|v| v.as_str()) {
                         r.tool_calls.push(nm.to_string());
                     }
@@ -620,6 +650,10 @@ impl SSEParser {
     }
 
     pub fn feed_text(&mut self, raw: &str) {
+        if raw.contains("\n\n") || raw.contains("\r\n\r\n") {
+            self.feed(raw.as_bytes());
+            return;
+        }
         for line in raw.lines() {
             if let Some(rest) = line.strip_prefix("data:") {
                 let payload = rest.trim();
@@ -648,6 +682,7 @@ impl SSEParser {
             && find_subslice(slice, b"\"choices\"").is_some()
             && find_subslice(slice, b"\"usage\"").is_none()
             && find_subslice(slice, b"\"tool_calls\"").is_none()
+            && find_subslice(slice, b"\"error\"").is_none()
         {
             if let Ok(chunk) = serde_json::from_slice::<FastChatChunk<'_>>(slice) {
                 for ch in chunk.choices {
@@ -711,6 +746,20 @@ impl SSEParser {
     }
 
     pub fn process_obj(&mut self, o: &Map<String, Value>) {
+        if let Some(err_v) = o.get("error") {
+            match err_v {
+                Value::String(s) if !s.is_empty() => self.result.error = Some(s.clone()),
+                Value::Object(eo) => {
+                    let msg = eo
+                        .get("message")
+                        .or_else(|| eo.get("type"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("stream_error");
+                    self.result.error = Some(msg.to_string());
+                }
+                _ => {}
+            }
+        }
         let p = self.provider.as_str();
         if p == OPENAI_CHAT {
             if let Some(u) = o.get("usage").and_then(|v| v.as_object()) {
@@ -735,6 +784,7 @@ impl SSEParser {
                                     .and_then(|v| v.as_object())
                                     .and_then(|f| f.get("name"))
                                     .and_then(|v| v.as_str())
+                                    .filter(|s| !s.is_empty())
                                 {
                                     self.result.tool_calls.push(nm.to_string());
                                 }
@@ -751,12 +801,23 @@ impl SSEParser {
                 }
             } else if t == "response.output_item.added" || t == "response.output_item.done" {
                 if let Some(item) = o.get("item").and_then(|v| v.as_object()) {
-                    if item.get("type").and_then(|v| v.as_str()) == Some("function_call") {
+                    let itype = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if matches!(itype, "function_call" | "custom_tool_call" | "mcp_call") {
                         if let Some(nm) = item.get("name").and_then(|v| v.as_str()) {
                             if self.result.tool_calls.last().map(|s| s.as_str()) != Some(nm) {
                                 self.result.tool_calls.push(nm.to_string());
                             }
                         }
+                    } else if matches!(
+                        itype,
+                        "web_search_call"
+                            | "file_search_call"
+                            | "computer_call"
+                            | "code_interpreter_call"
+                            | "local_shell_call"
+                    ) && self.result.tool_calls.last().map(|s| s.as_str()) != Some(itype)
+                    {
+                        self.result.tool_calls.push(itype.to_string());
                     }
                 }
             } else if matches!(
@@ -787,7 +848,10 @@ impl SSEParser {
                 }
             } else if t == "content_block_start" {
                 if let Some(cb) = o.get("content_block").and_then(|v| v.as_object()) {
-                    if cb.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                    if matches!(
+                        cb.get("type").and_then(|v| v.as_str()),
+                        Some("tool_use" | "server_tool_use" | "mcp_tool_use")
+                    ) {
                         if let Some(nm) = cb.get("name").and_then(|v| v.as_str()) {
                             self.result.tool_calls.push(nm.to_string());
                         }

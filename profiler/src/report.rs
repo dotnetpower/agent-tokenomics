@@ -44,6 +44,23 @@ pub const CSV_COLUMNS: &[&str] = &[
 ];
 
 pub fn kind_label(kind: &str) -> &str {
+    if crate::analyze::is_korean_locale() {
+        return match kind {
+            "system" => "시스템 프롬프트 (System prompt)",
+            "history_user" => "대화 이력: 사용자 (History: user)",
+            "history_assistant" => "대화 이력: 어시스턴트 (History: assistant)",
+            "user_prompt" => "현재 사용자 프롬프트 (Current user prompt)",
+            "tool_def" => "도구 정의 (Tool definitions)",
+            "tool_call" => "도구 호출 (Tool calls)",
+            "tool_result" => "도구 실행 결과 (Tool results)",
+            "attachment" => "첨부 파일/이미지 (Attachments)",
+            "response_schema" => "응답 스키마 (Response schema)",
+            "raw_prompt" => "원시 프롬프트 (Raw prompt)",
+            "other" => "기타/추론 요약 (Other)",
+            "residual" => "미귀속 오버헤드 (Unattributed)",
+            _ => kind,
+        };
+    }
     match kind {
         "system" => "System prompt",
         "history_user" => "History: user turns",
@@ -225,7 +242,9 @@ pub fn render_compare(result: &Value) -> String {
     let mut lines = vec![format!("Requests: before {req_b}, after {req_a}")];
     for (key, title) in [
         ("input_per_request", "Input tokens per request"),
+        ("output_per_request", "Output tokens per request"),
         ("calls_per_request", "LLM calls per request"),
+        ("latency_ms_per_request", "Latency (ms) per request"),
     ] {
         let Some(m) = result.get("metrics").and_then(|o| o.get(key)) else {
             continue;
@@ -258,6 +277,29 @@ pub fn render_compare(result: &Value) -> String {
         lines.push(format!(
             "{title}: {b_mean:.1} -> {a_mean:.1}  ({rel}; diff {diff:+.1}, 95% CI {ci0:+.1} to {ci1:+.1}; {verdict})"
         ));
+    }
+    if let Some(paired) = result.get("paired").and_then(|v| v.as_object()) {
+        let matched = paired
+            .get("matched_sessions")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let pdiff = paired
+            .get("input_diff_mean")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let sig = paired
+            .get("significant")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        lines.push(format!(
+            "Paired sessions ({matched} matched): mean input delta {pdiff:+.1} ({})",
+            if sig { "significant" } else { "within noise" }
+        ));
+    }
+    if let Some(qg) = result.get("quality_guardrail").and_then(|v| v.as_object()) {
+        let eb = qg.get("before_error_rate").and_then(|v| v.as_f64()).unwrap_or(0.0) * 100.0;
+        let ea = qg.get("after_error_rate").and_then(|v| v.as_f64()).unwrap_or(0.0) * 100.0;
+        lines.push(format!("Quality guardrail (HTTP/call error rate): {eb:.1}% -> {ea:.1}%"));
     }
     if !result
         .get("reliable")
@@ -616,7 +658,10 @@ pub fn render_pretty(
     } else {
         format!("+{}+", "-".repeat(90))
     };
-    let mid = if u_ok {
+    let ko = crate::analyze::is_korean_locale();
+    let mid = if ko {
+        "│  tokprof — LLM 토큰 프로파일 (세션별 · 턴별 · 프롬프트 인스펙터)                        │"
+    } else if u_ok {
         "│  tokprof — LLM Token Profile (Per-Session · Per-Turn · Prompt Inspector)                 │"
     } else {
         "|  tokprof - LLM Token Profile (Per-Session / Per-Turn / Prompt Inspector)                 |"
@@ -646,6 +691,13 @@ pub fn render_pretty(
             fmt_num(s.median_input)
         ),
     ];
+    if s.reasoning_total > 0 || s.cache_write_total > 0 {
+        lines.push(format!(
+            "  Reasoning output: {} tok   Cache write: {} tok",
+            fmt_num(s.reasoning_total),
+            fmt_num(s.cache_write_total)
+        ));
+    }
     if let Some(pmap) = prices {
         lines.push(format!("  {}", render_cost(records, pmap)));
     }
@@ -884,6 +936,10 @@ pub fn render_pretty(
     lines.join("\n")
 }
 
+fn md_cell(s: &str) -> String {
+    s.replace('|', "\\|").replace(['\r', '\n'], " ")
+}
+
 pub fn render_markdown(
     records: &[CallRecord],
     gap_s: f64,
@@ -904,13 +960,27 @@ pub fn render_markdown(
     let mut md = vec![
         "# Token profile".to_string(),
         String::new(),
-        format!("- Calls: **{}**", s.calls),
+        format!(
+            "- Sessions: **{}**, turns: **{}**, calls: **{}**",
+            s.sessions.len(),
+            s.turns.len(),
+            s.calls
+        ),
         format!(
             "- Input tokens: **{}**, output tokens: **{}**, cached input: **{}**",
             fmt_num(s.input_total),
             fmt_num(s.output_total),
             fmt_num(s.cached_total)
         ),
+    ];
+    if s.reasoning_total > 0 || s.cache_write_total > 0 {
+        md.push(format!(
+            "- Reasoning tokens: **{}**, cache write tokens: **{}**",
+            fmt_num(s.reasoning_total),
+            fmt_num(s.cache_write_total)
+        ));
+    }
+    md.extend([
         format!(
             "- First call input (fixed overhead): **{}**",
             fmt_num(s.first_call_input)
@@ -920,15 +990,39 @@ pub fn render_markdown(
         String::new(),
         "| Component | Tokens | Share |".to_string(),
         "|-----------|-------:|------:|".to_string(),
-    ];
+    ]);
     for kind in &s.kinds_order {
         let v = s.by_kind.get(kind).copied().unwrap_or(0);
         if v != 0 {
             md.push(format!(
                 "| {} | {} | {:.1}% |",
-                kind_label(kind),
+                md_cell(kind_label(kind)),
                 fmt_num(v),
                 100.0 * (v as f64) / total
+            ));
+        }
+    }
+    if !s.sessions.is_empty() {
+        md.extend([
+            String::new(),
+            "## Per-session summary".to_string(),
+            String::new(),
+            "| Session | Turns | Calls | System | History | User | Tools | Input | Cached | Output |".to_string(),
+            "|---------|------:|------:|-------:|--------:|-----:|------:|------:|-------:|-------:|".to_string(),
+        ]);
+        for sess in s.sessions.iter().take(20) {
+            md.push(format!(
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                md_cell(&sess.session),
+                sess.turns_count,
+                sess.calls_count,
+                fmt_num(sess.system),
+                fmt_num(sess.history),
+                fmt_num(sess.user_prompt),
+                fmt_num(sess.tools_schema),
+                fmt_num(sess.input_total),
+                fmt_num(sess.cached_total),
+                fmt_num(sess.output_total),
             ));
         }
     }
@@ -953,9 +1047,9 @@ pub fn render_markdown(
             });
             md.push(format!(
                 "| {} | {} | {} | {} | {} |",
-                who,
-                e.class,
-                e.api,
+                md_cell(&who),
+                md_cell(&e.class),
+                md_cell(&e.api),
                 e.calls,
                 fmt_num(e.input)
             ));
@@ -989,13 +1083,25 @@ pub fn render_json(
     serde_json::to_string_pretty(s).unwrap_or_else(|_| "{}".to_string())
 }
 
+fn is_csv_formula_risk(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    match bytes[0] {
+        b'=' | b'@' | b'\t' => true,
+        b'+' | b'-' if bytes.len() > 1 && !bytes[1].is_ascii_digit() => true,
+        _ => false,
+    }
+}
+
 pub fn csv_quote(val: &str) -> String {
     if val.is_empty() {
         return String::new();
     }
     let bytes = val.as_bytes();
     let mut needs_clean = false;
-    let mut needs_quote = false;
+    let mut needs_quote = is_csv_formula_risk(val);
     for &b in bytes {
         match b {
             b'\0' | b'\r' => needs_clean = true,
@@ -1006,13 +1112,17 @@ pub fn csv_quote(val: &str) -> String {
     if !needs_clean && !needs_quote {
         return val.to_string();
     }
-    let clean = if needs_clean {
+    let mut clean = if needs_clean {
         val.replace('\0', "")
             .replace("\r\n", "\n")
             .replace('\r', "\n")
     } else {
         val.to_string()
     };
+    if is_csv_formula_risk(&clean) {
+        clean.insert(0, '\'');
+        needs_quote = true;
+    }
     if needs_quote || clean.contains('\n') {
         if clean.contains('"') {
             format!("\"{}\"", clean.replace('"', "\"\""))
@@ -1034,9 +1144,10 @@ fn write_csv_cached<'a>(
     }
     if val.len() <= 64 {
         let bytes = val.as_bytes();
-        if !bytes
-            .iter()
-            .any(|&b| matches!(b, b'\0' | b'\r' | b',' | b'"' | b'\n'))
+        if !is_csv_formula_risk(val)
+            && !bytes
+                .iter()
+                .any(|&b| matches!(b, b'\0' | b'\r' | b',' | b'"' | b'\n'))
         {
             out.push_str(val);
             return;
@@ -1823,11 +1934,15 @@ pub fn render_html(
             "low" => "dp-status-ready",
             _ => "dp-status-unknown",
         };
+        let safe_href = if f.see.starts_with("https://") || f.see.starts_with("http://") {
+            html_escape(&f.see)
+        } else {
+            "#".to_string()
+        };
         finding_cards.push(format!(
-            r#"<div class="finding sev-{sev}"><span class="dp-status {status_cls} badge badge-{sev}">{}</span><div class="finding-body"><div>{}</div><a href="{}" target="_blank" rel="noopener">Troubleshooting guide &rarr;</a></div></div>"#,
+            r#"<div class="finding sev-{sev}"><span class="dp-status {status_cls} badge badge-{sev}">{}</span><div class="finding-body"><div>{}</div><a href="{safe_href}" target="_blank" rel="noopener noreferrer">Troubleshooting guide &rarr;</a></div></div>"#,
             sev.to_ascii_uppercase(),
             html_escape(&f.text),
-            html_escape(&f.see)
         ));
     }
     if finding_cards.is_empty() {
@@ -1845,6 +1960,17 @@ pub fn render_html(
             )
         })
         .unwrap_or_default();
+
+    let reasoning_card = if s.reasoning_total > 0 || s.cache_write_total > 0 {
+        format!(
+            r#"<section class="dp-edition-paper card"><span class="dp-kicker k-label">REASONING / CACHE WRITE</span><strong class="k-val">{}</strong><span class="dp-edition-small k-sub">cache write: {} tok</span></section>"#,
+            fmt_num(s.reasoning_total),
+            fmt_num(s.cache_write_total)
+        )
+    } else {
+        String::new()
+    };
+    let html_lang = if crate::analyze::is_korean_locale() { "ko" } else { "en" };
 
     let title_esc = html_escape(title);
     let sess_cnt = fmt_usize(s.sessions.len());
@@ -1901,7 +2027,7 @@ pub fn render_html(
     let _ = write!(
         doc,
         r##"<!DOCTYPE html>
-<html lang="en">
+<html lang="{html_lang}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -2173,6 +2299,7 @@ td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; white-s
         <section class="dp-edition-paper card"><span class="dp-kicker k-label">04 / OUTPUT TOKENS</span><strong class="k-val">{out_tot}</strong><span class="dp-edition-small k-sub">generated by model</span></section>
         <section class="dp-edition-paper card"><span class="dp-kicker k-label">05 / FIXED OVERHEAD</span><strong class="k-val">{first_in}</strong><span class="dp-edition-small k-sub">first call input</span></section>
         <section class="dp-edition-paper card"><span class="dp-kicker k-label">06 / FAN-OUT</span><strong class="k-val">{med_fo}</strong><span class="dp-edition-small k-sub">median calls/turn (max {max_fo})</span></section>
+        {reasoning_card}
         {cost_card}
       </div>
 
@@ -2532,6 +2659,9 @@ function filterCalls() {{
   var out = document.getElementById('call-filter-count');
   if (out) out.textContent = shown + ' call(s) shown · click ▾ View prompts or #call Drawer';
 }}
+function escHtml(str) {{
+  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}}
 function openCallDossier(idx) {{
   var row = document.querySelector('tr.call-row[data-call-idx="' + idx + '"]');
   var backdrop = document.getElementById('call-dossier-backdrop');
@@ -2539,15 +2669,25 @@ function openCallDossier(idx) {{
   if (!row || !backdrop || !body) return;
   var promptsEl = document.getElementById('call-prompts-' + idx);
   var promptsHtml = promptsEl ? promptsEl.innerHTML : '<p class="sub">No prompt text stored in this JSONL record (captured before prompt-text storage was enabled or with --no-content).</p>';
+  var turnTxt = escHtml(row.getAttribute('data-turn'));
+  var modelTxt = escHtml(row.getAttribute('data-model'));
+  var inTxt = escHtml(row.getAttribute('data-input'));
+  var caTxt = escHtml(row.getAttribute('data-cached'));
+  var outTxt = escHtml(row.getAttribute('data-output'));
+  var sysTxt = escHtml(row.getAttribute('data-system'));
+  var hisTxt = escHtml(row.getAttribute('data-history'));
+  var usrTxt = escHtml(row.getAttribute('data-user'));
+  var tlsTxt = escHtml(row.getAttribute('data-tools'));
+  var latTxt = escHtml(row.getAttribute('data-latency'));
   body.innerHTML =
-    '<div class="dp-kicker">CALL DOSSIER / #' + idx + '</div>' +
-    '<span class="dp-status dp-status-ready">' + row.getAttribute('data-turn') + '</span>' +
-    '<h2>Call #' + idx + ' &middot; ' + row.getAttribute('data-model') + '</h2>' +
+    '<div class="dp-kicker">CALL DOSSIER / #' + Number(idx) + '</div>' +
+    '<span class="dp-status dp-status-ready">' + turnTxt + '</span>' +
+    '<h2>Call #' + Number(idx) + ' &middot; ' + modelTxt + '</h2>' +
     '<dl class="dp-dossier">' +
-      '<div><dt>Session &middot; Turn</dt><dd class="dp-mono">' + row.getAttribute('data-turn') + '</dd></div>' +
-      '<div><dt>Total Input / Cached / Output</dt><dd class="dp-mono">' + row.getAttribute('data-input') + ' / ' + row.getAttribute('data-cached') + ' / ' + row.getAttribute('data-output') + ' tok</dd></div>' +
-      '<div><dt>System / History / User / Tools</dt><dd class="dp-mono">' + row.getAttribute('data-system') + ' / ' + row.getAttribute('data-history') + ' / ' + row.getAttribute('data-user') + ' / ' + row.getAttribute('data-tools') + ' tok</dd></div>' +
-      '<div><dt>Latency</dt><dd class="dp-mono">' + row.getAttribute('data-latency') + '</dd></div>' +
+      '<div><dt>Session &middot; Turn</dt><dd class="dp-mono">' + turnTxt + '</dd></div>' +
+      '<div><dt>Total Input / Cached / Output</dt><dd class="dp-mono">' + inTxt + ' / ' + caTxt + ' / ' + outTxt + ' tok</dd></div>' +
+      '<div><dt>System / History / User / Tools</dt><dd class="dp-mono">' + sysTxt + ' / ' + hisTxt + ' / ' + usrTxt + ' / ' + tlsTxt + ' tok</dd></div>' +
+      '<div><dt>Latency</dt><dd class="dp-mono">' + latTxt + '</dd></div>' +
     '</dl>' +
     '<div class="p-box" style="grid-template-columns:1fr">' + promptsHtml + '</div>';
   backdrop.classList.add('is-open');
@@ -2557,6 +2697,17 @@ function closeCallDossier() {{
   if (backdrop) backdrop.classList.remove('is-open');
 }}
 document.addEventListener('keydown', function(e) {{ if (e.key === 'Escape') closeCallDossier(); }});
+(function() {{
+  if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
+  var baseMtime = null;
+  setInterval(function() {{
+    fetch('/__tokprof/mtime', {{cache: 'no-store'}}).then(function(r) {{ return r.ok ? r.json() : null; }}).then(function(d) {{
+      if (!d || !d.mtime_ms) return;
+      if (baseMtime === null) {{ baseMtime = d.mtime_ms; }}
+      else if (d.mtime_ms > baseMtime) {{ location.reload(); }}
+    }}).catch(function() {{}});
+  }}, 2500);
+}})();
 </script>
 </body>
 </html>

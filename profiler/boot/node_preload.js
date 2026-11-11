@@ -71,6 +71,34 @@ function emitStdoutChunks(payload) {
   }
 }
 
+const pendingBodies = new Map();
+let nextSendId = 1;
+
+function flushPendingOnExit() {
+  if (pendingBodies.size === 0) return;
+  try {
+    const items = Array.from(pendingBodies.values());
+    pendingBodies.clear();
+    const { spawn } = require("child_process");
+    const targetUrl = INGEST_URL || `http://127.0.0.1:${PORT}/__tokprof/ingest`;
+    const script = `const http=require("http"),https=require("https");const u=new URL(process.argv[1]);const tok=process.argv[2];const items=JSON.parse(process.argv[3]);for(const b of items){const buf=Buffer.from(b,"base64");const m=u.protocol==="https:"?https:http;const r=m.request({hostname:u.hostname,port:Number(u.port)||(u.protocol==="https:"?443:80),path:u.pathname||"/__tokprof/ingest",method:"POST",headers:{"Content-Type":"application/json","Content-Length":buf.length,"X-Tokprof-Token":tok}},res=>res.resume());r.on("error",()=>{});r.end(buf);}`;
+    const child = spawn(
+      process.execPath,
+      ["-e", script, targetUrl, TOKEN, JSON.stringify(items.map((b) => b.toString("base64")))],
+      { detached: true, stdio: "ignore", env: {} }
+    );
+    child.unref();
+  } catch (_) { /* best effort */ }
+}
+
+if (ACTIVE) {
+  const origProcessExit = process.exit;
+  process.exit = function tokprofProcessExit(code) {
+    flushPendingOnExit();
+    return origProcessExit.call(this, code);
+  };
+}
+
 function send(payload) {
   try {
     if (HAS_STDOUT) {
@@ -78,6 +106,8 @@ function send(payload) {
       if (!((PORT && TOKEN) || INGEST_URL)) return;
     }
     const body = Buffer.from(JSON.stringify(payload), "utf8");
+    const sendId = nextSendId++;
+    pendingBodies.set(sendId, body);
     let reqOpts;
     let reqFn = origHttpRequest;
     let reqMod = http;
@@ -101,9 +131,13 @@ function send(payload) {
         agent: false,
       };
     }
-    const req = reqFn.call(reqMod, reqOpts, (res) => res.resume());
-    req.on("error", (e) => warn("could not deliver a captured call: " + e.message));
-    req.setTimeout(5000, () => req.destroy());
+    const done = () => { pendingBodies.delete(sendId); };
+    const req = reqFn.call(reqMod, reqOpts, (res) => {
+      res.on("end", done);
+      res.resume();
+    });
+    req.on("error", (e) => { done(); warn("could not deliver a captured call: " + e.message); });
+    req.setTimeout(5000, () => { done(); req.destroy(); });
     req.end(body);
   } catch (e) {
     warn("could not deliver a captured call: " + e.message);
@@ -228,30 +262,111 @@ function wrapHttpModule(mod, defaultProto) {
   mod.request = wrappedRequest;
 }
 
+function wrapHttp2Module() {
+  try {
+    const http2 = require("http2");
+    if (!http2 || typeof http2.connect !== "function" || http2.connect._tokprofWrapped) return;
+    const origConnect = http2.connect;
+    function wrappedConnect(authority, options, listener) {
+      const session = origConnect.apply(this, arguments);
+      try {
+        const authUrl = new URL(typeof authority === "string" ? authority : String(authority));
+        const viaGateway = (authUrl.hostname === "127.0.0.1" || authUrl.hostname === "localhost") && String(authUrl.port) === String(PORT);
+        if (viaGateway || !session || typeof session.request !== "function" || session._tokprofWrapped) return session;
+        session._tokprofWrapped = true;
+        const origReq = session.request;
+        session.request = function wrappedH2Request(headers) {
+          const stream = origReq.apply(this, arguments);
+          try {
+            const method = String((headers && (headers[":method"] || headers.method)) || "GET").toUpperCase();
+            const rawPath = String((headers && (headers[":path"] || headers.path)) || "/");
+            const pathname = rawPath.split("?")[0] || "/";
+            if (method !== "POST") return stream;
+            const reqChunks = [];
+            let reqSize = 0;
+            const addReq = (chunk, enc) => {
+              if (!chunk || typeof chunk === "function" || reqSize >= CAP) return;
+              const buf = Buffer.isBuffer(chunk) ? chunk : (chunk instanceof Uint8Array ? Buffer.from(chunk) : Buffer.from(String(chunk), typeof enc === "string" ? enc : "utf8"));
+              reqChunks.push(buf);
+              reqSize += buf.length;
+            };
+            const origWrite = stream.write, origEnd = stream.end;
+            stream.write = function(chunk, enc) { addReq(chunk, enc); return origWrite.apply(this, arguments); };
+            stream.end = function(chunk, enc) { addReq(chunk, enc); return origEnd.apply(this, arguments); };
+            const t0 = Date.now();
+            stream.on("response", (respHeaders) => {
+              try {
+                const reqText = Buffer.concat(reqChunks).toString("utf8");
+                if (!plausible("POST", pathname, reqText)) return;
+                const respChunks = [];
+                let respSize = 0, ttfb = null;
+                stream.on("data", (chunk) => {
+                  if (ttfb === null) ttfb = Date.now() - t0;
+                  if (respSize < CAP) {
+                    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+                    respChunks.push(buf);
+                    respSize += buf.length;
+                  }
+                });
+                stream.on("end", () => {
+                  const text = decodeBody(Buffer.concat(respChunks), respHeaders && respHeaders["content-encoding"]);
+                  const ctype = String((respHeaders && respHeaders["content-type"]) || "");
+                  const status = Number((respHeaders && respHeaders[":status"]) || 200);
+                  send({
+                    path: pathname, host: authUrl.hostname, port: Number(authUrl.port) || (authUrl.protocol === "https:" ? 443 : 80),
+                    request: reqText, status, response: text, sse: ctype.includes("text/event-stream"),
+                    ts: t0 / 1000, ttfb_ms: ttfb !== null ? ttfb : (Date.now() - t0), latency_ms: Date.now() - t0, error: null,
+                  });
+                });
+              } catch (e) { warn("h2 hook error: " + e.message); }
+            });
+          } catch (e) { warn("h2 hook error: " + e.message); }
+          return stream;
+        };
+      } catch (_) { /* ignore */ }
+      return session;
+    }
+    wrappedConnect._tokprofWrapped = true;
+    http2.connect = wrappedConnect;
+  } catch (_) { /* ignore if http2 unavailable */ }
+}
+
 if (ACTIVE) {
   wrapHttpModule(http, "http:");
   wrapHttpModule(https, "https:");
+  wrapHttp2Module();
 }
 
-function bodyText(body) {
-  if (typeof body === "string") return body;
-  if (body instanceof Uint8Array) return Buffer.from(body).toString("utf8");
-  if (body instanceof ArrayBuffer) return Buffer.from(body).toString("utf8");
-  return null; // streams, FormData, Blob: not captured
+async function extractFetchBodyText(input, init) {
+  const rawBody = init && init.body !== undefined ? init.body : null;
+  if (rawBody !== null) {
+    if (typeof rawBody === "string") return rawBody;
+    if (rawBody instanceof Uint8Array) return Buffer.from(rawBody).toString("utf8");
+    if (rawBody instanceof ArrayBuffer) return Buffer.from(rawBody).toString("utf8");
+    if (typeof URLSearchParams !== "undefined" && rawBody instanceof URLSearchParams) return rawBody.toString();
+    if (typeof Blob !== "undefined" && rawBody instanceof Blob) return await rawBody.text();
+  }
+  if (input && typeof input === "object" && typeof input.clone === "function" && typeof input.text === "function") {
+    try {
+      return await input.clone().text();
+    } catch (_) { return null; }
+  }
+  return null;
 }
 
 if (ACTIVE && typeof globalThis.fetch === "function") {
   const origFetch = globalThis.fetch;
   globalThis.fetch = async function tokprofFetch(input, init) {
     let capture = null;
+    const reqStartMs = Date.now();
     try {
       const url = new URL(typeof input === "string" || input instanceof URL ? String(input) : input.url);
       const method = ((init && init.method) || (input && input.method) || "GET").toUpperCase();
       const viaGateway = (url.hostname === "127.0.0.1" || url.hostname === "localhost") && url.port === PORT;
       if (method === "POST" && !viaGateway) {
-        const text = bodyText(init && init.body);
+        const text = await extractFetchBodyText(input, init);
         if (text !== null && plausible(method, url.pathname, text)) {
-          capture = { path: url.pathname, host: url.hostname, port: Number(url.port) || (url.protocol === "https:" ? 443 : 80), request: text, ts: Date.now() / 1000 };
+          capture = { path: url.pathname, host: url.hostname, port: Number(url.port) || (url.protocol === "https:" ? 443 : 80), request: text, ts: reqStartMs / 1000 };
         }
       }
     } catch (_) { capture = null; }
@@ -259,15 +374,41 @@ if (ACTIVE && typeof globalThis.fetch === "function") {
     const res = await origFetch.apply(this, arguments);
     if (capture) {
       try {
+        const headersAtMs = Date.now();
         const copy = res.clone();
-        const t0 = Date.now();
-        copy.text().then((text) => {
-          send({
-            path: capture.path, host: capture.host, port: capture.port, request: capture.request, status: res.status, response: text,
-            sse: (res.headers.get("content-type") || "").includes("text/event-stream"),
-            ts: capture.ts, ttfb_ms: Date.now() - t0, error: null,
-          });
-        }).catch((e) => warn("could not read a response copy: " + e.message));
+        if (copy.body && typeof copy.body.getReader === "function") {
+          (async () => {
+            const reader = copy.body.getReader();
+            const chunks = [];
+            let size = 0;
+            let firstByteMs = null;
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (firstByteMs === null) firstByteMs = Date.now() - reqStartMs;
+              if (value && size < CAP) {
+                const buf = Buffer.from(value);
+                chunks.push(buf);
+                size += buf.length;
+              }
+            }
+            const text = Buffer.concat(chunks).toString("utf8");
+            send({
+              path: capture.path, host: capture.host, port: capture.port, request: capture.request, status: res.status, response: text,
+              sse: (res.headers.get("content-type") || "").includes("text/event-stream"),
+              ts: capture.ts, ttfb_ms: firstByteMs !== null ? firstByteMs : (headersAtMs - reqStartMs),
+              latency_ms: Date.now() - reqStartMs, error: null,
+            });
+          })().catch((e) => warn("could not read a response copy: " + e.message));
+        } else {
+          copy.text().then((text) => {
+            send({
+              path: capture.path, host: capture.host, port: capture.port, request: capture.request, status: res.status, response: text,
+              sse: (res.headers.get("content-type") || "").includes("text/event-stream"),
+              ts: capture.ts, ttfb_ms: headersAtMs - reqStartMs, latency_ms: Date.now() - reqStartMs, error: null,
+            });
+          }).catch((e) => warn("could not read a response copy: " + e.message));
+        }
       } catch (e) {
         warn("hook error: " + e.message);
       }

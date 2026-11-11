@@ -32,16 +32,16 @@ def _decode(data, encoding):
         return data
     try:
         if "gzip" in enc:
-            return gzip.decompress(data)
+            return zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(data, _CAP)
         if "deflate" in enc:
             try:
-                return zlib.decompress(data)
+                return zlib.decompressobj().decompress(data, _CAP)
             except zlib.error:
-                return zlib.decompress(data, -zlib.MAX_WBITS)
+                return zlib.decompressobj(-zlib.MAX_WBITS).decompress(data, _CAP)
         if "br" in enc:
             for mod_name in ("brotli", "brotlicffi"):
                 try:
-                    return __import__(mod_name).decompress(data)
+                    return __import__(mod_name).decompress(data)[:_CAP]
                 except Exception:
                     pass
             return b""
@@ -49,7 +49,7 @@ def _decode(data, encoding):
             try:
                 from compression import zstd as _zstd
 
-                return _zstd.decompress(data)
+                return _zstd.decompress(data)[:_CAP]
             except Exception:
                 try:
                     import zstandard
@@ -63,15 +63,18 @@ def _decode(data, encoding):
 
 
 def _plausible(method, path, text):
-    if (method or "").upper() != "POST":
+    if (method or "").upper() != "POST" or not text:
         return False
-    head = (text or "").lstrip()
+    sample_head = text[:512] if len(text) > 512 else text
+    head = sample_head.lstrip()
     if len(head) < 8 or head[0] != "{":
         return False
     p = path.split("?", 1)[0].split("#", 1)[0].rstrip("/") or "/"
     if _EXCLUDED_PATH.search(p):
         return False
-    return _PLAUSIBLE_KEYS.search(text) is not None
+    if len(text) <= 81920:
+        return _PLAUSIBLE_KEYS.search(text) is not None
+    return _PLAUSIBLE_KEYS.search(text[:65536]) is not None or _PLAUSIBLE_KEYS.search(text[-16384:]) is not None
 
 
 class TokprofAddon:
@@ -82,6 +85,7 @@ class TokprofAddon:
         self.token = ""
         self._warned = False
         self._q = queue.Queue(maxsize=2000)
+        self._inflight = 0
         self._worker_started = False
         self._lock = threading.Lock()
 
@@ -115,6 +119,9 @@ class TokprofAddon:
                         conn = None
             except Exception as exc:
                 self._warn("could not deliver a captured call: %r" % (exc,))
+            finally:
+                with self._lock:
+                    self._inflight -= 1
 
     def load(self, loader):
         loader.add_option("tokprof_port", int, 0, "Port of the tokprof gateway ingest endpoint")
@@ -141,14 +148,15 @@ class TokprofAddon:
     def responseheaders(self, flow):
         if not self._wanted(flow):
             return
-        chunks, size, t0 = [], [0], time.time()
+        t0 = getattr(flow.request, "timestamp_start", None) or time.time()
+        chunks, size = [], [0]
         first = [None]
         resp = flow.response
 
         def tee(data):
             if data:
                 if first[0] is None:
-                    first[0] = int((time.time() - t0) * 1000)
+                    first[0] = max(0, int((time.time() - t0) * 1000))
                 if size[0] < _CAP:
                     chunks.append(bytes(data))
                     size[0] += len(data)
@@ -161,7 +169,16 @@ class TokprofAddon:
     def response(self, flow):
         # Not streamed (for example the stream callback was never installed): ship the buffered body.
         if flow.response is not None and not callable(flow.response.stream) and self._wanted(flow):
-            self._ship(flow, flow.response.raw_content or b"", flow.request.timestamp_start, None)
+            t0 = getattr(flow.request, "timestamp_start", None) or time.time()
+            self._ship(flow, flow.response.raw_content or b"", t0, None)
+
+    def done(self):
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            with self._lock:
+                if self._inflight <= 0:
+                    return
+            time.sleep(0.01)
 
     def _ship(self, flow, body, t0, ttfb):
         try:
@@ -177,13 +194,16 @@ class TokprofAddon:
                 "sse": "text/event-stream" in ctype,
                 "ts": t0,
                 "ttfb_ms": ttfb,
-                "latency_ms": int((time.time() - t0) * 1000),
+                "latency_ms": max(0, int((time.time() - t0) * 1000)),
             }
             self._ensure_worker()
+            with self._lock:
+                self._inflight += 1
             try:
                 self._q.put_nowait(payload)
             except Exception:
-                pass
+                with self._lock:
+                    self._inflight -= 1
         except Exception as exc:
             self._warn("could not capture a call: %r" % (exc,))
 

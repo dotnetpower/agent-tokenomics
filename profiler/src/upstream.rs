@@ -210,9 +210,17 @@ pub fn proxy_for(host: &str) -> Option<ProxyInfo> {
             if item.is_empty() {
                 continue;
             }
-            if item.contains(':') && !item.contains('/') && !item.starts_with('[') {
-                if let Some((left, _)) = item.rsplit_once(':') {
-                    item = left.to_string();
+            if !item.contains('/') {
+                if item.starts_with('[') {
+                    if let Some((bracketed, _)) = item.rsplit_once("]:") {
+                        item = bracketed.trim_start_matches('[').to_string();
+                    } else {
+                        item = item.trim_matches(|c| c == '[' || c == ']').to_string();
+                    }
+                } else if item.matches(':').count() == 1 {
+                    if let Some((left, _)) = item.rsplit_once(':') {
+                        item = left.to_string();
+                    }
                 }
             }
             if item.contains('/') {
@@ -238,7 +246,8 @@ pub fn proxy_for(host: &str) -> Option<ProxyInfo> {
         format!("http://{raw}")
     };
     let (scheme, rest) = with_scheme.split_once("://")?;
-    if !scheme.eq_ignore_ascii_case("http") && !scheme.is_empty() {
+    let is_https_proxy = scheme.eq_ignore_ascii_case("https");
+    if !scheme.eq_ignore_ascii_case("http") && !is_https_proxy && !scheme.is_empty() {
         return None;
     }
     let authority = rest.split('/').next().unwrap_or(rest);
@@ -246,11 +255,23 @@ pub fn proxy_for(host: &str) -> Option<ProxyInfo> {
         Some((u, hp)) => (Some(u), hp),
         None => (None, authority),
     };
-    let (_, p_host, p_port, _) = parse_url_parts(&format!("http://{host_port}"));
+    let proto_prefix = if is_https_proxy { "https" } else { "http" };
+    let (_, p_host, p_port, _) = parse_url_parts(&format!("{proto_prefix}://{host_port}"));
     if p_host.is_empty() {
         return None;
     }
-    let port = if host_port.contains(':') { p_port } else { 8080 };
+    let has_explicit_port = if host_port.starts_with('[') {
+        host_port.contains("]:")
+    } else {
+        host_port.matches(':').count() == 1
+    };
+    let port = if has_explicit_port {
+        p_port
+    } else if is_https_proxy {
+        443
+    } else {
+        8080
+    };
     let auth = userinfo_opt.map(|ui| {
         let (u_raw, p_raw) = ui.split_once(':').unwrap_or((ui, ""));
         let decoded = format!("{}:{}", percent_decode_str(u_raw), percent_decode_str(p_raw));
@@ -264,19 +285,45 @@ pub fn proxy_for(host: &str) -> Option<ProxyInfo> {
     })
 }
 
+pub const DEFAULT_UPSTREAM_IO_SECS: u64 = 600;
+
+pub fn upstream_io_timeout() -> Duration {
+    if let Ok(raw) = std::env::var("TOKPROF_UPSTREAM_TIMEOUT") {
+        let s = raw.trim().to_ascii_lowercase();
+        if !s.is_empty() {
+            let secs = if let Some(ms) = s.strip_suffix("ms") {
+                ms.trim().parse::<f64>().ok().map(|v| v / 1000.0)
+            } else if let Some(h) = s.strip_suffix('h') {
+                h.trim().parse::<f64>().ok().map(|v| v * 3600.0)
+            } else if let Some(m) = s.strip_suffix('m') {
+                m.trim().parse::<f64>().ok().map(|v| v * 60.0)
+            } else if let Some(sec) = s.strip_suffix('s') {
+                sec.trim().parse::<f64>().ok()
+            } else {
+                s.parse::<f64>().ok()
+            };
+            if let Some(val) = secs.filter(|v| v.is_finite() && *v >= 0.1) {
+                return Duration::from_secs_f64(val);
+            }
+        }
+    }
+    Duration::from_secs(DEFAULT_UPSTREAM_IO_SECS)
+}
+
 pub fn connect_tcp_timeout(host: &str, port: u16, timeout: Duration) -> std::io::Result<TcpStream> {
+    let io_timeout = upstream_io_timeout();
     if host == "127.0.0.1" || host == "localhost" {
         let s = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], port)), timeout)?;
         let _ = s.set_nodelay(true);
-        let _ = s.set_read_timeout(Some(Duration::from_secs(60)));
-        let _ = s.set_write_timeout(Some(Duration::from_secs(60)));
+        let _ = s.set_read_timeout(Some(io_timeout));
+        let _ = s.set_write_timeout(Some(io_timeout));
         return Ok(s);
     }
     if let Ok(ip) = host.trim_matches(|c| c == '[' || c == ']').parse::< std::net::IpAddr>() {
         let s = TcpStream::connect_timeout(&SocketAddr::new(ip, port), timeout)?;
         let _ = s.set_nodelay(true);
-        let _ = s.set_read_timeout(Some(Duration::from_secs(60)));
-        let _ = s.set_write_timeout(Some(Duration::from_secs(60)));
+        let _ = s.set_read_timeout(Some(io_timeout));
+        let _ = s.set_write_timeout(Some(io_timeout));
         return Ok(s);
     }
     let addr_spec = if host.contains(':') && !host.starts_with('[') {
@@ -296,8 +343,8 @@ pub fn connect_tcp_timeout(host: &str, port: u16, timeout: Duration) -> std::io:
         match TcpStream::connect_timeout(&addr, timeout) {
             Ok(s) => {
                 let _ = s.set_nodelay(true);
-                let _ = s.set_read_timeout(Some(Duration::from_secs(60)));
-                let _ = s.set_write_timeout(Some(Duration::from_secs(60)));
+                let _ = s.set_read_timeout(Some(io_timeout));
+                let _ = s.set_write_timeout(Some(io_timeout));
                 return Ok(s);
             }
             Err(e) => last_err = Some(e),

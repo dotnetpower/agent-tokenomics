@@ -2,7 +2,7 @@
 title: "tokprof: 설치 및 사용법"
 description: PyPI에서 tokprof를 설치하고 에이전트 코드 수정 없이 세션별, 턴별, 호출별 LLM 토큰 사용량을 분석합니다.
 track: agent
-verified: 2026-11-06
+verified: 2026-11-11
 sidebar:
   order: 6
 ---
@@ -107,10 +107,10 @@ exit
 
 | 캡처 방식 | 명령어 | 지원 OS | 프로세스 재시작 필요 여부 | 동작 원리 |
 |-----------|--------|---------|---------------------------|-----------|
-| **로컬 게이트웨이 + 프로세스 내부 훅** | `tokprof -- <cmd>`<br>`tokprof run -- <cmd>`<br>`tokprof shell` | Linux, macOS, Windows | 필요 (`tokprof`가 하위 프로세스 시작) | `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `AZURE_OPENAI_ENDPOINT` 및 패턴으로 찾은 `*_BASE_URL` / `*_ENDPOINT` 변수를 `127.0.0.1` 게이트웨이로 라우팅하고, 엔드포인트를 하드코딩한 클라이언트를 위해 Python(`httpx`, `requests`, `urllib3`, `aiohttp`, `urllib.request`) 및 Node(`fetch`, `http`, `https`) 훅을 함께 로드합니다. |
+| **로컬 게이트웨이 + OTLP + 프로세스 내부 훅** | `tokprof -- <cmd>`<br>`tokprof run -- <cmd>`<br>`tokprof shell` | Linux, macOS, Windows | 필요 (`tokprof`가 하위 프로세스 시작) | `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `AZURE_OPENAI_ENDPOINT`, `OTEL_EXPORTER_OTLP_ENDPOINT`(`/v1/traces`, `/v1/logs`) 및 패턴으로 찾은 `*_BASE_URL` / `*_ENDPOINT` 변수를 `127.0.0.1` 게이트웨이(Keep-Alive 풀 지원)로 라우팅하고, Python(`httpx`, `requests`, `urllib3`, `aiohttp`, `urllib.request`, `curl_cffi`) 및 Node(`fetch`, `http`, `https`, `http2`) 훅을 함께 로드합니다. |
 | **Linux eBPF 탭** | `tokprof start`<br>`tokprof ebpf --comm <이름>`<br>`tokprof ebpf --pid <PID>` | Linux (`x86_64`, `ARM64`) | **불필요** (실행 중인 프로세스에 즉시 연결) | 호스트 프로세스와 Docker 컨테이너의 OpenSSL 및 Go `crypto/tls` 라이브러리에 uprobe를 연결하고, 평문 `http://` 및 `h2c` 호출은 시스템 콜 트레이스포인트로 수집합니다. root 또는 `CAP_BPF` 권한이 필요합니다. |
 | **mitmproxy 로컬 캡처** | `tokprof mitm --local <프로세스>` | Windows, macOS, Linux | **불필요** (`--local` 모드 사용 시) | `mitmdump`와 `tokprof` 애드온 스크립트로 트래픽을 수집합니다. 프로세스별 CA 인증서 신뢰 설정은 `tokprof mitm --trust-help`로 확인하세요. |
-| **Azure Application Insights / Log Analytics** | `tokprof pull --workspace <ID>`<br>`tokprof pull --app-insights <ID>`<br>`tokprof import <파일>` | 모든 OS 및 **Azure Cloud Shell** | **불필요** (수집된 텔레메트리 조회) | `AppDependencies`와 `AppTraces`(OpenTelemetry GenAI, OpenInference, APIM, 또는 `[TOKPROF_CHUNK]` 로그)를 조인해 프롬프트·도구 스키마를 역조립하고 7대 세그먼트 분해 또는 Usage-Only 폴백 리포트를 생성합니다. |
+| **클라우드 및 텔레메트리 임포트** | `tokprof pull --workspace <ID>`<br>`tokprof pull --app-insights <ID>`<br>`tokprof import <파일>` | 모든 OS 및 **Azure Cloud Shell** | **불필요** (수집된 텔레메트리 조회) | Azure Application Insights / Log Analytics, OpenTelemetry OTLP JSON, AWS Bedrock 모델 호출 로그, Langfuse/LangSmith 내보내기, APIM, 또는 `[TOKPROF_CHUNK]` 로그(`.gz` 포함)를 분석해 7대 세그먼트 분해 또는 Usage-Only 폴백 리포트를 생성합니다. |
 
 ---
 
@@ -136,11 +136,15 @@ tokprof report --csv
 # 에이전트 실행 중 1초 간격으로 갱신되는 실시간 터미널 대시보드
 tokprof report --watch
 
-# 사용자 정의 가격표(1M 토큰당 단가)를 적용해 예상 비용 계산
+# 내장 모델 단가표('auto') 또는 사용자 정의 가격표(1M 토큰당 단가)를 적용해 예상 비용 계산
+tokprof report --prices auto
 tokprof report --prices prices.json
 
-# 최적화 전(before)과 후(after) 두 실행을 95% 부트스트랩 신뢰구간으로 비교 (3단계·5단계)
-tokprof compare before.jsonl after.jsonl
+# 최적화 전(before)과 후(after) 두 실행을 95% 부트스트랩 신뢰구간(대응표본 자동 감지) 및 CI 게이트로 비교 (3단계·5단계)
+tokprof compare before.jsonl after.jsonl --max-regression 5
+
+# .tokprof/ 내 최근 5개 실행만 남기고 오래된 .jsonl/.jsonl.gz/.html/.csv 정리
+tokprof clean --keep 5
 ```
 
 <a id="what-the-html-and-cli-reports-show"></a>

@@ -9,6 +9,24 @@ fn port_free() -> bool {
     TcpListener::bind(("127.0.0.1", 0)).is_ok()
 }
 
+fn has_linux_bpf_caps() -> bool {
+    let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
+        return false;
+    };
+    for line in status.lines() {
+        if let Some(hex_s) = line.strip_prefix("CapEff:") {
+            if let Ok(mask) = u64::from_str_radix(hex_s.trim(), 16) {
+                const CAP_SYS_ADMIN: u64 = 1 << 21;
+                const CAP_PERFMON: u64 = 1 << 38;
+                const CAP_BPF: u64 = 1 << 39;
+                return (mask & CAP_SYS_ADMIN) != 0
+                    || ((mask & CAP_BPF) != 0 && (mask & CAP_PERFMON) != 0);
+            }
+        }
+    }
+    false
+}
+
 fn ebpf_status() -> (bool, String) {
     if !cfg!(target_os = "linux") {
         return (false, "eBPF tap is Linux-only".to_string());
@@ -26,7 +44,7 @@ fn ebpf_status() -> (bool, String) {
                 .to_string(),
         );
     }
-    if !is_root() {
+    if !is_root() && !has_linux_bpf_caps() {
         notes.push("not root: eBPF needs sudo or CAP_BPF/CAP_PERFMON".to_string());
     }
     let detail = if notes.is_empty() {
@@ -38,6 +56,10 @@ fn ebpf_status() -> (bool, String) {
 }
 
 pub fn run_doctor() -> i32 {
+    run_doctor_with_format(false)
+}
+
+pub fn run_doctor_with_format(as_json: bool) -> i32 {
     let mut rows: Vec<(&str, bool, String)> = Vec::new();
     rows.push((
         "platform",
@@ -58,10 +80,18 @@ pub fn run_doctor() -> i32 {
         node.map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| "not found; not required".to_string()),
     ));
-    let redirected: Vec<&str> = ["OPENAI_BASE_URL", "ANTHROPIC_BASE_URL", "AZURE_OPENAI_ENDPOINT"]
-        .into_iter()
-        .filter(|v| std::env::var(v).map(|s| !s.is_empty()).unwrap_or(false))
-        .collect();
+    let redirected: Vec<&str> = [
+        "OPENAI_BASE_URL",
+        "ANTHROPIC_BASE_URL",
+        "AZURE_OPENAI_ENDPOINT",
+        "GOOGLE_GEMINI_BASE_URL",
+        "GEMINI_BASE_URL",
+        "OPENROUTER_BASE_URL",
+        "OLLAMA_HOST",
+    ]
+    .into_iter()
+    .filter(|v| std::env::var(v).map(|s| !s.is_empty()).unwrap_or(false))
+    .collect();
     rows.push((
         "existing base-URL env vars",
         true,
@@ -86,18 +116,54 @@ pub fn run_doctor() -> i32 {
     ));
     let cloud_shell = is_cloud_shell();
     let az_cli = which_exe("az");
+    let has_native_az = std::env::var("TOKPROF_AZURE_TOKEN")
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+        || std::env::var("IDENTITY_ENDPOINT")
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+        || std::env::var("AZURE_CLIENT_ID")
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
     rows.push((
-        "Azure CLI / Cloud Shell (tokprof pull)",
-        az_cli.is_some() || cloud_shell,
+        "Azure CLI / Cloud Shell / Managed Identity (tokprof pull)",
+        az_cli.is_some() || cloud_shell || has_native_az,
         format!(
-            "az={}; cloud_shell={} (Web Preview ports 8080, 8000-8090)",
+            "az={}; native_env={}; cloud_shell={} (Web Preview ports 8080, 8000-8090)",
             az_cli
                 .as_ref()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "not found".to_string()),
+            if has_native_az { "yes" } else { "no" },
             if cloud_shell { "yes" } else { "no" }
         ),
     ));
+
+    if as_json {
+        let checks: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|(name, ok, detail)| {
+                serde_json::json!({
+                    "check": name,
+                    "ok": ok,
+                    "detail": detail,
+                })
+            })
+            .collect();
+        let doc = serde_json::json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "checks": checks,
+            "backends": {
+                "gateway_hooks": true,
+                "otlp_http": true,
+                "ebpf": ebpf_ok,
+                "mitm": mitm.is_some(),
+                "azure_pull": az_cli.is_some() || has_native_az,
+            }
+        });
+        println!("{}", serde_json::to_string_pretty(&doc).unwrap_or_default());
+        return 0;
+    }
 
     println!("tokprof {} doctor (Rust)", env!("CARGO_PKG_VERSION"));
     for (name, ok, detail) in &rows {
@@ -106,7 +172,7 @@ pub fn run_doctor() -> i32 {
     println!();
     println!("Available capture backends:");
     println!(
-        "  gateway and in-process hooks (tokprof run / shell): yes, for processes started under tokprof"
+        "  gateway, OTLP (/v1/traces, /v1/logs), and in-process hooks (tokprof run / shell): yes"
     );
     println!(
         "  eBPF tap for running processes (tokprof ebpf): {}",
@@ -122,8 +188,8 @@ pub fn run_doctor() -> i32 {
     );
     println!(
         "  Azure Application Insights / Log Analytics pull (tokprof pull / import): {}",
-        if az_cli.is_some() {
-            "ready (via az CLI or --token)"
+        if az_cli.is_some() || has_native_az {
+            "ready (via az CLI, Managed Identity/SP, or --token)"
         } else {
             "ready with --token or tokprof import"
         }

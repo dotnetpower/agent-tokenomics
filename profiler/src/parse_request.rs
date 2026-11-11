@@ -2,7 +2,7 @@ use crate::model::RawSegment;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::{Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub const OPENAI_CHAT: &str = "openai_chat";
 pub const OPENAI_RESPONSES: &str = "openai_responses";
@@ -116,6 +116,8 @@ pub struct ParsedRequest {
     pub tools: Vec<Option<String>>,
     pub conv_hint: Option<String>,
     pub step_hint: Option<String>,
+    pub chained_context: bool,
+    pub cache_breakpoints: usize,
 }
 
 pub fn sorted_json(v: &Value) -> Value {
@@ -217,6 +219,186 @@ pub fn content_text(content: Option<&Value>) -> (String, bool) {
     }
 }
 
+fn decode_image_dims(b64_data: &str) -> Option<(u32, u32)> {
+    use base64::Engine as _;
+    let trimmed = b64_data.trim();
+    let sample_end = trimmed.len().min(4096) & !3;
+    if sample_end < 32 {
+        return None;
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&trimmed[..sample_end])
+        .ok()?;
+    if bytes.len() >= 24 && &bytes[0..8] == b"\x89PNG\r\n\x1a\n" {
+        let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+        let h = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+        if w > 0 && h > 0 {
+            return Some((w, h));
+        }
+    }
+    if bytes.len() >= 10 && (&bytes[0..6] == b"GIF87a" || &bytes[0..6] == b"GIF89a") {
+        let w = u16::from_le_bytes([bytes[6], bytes[7]]) as u32;
+        let h = u16::from_le_bytes([bytes[8], bytes[9]]) as u32;
+        if w > 0 && h > 0 {
+            return Some((w, h));
+        }
+    }
+    if bytes.len() >= 4 && bytes[0] == 0xFF && bytes[1] == 0xD8 {
+        let mut i = 2usize;
+        while i + 9 < bytes.len() {
+            if bytes[i] != 0xFF {
+                i += 1;
+                continue;
+            }
+            let marker = bytes[i + 1];
+            if matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF) {
+                let h = u16::from_be_bytes([bytes[i + 5], bytes[i + 6]]) as u32;
+                let w = u16::from_be_bytes([bytes[i + 7], bytes[i + 8]]) as u32;
+                if w > 0 && h > 0 {
+                    return Some((w, h));
+                }
+                break;
+            }
+            let seg_len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
+            if seg_len < 2 {
+                break;
+            }
+            i += 2 + seg_len;
+        }
+    }
+    None
+}
+
+fn vision_tile_tokens(w: u32, h: u32) -> i64 {
+    let mut sw = w as f64;
+    let mut sh = h as f64;
+    if sw > 2048.0 || sh > 2048.0 {
+        let scale = 2048.0 / sw.max(sh);
+        sw *= scale;
+        sh *= scale;
+    }
+    if sw.min(sh) > 768.0 {
+        let scale = 768.0 / sw.min(sh);
+        sw *= scale;
+        sh *= scale;
+    }
+    let tiles_x = ((sw / 512.0).ceil() as i64).max(1);
+    let tiles_y = ((sh / 512.0).ceil() as i64).max(1);
+    85 + 170 * tiles_x * tiles_y
+}
+
+pub fn estimate_part_attachment_tokens(obj: &Map<String, Value>) -> i64 {
+    let t = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let detail = obj
+        .get("detail")
+        .or_else(|| {
+            obj.get("image_url")
+                .and_then(|v| v.as_object())
+                .and_then(|o| o.get("detail"))
+        })
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if detail.eq_ignore_ascii_case("low") {
+        return 85;
+    }
+    if let Some(iu) = obj.get("image_url").or_else(|| obj.get("input_image")) {
+        let url_s = match iu {
+            Value::String(s) => s.as_str(),
+            Value::Object(o) => o
+                .get("url")
+                .or_else(|| o.get("image_url"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+            _ => "",
+        };
+        if let Some((_, b64)) = url_s.split_once(";base64,") {
+            if let Some((w, h)) = decode_image_dims(b64) {
+                return vision_tile_tokens(w, h);
+            }
+            return ((b64.len() as i64) / 512).clamp(85, 1445);
+        }
+        return 765;
+    }
+    if let Some(src) = obj
+        .get("source")
+        .or_else(|| obj.get("inlineData"))
+        .or_else(|| obj.get("inline_data"))
+        .and_then(|v| v.as_object())
+    {
+        let mtype = src
+            .get("media_type")
+            .or_else(|| src.get("mimeType"))
+            .or_else(|| src.get("mime_type"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let data = src.get("data").and_then(|v| v.as_str()).unwrap_or("");
+        if mtype.contains("pdf") || t == "document" {
+            let approx_bytes = (data.len() * 3) / 4;
+            let pages = (approx_bytes / 45_000).max(1) as i64;
+            return (pages * 1500).clamp(250, 30_000);
+        }
+        if mtype.starts_with("audio/") || t == "input_audio" {
+            let approx_bytes = (data.len() * 3) / 4;
+            let secs = (approx_bytes / 16_000).max(1) as i64;
+            return (secs * 25).clamp(25, 15_000);
+        }
+        if !data.is_empty() {
+            if let Some((w, h)) = decode_image_dims(data) {
+                return vision_tile_tokens(w, h);
+            }
+            return ((data.len() as i64) / 512).clamp(85, 1445);
+        }
+    }
+    if t == "input_audio" || obj.contains_key("input_audio") {
+        let data = obj
+            .get("input_audio")
+            .and_then(|v| v.as_object())
+            .and_then(|o| o.get("data"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let approx_bytes = (data.len() * 3) / 4;
+        return (((approx_bytes / 16_000).max(1) as i64) * 25).clamp(25, 15_000);
+    }
+    if t == "document" || t == "input_file" || t == "file" {
+        return 1500;
+    }
+    765
+}
+
+fn estimate_content_attachment_tokens(content: Option<&Value>) -> i64 {
+    let Some(Value::Array(arr)) = content else {
+        return 765;
+    };
+    let mut sum = 0i64;
+    for part in arr {
+        if let Value::Object(obj) = part {
+            let t = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if OPAQUE_PARTS.contains(&t)
+                || obj.contains_key("inlineData")
+                || obj.contains_key("inline_data")
+                || obj.contains_key("fileData")
+                || obj.contains_key("file_data")
+                || obj.contains_key("image")
+                || obj.contains_key("document")
+            {
+                sum += estimate_part_attachment_tokens(obj);
+            }
+        }
+    }
+    if sum > 0 { sum } else { 765 }
+}
+
+fn count_cache_breakpoints(v: &Value) -> usize {
+    match v {
+        Value::Object(map) => {
+            let here = usize::from(map.contains_key("cache_control") || map.contains_key("cachePoint"));
+            here + map.values().map(count_cache_breakpoints).sum::<usize>()
+        }
+        Value::Array(arr) => arr.iter().map(count_cache_breakpoints).sum(),
+        _ => 0,
+    }
+}
+
 fn add_seg(
     segments: &mut Vec<RawSegment>,
     kind: &str,
@@ -234,6 +416,7 @@ fn add_seg(
             name,
             turn,
             opaque,
+            est_tokens: None,
         });
     }
 }
@@ -401,6 +584,70 @@ const STRUCTURED_FAST_HINTS: &[&str] = &[
     "\"review_input\"",
 ];
 
+fn strip_markdown_json_fence(raw: &str) -> &str {
+    let s = raw.trim();
+    if let Some(after_open) = s.strip_prefix("```") {
+        if let Some(nl) = after_open.find('\n') {
+            let tag = after_open[..nl].trim();
+            if tag.is_empty() || tag.eq_ignore_ascii_case("json") {
+                let inner = after_open[nl + 1..].trim();
+                if let Some(stripped) = inner.strip_suffix("```") {
+                    return stripped.trim();
+                }
+            }
+        }
+    }
+    s
+}
+
+static REMINDER_TAG_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?is)<(?P<tag>system-reminder|system_reminder|environment_context)>(?P<body>.*?)</(?:system-reminder|system_reminder|environment_context)>",
+    )
+    .unwrap()
+});
+
+fn extract_injected_user_reminders(
+    segments: &mut Vec<RawSegment>,
+    text: &str,
+    turn: Option<i64>,
+) -> String {
+    if !text.contains("<system-reminder>")
+        && !text.contains("<system_reminder>")
+        && !text.contains("<environment_context>")
+    {
+        return text.to_string();
+    }
+    let mut cleaned = String::with_capacity(text.len());
+    let mut last_end = 0usize;
+    for caps in REMINDER_TAG_RE.captures_iter(text) {
+        let Some(m) = caps.get(0) else { continue };
+        cleaned.push_str(&text[last_end..m.start()]);
+        let tag = caps
+            .name("tag")
+            .map(|x| x.as_str().to_string())
+            .unwrap_or_else(|| "system-reminder".to_string());
+        let body = caps
+            .name("body")
+            .map(|x| x.as_str().trim().to_string())
+            .unwrap_or_default();
+        if !body.is_empty() {
+            add_seg(
+                segments,
+                "system",
+                body,
+                Some("system".to_string()),
+                Some(tag),
+                turn,
+                false,
+            );
+        }
+        last_end = m.end();
+    }
+    cleaned.push_str(&text[last_end..]);
+    cleaned.trim().to_string()
+}
+
 fn try_decompose_structured_user(
     segments: &mut Vec<RawSegment>,
     text: &str,
@@ -410,7 +657,7 @@ fn try_decompose_structured_user(
     if text.len() < 4 || text.len() > 2_000_000 {
         return (false, None);
     }
-    let s = text.trim();
+    let s = strip_markdown_json_fence(text);
     if s.len() < 4 || !s.starts_with('{') || !s.ends_with('}') {
         return (false, None);
     }
@@ -511,6 +758,35 @@ fn try_decompose_structured_user(
             );
             added_user = true;
         } else if TOOL_DEF_KEYS.contains(&ks) {
+            if let Value::Array(ref arr) = v {
+                let mut emitted_any = false;
+                for item in arr {
+                    let nm = item
+                        .as_object()
+                        .and_then(|o| {
+                            o.get("name")
+                                .or_else(|| o.get("function").and_then(|f| f.as_object()).and_then(|fo| fo.get("name")))
+                        })
+                        .and_then(|x| x.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string());
+                    if nm.is_some() {
+                        add_seg(
+                            segments,
+                            "tool_def",
+                            dumps_canonical(item),
+                            Some("user".to_string()),
+                            nm,
+                            turn,
+                            false,
+                        );
+                        emitted_any = true;
+                    }
+                }
+                if emitted_any {
+                    continue;
+                }
+            }
             let val_text = match v {
                 Value::String(st) => st,
                 other => dumps_canonical(&other),
@@ -641,15 +917,17 @@ fn add_message(
     if r == "system" || r == "developer" {
         add_seg(segments, "system", text, Some(r.clone()), None, turn, false);
     } else if r == "user" {
-        let (decomposed, ch) = try_decompose_structured_user(segments, &text, is_current, turn);
+        let user_body = extract_injected_user_reminders(segments, &text, turn);
+        let (decomposed, ch) =
+            try_decompose_structured_user(segments, &user_body, is_current, turn);
         conv_hint = ch;
-        if !decomposed {
+        if !decomposed && !user_body.is_empty() {
             let kind = if is_current {
                 "user_prompt"
             } else {
                 "history_user"
             };
-            add_seg(segments, kind, text, Some(r.clone()), None, turn, false);
+            add_seg(segments, kind, user_body, Some(r.clone()), None, turn, false);
         }
     } else if r == "assistant" {
         add_seg(
@@ -672,6 +950,7 @@ fn add_message(
             name: None,
             turn,
             opaque: true,
+            est_tokens: Some(estimate_content_attachment_tokens(content)),
         });
     }
     conv_hint
@@ -757,6 +1036,42 @@ fn parse_openai_chat(body: &Map<String, Value>) -> ParsedRequest {
         .max()
         .unwrap_or(-1);
 
+    let mut call_id_to_name: HashMap<String, String> = HashMap::new();
+    for m in &msgs {
+        if let Some(tcs) = m.get("tool_calls").and_then(|v| v.as_array()) {
+            for tc in tcs {
+                if let Some(tc_obj) = tc.as_object() {
+                    let cid = tc_obj.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    let nm = tc_obj
+                        .get("function")
+                        .and_then(|v| v.as_object())
+                        .unwrap_or(tc_obj)
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !cid.is_empty() && !nm.is_empty() {
+                        call_id_to_name.insert(cid.to_string(), nm.to_string());
+                    }
+                }
+            }
+        }
+        if let Some(Value::Array(arr)) = m.get("content") {
+            for b in arr {
+                if let Some(tu) = b
+                    .as_object()
+                    .and_then(|o| o.get("toolUse"))
+                    .and_then(|v| v.as_object())
+                {
+                    let tid = tu.get("toolUseId").and_then(|v| v.as_str()).unwrap_or("");
+                    let nm = tu.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    if !tid.is_empty() && !nm.is_empty() {
+                        call_id_to_name.insert(tid.to_string(), nm.to_string());
+                    }
+                }
+            }
+        }
+    }
+
     for (i, m) in msgs.iter().enumerate() {
         let role = norm_role(m.get("role").and_then(|v| v.as_str()));
         let content = m.get("content").or_else(|| m.get("message"));
@@ -765,9 +1080,14 @@ fn parse_openai_chat(body: &Map<String, Value>) -> ParsedRequest {
             let (text, opaque) = content_text(content);
             let nm = m
                 .get("name")
-                .or_else(|| m.get("tool_call_id"))
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    m.get("tool_call_id")
+                        .and_then(|v| v.as_str())
+                        .map(|cid| call_id_to_name.get(cid).cloned().unwrap_or_else(|| cid.to_string()))
+                });
             add_seg(&mut segs, "tool_result", text, Some(role), nm, turn, opaque);
             continue;
         }
@@ -801,7 +1121,7 @@ fn parse_openai_chat(body: &Map<String, Value>) -> ParsedRequest {
                         let id = tr
                             .get("toolUseId")
                             .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
+                            .map(|tid| call_id_to_name.get(tid).cloned().unwrap_or_else(|| tid.to_string()));
                         add_seg(
                             &mut segs,
                             "tool_result",
@@ -970,6 +1290,7 @@ fn parse_openai_chat(body: &Map<String, Value>) -> ParsedRequest {
             }
         }
     }
+    let body_val = Value::Object(body.clone());
     ParsedRequest {
         provider: OPENAI_CHAT.to_string(),
         model: body
@@ -981,6 +1302,8 @@ fn parse_openai_chat(body: &Map<String, Value>) -> ParsedRequest {
         tools,
         conv_hint,
         step_hint,
+        chained_context: false,
+        cache_breakpoints: count_cache_breakpoints(&body_val),
     }
 }
 
@@ -1013,6 +1336,28 @@ fn parse_openai_responses(body: &Map<String, Value>) -> ParsedRequest {
             Value::Array(arr) => {
                 let items: Vec<&Map<String, Value>> =
                     arr.iter().filter_map(|v| v.as_object()).collect();
+                let mut call_id_to_name: HashMap<String, String> = HashMap::new();
+                for it in &items {
+                    let t = it.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if matches!(t, "function_call" | "custom_tool_call" | "mcp_call") {
+                        let cid = it
+                            .get("call_id")
+                            .or_else(|| it.get("id"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let nm = it.get("name").and_then(|v| v.as_str()).unwrap_or(t);
+                        if !cid.is_empty() && !nm.is_empty() {
+                            call_id_to_name.insert(cid.to_string(), nm.to_string());
+                        }
+                    } else if matches!(
+                        t,
+                        "computer_call" | "local_shell_call" | "web_search_call" | "file_search_call"
+                    ) {
+                        if let Some(cid) = it.get("call_id").or_else(|| it.get("id")).and_then(|v| v.as_str()) {
+                            call_id_to_name.insert(cid.to_string(), t.to_string());
+                        }
+                    }
+                }
                 let last_user: isize = items
                     .iter()
                     .enumerate()
@@ -1023,13 +1368,17 @@ fn parse_openai_responses(body: &Map<String, Value>) -> ParsedRequest {
                 for (i, it) in items.iter().enumerate() {
                     let t = it.get("type").and_then(|v| v.as_str()).unwrap_or("");
                     let turn = Some(i as i64);
-                    if t == "function_call" {
-                        let nm = it.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                        let args = it.get("arguments").and_then(|v| v.as_str()).unwrap_or("");
+                    if matches!(t, "function_call" | "custom_tool_call" | "mcp_call") {
+                        let nm = it.get("name").and_then(|v| v.as_str()).unwrap_or(t);
+                        let args_str = match it.get("arguments").or_else(|| it.get("input")) {
+                            Some(Value::String(s)) => s.clone(),
+                            Some(other) => dumps_canonical(other),
+                            None => String::new(),
+                        };
                         add_seg(
                             &mut segs,
                             "tool_call",
-                            format!("{nm}({args})"),
+                            format!("{nm}({args_str})"),
                             Some("assistant".to_string()),
                             if nm.is_empty() {
                                 None
@@ -1039,18 +1388,57 @@ fn parse_openai_responses(body: &Map<String, Value>) -> ParsedRequest {
                             turn,
                             false,
                         );
-                    } else if t == "function_call_output" {
+                    } else if matches!(
+                        t,
+                        "web_search_call"
+                            | "file_search_call"
+                            | "computer_call"
+                            | "code_interpreter_call"
+                            | "local_shell_call"
+                    ) {
+                        add_seg(
+                            &mut segs,
+                            "tool_call",
+                            dumps_canonical(&Value::Object((*it).clone())),
+                            Some("assistant".to_string()),
+                            Some(t.to_string()),
+                            turn,
+                            false,
+                        );
+                    } else if matches!(
+                        t,
+                        "function_call_output"
+                            | "custom_tool_call_output"
+                            | "computer_call_output"
+                            | "local_shell_call_output"
+                    ) {
                         let out_v = it.get("output");
                         let txt = match out_v {
                             Some(Value::String(s)) => s.clone(),
                             Some(other) => dumps_canonical(other),
                             None => "null".to_string(),
                         };
-                        let cid = it
+                        let resolved_name = it
                             .get("call_id")
                             .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
-                        add_seg(&mut segs, "tool_result", txt, None, cid, turn, false);
+                            .map(|cid| call_id_to_name.get(cid).cloned().unwrap_or_else(|| cid.to_string()))
+                            .or_else(|| Some(t.to_string()));
+                        add_seg(&mut segs, "tool_result", txt, None, resolved_name, turn, false);
+                    } else if t == "mcp_list_tools" {
+                        let srv = it
+                            .get("server_label")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("mcp")
+                            .to_string();
+                        add_seg(
+                            &mut segs,
+                            "tool_def",
+                            dumps_canonical(&Value::Object((*it).clone())),
+                            None,
+                            Some(srv),
+                            turn,
+                            false,
+                        );
                     } else if t == "reasoning" {
                         let sum_v = it
                             .get("summary")
@@ -1124,6 +1512,23 @@ fn parse_openai_responses(body: &Map<String, Value>) -> ParsedRequest {
             );
         }
     }
+    let prev_resp = body
+        .get("previous_response_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.to_string());
+    let conv_field = body
+        .get("conversation")
+        .and_then(|v| match v {
+            Value::String(s) if !s.trim().is_empty() => Some(s.clone()),
+            Value::Object(o) => o
+                .get("id")
+                .and_then(|iv| iv.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.to_string()),
+            _ => None,
+        });
+    let chained = prev_resp.is_some() || conv_field.is_some();
     ParsedRequest {
         provider: OPENAI_RESPONSES.to_string(),
         model: body
@@ -1133,8 +1538,10 @@ fn parse_openai_responses(body: &Map<String, Value>) -> ParsedRequest {
         stream: body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false),
         segments: segs,
         tools,
-        conv_hint: None,
+        conv_hint: conv_field.or(prev_resp),
         step_hint: None,
+        chained_context: chained,
+        cache_breakpoints: 0,
     }
 }
 
@@ -1180,6 +1587,24 @@ fn parse_anthropic(body: &Map<String, Value>) -> ParsedRequest {
         .max()
         .unwrap_or(-1);
 
+    let mut call_id_to_name: HashMap<String, String> = HashMap::new();
+    for m in &msgs {
+        if let Some(Value::Array(arr)) = m.get("content") {
+            for b in arr {
+                if let Some(bobj) = b.as_object() {
+                    let t = bobj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if matches!(t, "tool_use" | "server_tool_use" | "mcp_tool_use") {
+                        let tid = bobj.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        let nm = bobj.get("name").and_then(|v| v.as_str()).unwrap_or(t);
+                        if !tid.is_empty() && !nm.is_empty() {
+                            call_id_to_name.insert(tid.to_string(), nm.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     for (i, m) in msgs.iter().enumerate() {
         let role = m.get("role").and_then(|v| v.as_str()).unwrap_or("");
         let turn = Some(i as i64);
@@ -1205,8 +1630,8 @@ fn parse_anthropic(body: &Map<String, Value>) -> ParsedRequest {
                             (i as isize) == last_user && role == "user",
                             turn,
                         );
-                    } else if t == "tool_use" {
-                        let nm = bobj.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    } else if matches!(t, "tool_use" | "server_tool_use" | "mcp_tool_use") {
+                        let nm = bobj.get("name").and_then(|v| v.as_str()).unwrap_or(t);
                         let inp = bobj.get("input").unwrap_or(&Value::Null);
                         add_seg(
                             &mut segs,
@@ -1221,16 +1646,29 @@ fn parse_anthropic(body: &Map<String, Value>) -> ParsedRequest {
                             turn,
                             false,
                         );
-                    } else if t == "tool_result" {
-                        let (txt, opaque) = content_text(bobj.get("content"));
-                        let id = bobj
+                    } else if matches!(
+                        t,
+                        "tool_result"
+                            | "web_search_tool_result"
+                            | "code_execution_tool_result"
+                            | "bash_code_execution_tool_result"
+                            | "text_editor_code_execution_tool_result"
+                            | "mcp_tool_result"
+                    ) {
+                        let (mut txt, opaque) = content_text(bobj.get("content"));
+                        if txt.is_empty() && bobj.get("content").is_some() && !opaque {
+                            txt = dumps_canonical(bobj.get("content").unwrap_or(&Value::Null));
+                        }
+                        let resolved_name = bobj
                             .get("tool_use_id")
                             .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
-                        add_seg(&mut segs, "tool_result", txt, None, id, turn, opaque);
+                            .map(|tid| call_id_to_name.get(tid).cloned().unwrap_or_else(|| tid.to_string()))
+                            .or_else(|| Some(t.to_string()));
+                        add_seg(&mut segs, "tool_result", txt, None, resolved_name, turn, opaque);
                     } else if t == "thinking" || t == "redacted_thinking" {
                         let th = bobj
                             .get("thinking")
+                            .or_else(|| bobj.get("data"))
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
@@ -1264,18 +1702,20 @@ fn parse_anthropic(body: &Map<String, Value>) -> ParsedRequest {
                             kind: "attachment".to_string(),
                             text: String::new(),
                             role: Some(role.to_string()),
-                            name: None,
+                            name: Some("document".to_string()),
                             turn,
                             opaque: true,
+                            est_tokens: Some(estimate_part_attachment_tokens(bobj)),
                         });
                     } else if OPAQUE_PARTS.contains(&t) {
                         segs.push(RawSegment {
                             kind: "attachment".to_string(),
                             text: String::new(),
                             role: Some(role.to_string()),
-                            name: None,
+                            name: Some(t.to_string()),
                             turn,
                             opaque: true,
+                            est_tokens: Some(estimate_part_attachment_tokens(bobj)),
                         });
                     }
                 }
@@ -1296,6 +1736,7 @@ fn parse_anthropic(body: &Map<String, Value>) -> ParsedRequest {
             add_seg(&mut segs, "tool_def", dumps_canonical(t), None, name, None, false);
         }
     }
+    let body_val = Value::Object(body.clone());
     ParsedRequest {
         provider: ANTHROPIC.to_string(),
         model: body
@@ -1307,6 +1748,8 @@ fn parse_anthropic(body: &Map<String, Value>) -> ParsedRequest {
         tools,
         conv_hint: None,
         step_hint: None,
+        chained_context: false,
+        cache_breakpoints: count_cache_breakpoints(&body_val),
     }
 }
 
@@ -1444,7 +1887,10 @@ fn parse_completions(body: &Map<String, Value>) -> ParsedRequest {
             false,
         );
     }
-    let prompt_val = body.get("prompt").or_else(|| body.get("inputs"));
+    let prompt_val = body
+        .get("prompt")
+        .or_else(|| body.get("inputs"))
+        .or_else(|| body.get("inputText"));
     let mut prompt_str: Option<String> = None;
     match prompt_val {
         Some(Value::String(s)) => prompt_str = Some(s.clone()),
@@ -1460,6 +1906,7 @@ fn parse_completions(body: &Map<String, Value>) -> ParsedRequest {
                     name: None,
                     turn: None,
                     opaque: true,
+                    est_tokens: Some(arr.len() as i64),
                 });
             }
         }
@@ -1512,6 +1959,8 @@ fn parse_completions(body: &Map<String, Value>) -> ParsedRequest {
         tools: Vec::new(),
         conv_hint: None,
         step_hint: None,
+        chained_context: false,
+        cache_breakpoints: 0,
     }
 }
 
@@ -1653,6 +2102,36 @@ fn parse_gemini(body: &Map<String, Value>) -> ParsedRequest {
                         turn,
                         false,
                     );
+                } else if let Some(ec) = pobj
+                    .get("executableCode")
+                    .or_else(|| pobj.get("executable_code"))
+                    .and_then(|v| v.as_object())
+                {
+                    let code = ec.get("code").and_then(|v| v.as_str()).unwrap_or("");
+                    add_seg(
+                        &mut segs,
+                        "tool_call",
+                        code.to_string(),
+                        Some("assistant".to_string()),
+                        Some("code_execution".to_string()),
+                        turn,
+                        false,
+                    );
+                } else if let Some(cer) = pobj
+                    .get("codeExecutionResult")
+                    .or_else(|| pobj.get("code_execution_result"))
+                    .and_then(|v| v.as_object())
+                {
+                    let out_s = cer.get("output").and_then(|v| v.as_str()).unwrap_or("");
+                    add_seg(
+                        &mut segs,
+                        "tool_result",
+                        out_s.to_string(),
+                        None,
+                        Some("code_execution".to_string()),
+                        turn,
+                        false,
+                    );
                 } else {
                     let single_arr = Value::Array(vec![part.clone()]);
                     let (txt, opaque) = parts_text(Some(&single_arr));
@@ -1673,6 +2152,7 @@ fn parse_gemini(body: &Map<String, Value>) -> ParsedRequest {
                             name: None,
                             turn,
                             opaque: true,
+                            est_tokens: Some(estimate_part_attachment_tokens(pobj)),
                         });
                     }
                 }
@@ -1724,18 +2204,42 @@ fn parse_gemini(body: &Map<String, Value>) -> ParsedRequest {
             );
         }
     }
+    let has_cached_content = body
+        .get("cachedContent")
+        .or_else(|| body.get("cached_content"))
+        .and_then(|v| v.as_str())
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
     ParsedRequest {
         provider: GEMINI.to_string(),
         model: body
             .get("model")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        stream: false,
+        stream: body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false),
         segments: segs,
         tools,
         conv_hint: None,
         step_hint: None,
+        chained_context: has_cached_content,
+        cache_breakpoints: usize::from(has_cached_content),
     }
+}
+
+fn parse_generic(body: &Map<String, Value>) -> ParsedRequest {
+    if body.contains_key("anthropic_version") {
+        return parse_anthropic(body);
+    }
+    if body.contains_key("contents") {
+        return parse_gemini(body);
+    }
+    if body.contains_key("messages") || body.contains_key("chat_history") || body.contains_key("message") {
+        return parse_openai_chat(body);
+    }
+    if body.contains_key("input") && !body.contains_key("prompt") {
+        return parse_openai_responses(body);
+    }
+    parse_completions(body)
 }
 
 pub fn detect_provider(path: &str, body: Option<&Value>) -> Option<String> {
@@ -1761,6 +2265,7 @@ pub fn parse_request(provider: &str, body: &Value) -> Result<ParsedRequest, Stri
         ANTHROPIC => Ok(parse_anthropic(obj)),
         COMPLETIONS => Ok(parse_completions(obj)),
         GEMINI => Ok(parse_gemini(obj)),
+        "generic" | "bedrock" => Ok(parse_generic(obj)),
         other => Err(format!("unknown provider: {other}")),
     }
 }

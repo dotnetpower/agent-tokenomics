@@ -1176,3 +1176,283 @@ fn test_rbac_fallback_law_latency_wait_resume_and_dedup() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
+#[test]
+fn test_20_rounds_enhancements_end_to_end() {
+    use tokprof::analyze::{builtin_prices, compare, doc_link, estimate_cost, summarize, to_legacy};
+    use tokprof::counting::{fast_hash_pair, get_counter};
+    use tokprof::detect::parse_url_parts;
+    use tokprof::parse_request::{
+        ANTHROPIC, GEMINI, OPENAI_CHAT, OPENAI_RESPONSES, parse_request,
+    };
+    use tokprof::parse_response::{SSEParser, parse_response_body};
+    use tokprof::report::csv_quote;
+    use tokprof::segment::{BuildRecordArgs, build_record, hash_text, redact_secrets, split_sections};
+
+    // 1. Full-byte hashing on 24 KB system prompt with interior UUID change + mutating section finding
+    let prefix = format!("# Role\n{}", "Follow safety rules carefully. ".repeat(350));
+    let rt_pad = "Environment: linux x86_64 production cluster. ".repeat(12);
+    let suffix = format!("# Output\n{}", "Respond concisely in JSON. ".repeat(350));
+    let sys1 = format!("{prefix}\n# Runtime\n{rt_pad}req_id=11111111-1111-1111-1111-111111111111\n{suffix}");
+    let sys2 = format!("{prefix}\n# Runtime\n{rt_pad}req_id=22222222-2222-2222-2222-222222222222\n{suffix}");
+    let sys3 = format!("{prefix}\n# Runtime\n{rt_pad}req_id=33333333-3333-3333-3333-333333333333\n{suffix}");
+    assert_eq!(sys1.len(), sys2.len());
+    assert!(sys1.len() > 20_000);
+    assert_ne!(fast_hash_pair(sys1.as_bytes()), fast_hash_pair(sys2.as_bytes()));
+    assert_ne!(hash_text(&sys1, b"salt"), hash_text(&sys2, b"salt"));
+
+    let tk = get_counter(Some("gpt-4o"), true);
+    let mut cache_bust_recs = Vec::new();
+    for (idx, sp) in [&sys1, &sys2, &sys3].into_iter().enumerate() {
+        let pr = parse_request(
+            OPENAI_CHAT,
+            &json!({"model": "gpt-4o-2024-11-20", "messages": [{"role": "system", "content": sp}, {"role": "user", "content": "hi"}]}),
+        )
+        .unwrap();
+        let resp = parse_response_body(
+            OPENAI_CHAT,
+            r#"{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":4600,"completion_tokens":800,"completion_tokens_details":{"reasoning_tokens":700}}}"#,
+            false,
+        );
+        cache_bust_recs.push(build_record(BuildRecordArgs {
+            parsed: &pr,
+            response: Some(&resp),
+            counter: &tk,
+            salt: b"s1",
+            components: None,
+            endpoint: "/v1/chat/completions",
+            status: Some(200),
+            latency_ms: Some(120),
+            ttfb_ms: Some(40),
+            run: Some("r1".to_string()),
+            error: None,
+            ts: Some(1700001000.0 + (idx as f64) * 10.0),
+            include_text: Some(true),
+        }));
+    }
+    let sum = summarize(&cache_bust_recs, 5.0);
+    assert_eq!(sum.reasoning_total, 2100);
+    assert!(
+        sum.findings
+            .iter()
+            .any(|f| f.text.contains("mutating section: Runtime")),
+        "expected mutating section Runtime in findings: {:?}",
+        sum.findings
+    );
+    assert!(
+        sum.findings
+            .iter()
+            .any(|f| f.text.contains("Reasoning tokens consumed")),
+        "expected high reasoning token share finding: {:?}",
+        sum.findings
+    );
+
+    // 2. Built-in pricing with version suffix matching (`gpt-4o-2024-11-20`) & `cache_write`
+    let bprices = builtin_prices();
+    let cost = estimate_cost(&cache_bust_recs, &bprices);
+    assert!(cost.total > 0.0 && cost.models_without_price.is_empty());
+
+    // 3. Fenced code block inside system prompt must NOT split on `# comment` inside ```bash
+    let sys_with_fence = format!(
+        "# Overview\n{}\n```bash\n# Should Not Be A Heading\necho hi\n```\n# Rules\n{}",
+        "Intro text here. ".repeat(20),
+        "Rule text here. ".repeat(20)
+    );
+    let secs = split_sections(&sys_with_fence, 200);
+    let sec_names: Vec<Option<&str>> = secs.iter().map(|(n, _)| n.as_deref()).collect();
+    assert_eq!(sec_names, vec![Some("Overview"), Some("Rules")]);
+
+    // 4. `tool_call_id` / `call_id` / `tool_use_id` -> real tool name resolution + `<system-reminder>` + PNG vision tokens
+    // 1x1 PNG base64
+    let png_1x1 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    let chat_pr = parse_request(
+        OPENAI_CHAT,
+        &json!({
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "user", "content": "<system-reminder>Secret framework reminder</system-reminder>\nRun search"},
+                {"role": "assistant", "content": null, "tool_calls": [{"id": "call_xyz", "type": "function", "function": {"name": "ripgrep_search", "arguments": "{\"q\":\"foo\"}"}}]},
+                {"role": "tool", "tool_call_id": "call_xyz", "content": "match1\nmatch2"},
+                {"role": "user", "content": [{"type": "text", "text": "check image"}, {"type": "image_url", "image_url": {"url": png_1x1}}]}
+            ]
+        }),
+    )
+    .unwrap();
+    assert!(chat_pr.segments.iter().any(|s| s.kind == "system" && s.name.as_deref() == Some("system-reminder")));
+    assert!(chat_pr.segments.iter().any(|s| s.kind == "tool_result" && s.name.as_deref() == Some("ripgrep_search")));
+    assert_eq!(
+        chat_pr
+            .segments
+            .iter()
+            .find(|s| s.kind == "attachment")
+            .and_then(|s| s.est_tokens),
+        Some(255) // 85 + 170 * 1 * 1 tile
+    );
+
+    // Anthropic server_tool_use + tool_use_id resolution + Bedrock Converse cached usage
+    let anth_pr = parse_request(
+        ANTHROPIC,
+        &json!({
+            "model": "claude-sonnet-4-20250514",
+            "messages": [
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_77", "name": "bash_exec", "input": {"cmd": "ls"}}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_77", "content": "Cargo.toml"}]}
+            ]
+        }),
+    )
+    .unwrap();
+    assert!(anth_pr.segments.iter().any(|s| s.kind == "tool_result" && s.name.as_deref() == Some("bash_exec")));
+
+    let bedrock_resp = parse_response_body(
+        OPENAI_CHAT,
+        r#"{"output":{"message":{"role":"assistant","content":[{"text":"done"}]}},"usage":{"inputTokens":100,"outputTokens":25,"cacheReadInputTokens":1500,"cacheWriteInputTokens":200,"totalTokens":1825}}"#,
+        false,
+    );
+    assert_eq!(bedrock_resp.usage.input_total, Some(1800));
+    assert_eq!(bedrock_resp.usage.cached, Some(1500));
+    assert_eq!(bedrock_resp.usage.cache_write, Some(200));
+
+    // OpenAI Responses `previous_response_id` chained context + MCP/web_search + Gemini 2.5 toolUsePromptTokenCount
+    let resp_api_pr = parse_request(
+        OPENAI_RESPONSES,
+        &json!({"model": "gpt-5", "previous_response_id": "resp_prev_1", "input": [{"type": "web_search_call", "id": "ws_1"}, {"role": "user", "content": "next"}]}),
+    )
+    .unwrap();
+    assert!(resp_api_pr.chained_context);
+    assert!(resp_api_pr.segments.iter().any(|s| s.kind == "tool_call" && s.name.as_deref() == Some("web_search_call")));
+
+    let gem_resp = parse_response_body(
+        GEMINI,
+        r#"{"candidates":[{"content":{"parts":[{"text":"hi"}]}}],"usageMetadata":{"promptTokenCount":100,"toolUsePromptTokenCount":45,"cachedContentTokenCount":40,"candidatesTokenCount":10,"thoughtsTokenCount":30}}"#,
+        false,
+    );
+    assert_eq!(gem_resp.usage.input_total, Some(145));
+    assert_eq!(gem_resp.usage.reasoning, Some(30));
+
+    // 5. SSE multi-line data + mid-stream error + empty tool_call delta name filter
+    let mut sp = SSEParser::new(OPENAI_CHAT);
+    sp.feed_text(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"name\":\"my_tool\"}}]}}]}\n\n\
+         data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"name\":\"\",\"arguments\":\"{}\"}}]}}]}\n\n\
+         data: {\"error\":\n\
+         data: {\"message\":\"rate_limited\"}}\n\n",
+    );
+    let sp_res = sp.finish();
+    assert_eq!(sp_res.tool_calls, vec!["my_tool".to_string()]);
+    assert_eq!(sp_res.error.as_deref(), Some("rate_limited"));
+
+    // 6. CSV formula injection guard, URL query delimiter, secret/PEM/DB URI redaction, `.jsonl.gz`, Bedrock & Langfuse import, paired compare, HTML DOM XSS guard
+    assert_eq!(csv_quote("=CMD|' /C calc'!A0"), "\"'=CMD|' /C calc'!A0\"");
+    assert_eq!(csv_quote("-42"), "-42");
+    assert_eq!(parse_url_parts("https://imds.local:8080?api-version=1").1, "imds.local");
+
+    let pem_and_db = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----\n url=postgres://admin:supersecret@db.internal:5432/prod hf=hf_abcdefghijklmnopqrstuvwxyz1234";
+    let red = redact_secrets(pem_and_db);
+    assert!(!red.contains("supersecret") && !red.contains("MIIEpAIBAAKCAQEA") && !red.contains("hf_abcdef"));
+
+    let tmp = std::env::temp_dir().join(format!("tokprof-r20-test-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).unwrap();
+
+    // `.jsonl.gz` write + read + Bedrock & Langfuse import + `tokprof clean`
+    let bedrock_and_langfuse = concat!(
+        "{\"schemaType\":\"ModelInvocationLog\",\"modelId\":\"anthropic.claude-3-5-sonnet\",\"input\":{\"inputBodyJson\":{\"messages\":[{\"role\":\"user\",\"content\":\"hello bedrock\"}]},\"inputTokenCount\":40,\"cacheReadInputTokenCount\":10},\"output\":{\"outputBodyJson\":{\"output\":{\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"hi bedrock\"}]}}},\"outputTokenCount\":6}}\n",
+        "{\"type\":\"GENERATION\",\"model\":\"gpt-4o-mini\",\"input\":[{\"role\":\"system\",\"content\":\"be terse\"},{\"role\":\"user\",\"content\":\"hello langfuse\"}],\"output\":\"hi langfuse\",\"usage\":{\"input\":35,\"output\":5}}\n"
+    );
+    let raw_log_gz = tmp.join("ext.jsonl.gz");
+    {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+        let f = fs::File::create(&raw_log_gz).unwrap();
+        let mut enc = GzEncoder::new(f, Compression::fast());
+        enc.write_all(bedrock_and_langfuse.as_bytes()).unwrap();
+        enc.finish().unwrap();
+    }
+    let gz_out = tmp.join("imported.jsonl.gz").to_string_lossy().into_owned();
+    let rc_imp = run_cli(&[
+        "import".to_string(),
+        raw_log_gz.to_string_lossy().into_owned(),
+        "--out".to_string(),
+        gz_out.clone(),
+        "--no-report".to_string(),
+    ]);
+    assert_eq!(rc_imp, 0);
+    let imp_recs = read_jsonl(&gz_out, None);
+    assert_eq!(imp_recs.len(), 2);
+    assert_eq!(imp_recs[0].usage.get("input_total").and_then(|v| v.as_i64()), Some(50));
+
+    // Paired compare + legacy export + Korean doc_link + HTML XSS escaping
+    let cmp_val = compare(&cache_bust_recs, &imp_recs, 5.0);
+    assert!(cmp_val.get("quality_guardrail").is_some());
+    assert!(cmp_val.get("cost_usd_est").is_some());
+    let legacy_rows = to_legacy(&cache_bust_recs, 5.0);
+    assert_eq!(legacy_rows[0].get("reasoning_tokens").and_then(|v| v.as_i64()), Some(700));
+
+    std::env::set_var("TOKPROF_LANG", "ko");
+    assert!(doc_link("improve").contains("/ko/agent-tokenomics/04-improve/"));
+    std::env::remove_var("TOKPROF_LANG");
+
+    let mut xss_rec = cache_bust_recs[0].clone();
+    xss_rec.model = Some("<img src=x onerror=alert(1)>".to_string());
+    let html = render_html(&[xss_rec], 5.0, Some(&bprices), "XSS Check", None);
+    assert!(html.contains("function escHtml("));
+    assert!(!html.contains("<img src=x onerror=alert(1)>"));
+
+    // Node.js hook test with `fetch(new Request(...))` + immediate `process.exit(0)` if `node` is installed
+    if tokprof::ebpf::which_exe("node").is_some() {
+        let mock_node_llm = TcpListener::bind("127.0.0.1:0").unwrap();
+        let node_llm_port = mock_node_llm.local_addr().unwrap().port();
+        thread::spawn(move || {
+            if let Ok((mut s, _)) = mock_node_llm.accept() {
+                drain_http_request(&mut s);
+                let b = r#"{"id":"1","model":"gpt-4o-mini","choices":[{"message":{"role":"assistant","content":"node ok"}}],"usage":{"prompt_tokens":14,"completion_tokens":2}}"#;
+                let r = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    b.len(),
+                    b
+                );
+                let _ = s.write_all(r.as_bytes());
+                let _ = s.flush();
+            }
+        });
+        let node_out = tmp.join("node_calls.jsonl").to_string_lossy().into_owned();
+        let js_code = format!(
+            "const req = new Request('http://127.0.0.1:{node_llm_port}/v1/chat/completions', {{method:'POST', headers:{{'content-type':'application/json'}}, body: JSON.stringify({{model:'gpt-4o-mini', messages:[{{role:'user', content:'from Request obj'}}]}})}}); fetch(req).then(r=>r.text()).then(()=>setTimeout(()=>process.exit(0), 60));"
+        );
+        let rc_node = run_profiled(
+            &["node".to_string(), "-e".to_string(), js_code],
+            &node_out,
+            HashMap::new(),
+            &[],
+            false,
+            true,
+            false,
+            true,
+        );
+        assert_eq!(rc_node, 0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut node_recs = Vec::new();
+        while std::time::Instant::now() < deadline {
+            node_recs = read_jsonl(&node_out, None);
+            if !node_recs.is_empty() {
+                break;
+            }
+            thread::sleep(std::time::Duration::from_millis(30));
+        }
+        assert_eq!(node_recs.len(), 1, "expected Node Request+process.exit call to be captured");
+    }
+
+    // Test `tokprof clean --keep 1`
+    for idx in 0..3 {
+        fs::write(tmp.join(format!("old-{idx}.jsonl")), "{}\n").unwrap();
+    }
+    let rc_clean = run_cli(&[
+        "clean".to_string(),
+        tmp.to_string_lossy().into_owned(),
+        "--keep".to_string(),
+        "1".to_string(),
+    ]);
+    assert_eq!(rc_clean, 0);
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+

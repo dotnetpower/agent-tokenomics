@@ -152,6 +152,18 @@ impl MockLlmServer {
                 resp_json
             );
             let _ = stream.write_all(resp.as_bytes());
+        } else if path.ends_with(":generateContent") {
+            let resp_json = json!({
+                "candidates": [{"content": {"role": "model", "parts": [{"text": "hello from gemini"}]}}],
+                "usageMetadata": {"promptTokenCount": 70, "cachedContentTokenCount": 16, "candidatesTokenCount": 4, "thoughtsTokenCount": 12}
+            })
+            .to_string();
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                resp_json.len(),
+                resp_json
+            );
+            let _ = stream.write_all(resp.as_bytes());
         } else if path.ends_with("/messages") {
             let resp_json = json!({
                 "id": "msg-mock",
@@ -227,6 +239,7 @@ pub fn run_selftest() -> i32 {
     let routes = vec![
         Route::from_urls("/openai/v1", &format!("{}/v1", mock.url)),
         Route::from_urls("/anthropic", &mock.url),
+        Route::from_urls("/gemini", &mock.url),
     ];
     let writer = match JsonlWriter::new(&out_file) {
         Ok(w) => Arc::new(w),
@@ -299,6 +312,39 @@ pub fn run_selftest() -> i32 {
         "/anthropic/v1/messages",
         &json!({"model": "claude-x", "max_tokens": 16, "system": sys_msg, "messages": [{"role": "user", "content": "hello"}]}),
     );
+    let ok5 = post_http(
+        port,
+        "/gemini/v1beta/models/gemini-2.5-flash:generateContent",
+        &json!({"systemInstruction": {"parts": [{"text": sys_msg}]}, "contents": [{"role": "user", "parts": [{"text": "hello"}]}]}),
+    );
+    let ok6 = post_http(
+        port,
+        "/v1/traces",
+        &json!({
+            "resourceSpans": [{
+                "resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "selftest-agent"}}]},
+                "scopeSpans": [{
+                    "spans": [{
+                        "traceId": "0102030405060708090a0b0c0d0e0f10",
+                        "spanId": "0102030405060708",
+                        "name": "chat gpt-4o",
+                        "startTimeUnixNano": "1700000000000000000",
+                        "endTimeUnixNano": "1700000000250000000",
+                        "attributes": [
+                            {"key": "gen_ai.system", "value": {"stringValue": "openai"}},
+                            {"key": "gen_ai.request.model", "value": {"stringValue": "gpt-4o"}},
+                            {"key": "gen_ai.usage.input_tokens", "value": {"intValue": "55"}},
+                            {"key": "gen_ai.usage.output_tokens", "value": {"intValue": "7"}}
+                        ],
+                        "events": [
+                            {"name": "gen_ai.user.message", "attributes": [{"key": "content", "value": {"stringValue": "hello otlp"}}]},
+                            {"name": "gen_ai.choice", "attributes": [{"key": "content", "value": {"stringValue": "otlp ok"}}]}
+                        ]
+                    }]
+                }]
+            }]
+        }),
+    );
 
     srv.stop();
     writer.close();
@@ -307,7 +353,7 @@ pub fn run_selftest() -> i32 {
     let recs = read_jsonl(&out_file, None);
     let _ = fs::remove_dir_all(&tmp_dir);
 
-    let all_http_ok = ok1 && ok2 && ok3 && ok4 && recs.len() == 4;
+    let all_http_ok = ok1 && ok2 && ok3 && ok4 && ok5 && ok6 && recs.len() == 6;
     let with_usage = recs
         .iter()
         .filter(|r| r.usage.get("input_total").and_then(|v| v.as_i64()).unwrap_or(0) > 0)
@@ -325,13 +371,14 @@ pub fn run_selftest() -> i32 {
     let providers: HashSet<String> = recs.iter().map(|r| r.provider.clone()).collect();
     let provs_ok = providers.contains("openai_chat")
         && providers.contains("openai_responses")
-        && providers.contains("anthropic");
+        && providers.contains("anthropic")
+        && providers.contains("gemini");
 
     let results = [
         (
-            "gateway capture (chat + stream + responses + anthropic)",
+            "gateway & OTLP capture (chat + stream + responses + anthropic + gemini + otlp)",
             all_http_ok,
-            format!("recorded {}/4 call(s)", recs.len()),
+            format!("recorded {}/6 call(s)", recs.len()),
         ),
         (
             "usage captured (json + sse)",

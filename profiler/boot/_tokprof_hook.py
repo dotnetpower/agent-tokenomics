@@ -632,12 +632,68 @@ def _tee_aiohttp(resp, path, text, host="", port=0):
         cap.finish()
 
 
+def _patch_curl_cffi(curl_cffi):
+    try:
+        from curl_cffi import requests as c_req
+    except Exception:
+        return
+    Session = getattr(c_req, "Session", None)
+    if Session is None or getattr(Session, "_tokprof_patched", False):
+        return
+    orig_req = Session.request
+
+    def request(self, method, url, *args, **kwargs):
+        cap = None
+        try:
+            u = urlsplit(str(url))
+            body = kwargs.get("data")
+            if body is None and "json" in kwargs and kwargs["json"] is not None:
+                body = json.dumps(kwargs["json"])
+            text = _to_text(body) if body is not None else ""
+            host = u.hostname or ""
+            port = u.port or (443 if u.scheme == "https" else 80)
+            path = u.path or "/"
+            if _is_candidate(method, host, port, path, text):
+                cap = (path, text, host, port, time.time())
+        except Exception:
+            cap = None
+        resp = orig_req(self, method, url, *args, **kwargs)
+        if cap is not None:
+            try:
+                path, req_text, host, port, t0 = cap
+                now = time.time()
+                ctype = ""
+                if hasattr(resp, "headers") and resp.headers:
+                    ctype = resp.headers.get("Content-Type", "") or resp.headers.get("content-type", "")
+                rbody = resp.text if hasattr(resp, "text") else _to_text(getattr(resp, "content", b""))
+                _send({
+                    "path": path,
+                    "host": host,
+                    "port": port,
+                    "request": req_text,
+                    "status": getattr(resp, "status_code", 200),
+                    "response": rbody,
+                    "sse": "text/event-stream" in str(ctype).lower(),
+                    "ts": t0,
+                    "ttfb_ms": int((now - t0) * 1000),
+                    "latency_ms": int((now - t0) * 1000),
+                    "error": None,
+                })
+            except Exception as exc:
+                _warn("curl_cffi capture error: %r" % (exc,))
+        return resp
+
+    Session.request = request
+    Session._tokprof_patched = True
+
+
 _PATCHERS = {
     "httpx": _patch_httpx,
     "requests": _patch_requests,
     "urllib3": _patch_urllib3,
     "aiohttp": _patch_aiohttp,
     "urllib.request": _patch_urllib_request,
+    "curl_cffi": _patch_curl_cffi,
 }
 
 

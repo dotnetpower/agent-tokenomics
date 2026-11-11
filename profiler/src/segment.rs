@@ -54,7 +54,14 @@ static BOUNDARY_RE: Lazy<Regex> = Lazy::new(|| {
 
 static SECRET_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"(?i)(?:Bearer\s+[A-Za-z0-9._\-]{16,}|sk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_\-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_\-]{35}|xox[baprs]-[0-9A-Za-z\-]{10,}|eyJ[A-Za-z0-9_\-]{16,}\.eyJ[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}|(?:AccountKey|SharedAccessKey|ApiKey)=[A-Za-z0-9+/=_\-]{20,}|sig=[A-Za-z0-9%+/=_\-]{24,})",
+        r#"(?is)(?:-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----|Bearer\s+[A-Za-z0-9._\-]{16,}|sk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_\-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,}|(?:AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_\-]{35}|hf_[A-Za-z0-9]{20,}|npm_[A-Za-z0-9]{20,}|pypi-[A-Za-z0-9_\-]{32,}|SG\.[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}|xox[baprs]-[0-9A-Za-z\-]{10,}|eyJ[A-Za-z0-9_\-]{16,}\.eyJ[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}|(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis(?:s)?|amqp(?:s)?)://[^\s'"<>]+|(?:AccountKey|SharedAccessKey|ApiKey)=[A-Za-z0-9+/=_\-]{20,}|sig=[A-Za-z0-9%+/=_\-]{24,})"#,
+    )
+    .unwrap()
+});
+
+static PII_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)(?:\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b|\b\d{6}-[1-4]\d{6}\b|\b(?:\+?\d{1,3}[\s\-])?\(?\d{2,4}\)?[\s\-]\d{3,4}[\s\-]\d{4}\b)",
     )
     .unwrap()
 });
@@ -63,6 +70,7 @@ const SECRET_MARKERS: &[&str] = &[
     "Bearer",
     "bearer",
     "BEARER",
+    "PRIVATE KEY",
     "sk-",
     "ghp_",
     "gho_",
@@ -71,9 +79,15 @@ const SECRET_MARKERS: &[&str] = &[
     "ghr_",
     "github_pat_",
     "AKIA",
+    "ASIA",
     "AIza",
+    "hf_",
+    "npm_",
+    "pypi-",
+    "SG.",
     "xox",
     "eyJ",
+    "://",
     "AccountKey=",
     "accountkey=",
     "SharedAccessKey=",
@@ -125,13 +139,24 @@ pub fn redact_secrets(text: &str) -> String {
         return String::new();
     }
     let (work_slice, orig_chars) = safe_char_prefix(text, MAX_SEGMENT_TEXT_CHARS + 256);
-    let redacted = if SECRET_MARKERS.iter().any(|m| work_slice.contains(m)) {
+    let mut redacted = if SECRET_MARKERS.iter().any(|m| work_slice.contains(m)) {
         SECRET_RE
             .replace_all(work_slice, "***REDACTED***")
             .into_owned()
     } else {
         work_slice.to_string()
     };
+    if std::env::var("TOKPROF_REDACT_PII").ok().as_deref() == Some("1") {
+        redacted = PII_RE.replace_all(&redacted, "***PII***").into_owned();
+    }
+    if let Ok(custom_pat) = std::env::var("TOKPROF_REDACT_PATTERN") {
+        let trimmed = custom_pat.trim();
+        if !trimmed.is_empty() {
+            if let Ok(rx) = Regex::new(trimmed) {
+                redacted = rx.replace_all(&redacted, "***REDACTED***").into_owned();
+            }
+        }
+    }
     let (final_slice, redacted_chars) = safe_char_prefix(&redacted, MAX_SEGMENT_TEXT_CHARS);
     if orig_chars > MAX_SEGMENT_TEXT_CHARS || redacted_chars > MAX_SEGMENT_TEXT_CHARS {
         format!(
@@ -219,10 +244,39 @@ pub fn split_sections(text: &str, min_chars: usize) -> Vec<(Option<String>, Stri
     {
         return vec![(None, text.to_string())];
     }
+    let mut fenced_ranges: Vec<(usize, usize)> = Vec::new();
+    let mut fence_start: Option<(usize, &str)> = None;
+    let mut byte_off = 0usize;
+    for raw_ln in text.split_inclusive('\n') {
+        let trimmed = raw_ln.trim_start();
+        if let Some((f_off, marker)) = fence_start {
+            if trimmed.starts_with(marker) {
+                fenced_ranges.push((f_off, byte_off + raw_ln.len()));
+                fence_start = None;
+            }
+        } else if trimmed.starts_with("```") {
+            fence_start = Some((byte_off, "```"));
+        } else if trimmed.starts_with("~~~") {
+            fence_start = Some((byte_off, "~~~"));
+        }
+        byte_off += raw_ln.len();
+    }
+    if let Some((f_off, _)) = fence_start {
+        fenced_ranges.push((f_off, text.len()));
+    }
+    let in_fence = |pos: usize| -> bool {
+        fenced_ranges
+            .iter()
+            .any(|&(fs, fe)| pos >= fs && pos < fe)
+    };
+
     let mut starts = Vec::new();
     let mut names = Vec::new();
     for caps in BOUNDARY_RE.captures_iter(text) {
         if let Some(m) = caps.get(0) {
+            if in_fence(m.start()) {
+                continue;
+            }
             starts.push(m.start());
             let nm = caps
                 .name("h")
@@ -271,7 +325,10 @@ pub fn split_sections(text: &str, min_chars: usize) -> Vec<(Option<String>, Stri
 fn split_components(seg: &RawSegment, components: &HashMap<String, String>) -> Vec<RawSegment> {
     if components.is_empty()
         || seg.opaque
-        || (seg.kind != "system" && seg.kind != "other")
+        || !matches!(
+            seg.kind.as_str(),
+            "system" | "other" | "user_prompt" | "history_user"
+        )
         || seg.text.is_empty()
     {
         return vec![seg.clone()];
@@ -287,33 +344,52 @@ fn split_components(seg: &RawSegment, components: &HashMap<String, String>) -> V
         }
         let mut nxt = Vec::new();
         for p in parts {
-            if (p.kind == "system" || p.kind == "other")
-                && !p.opaque
+            if matches!(
+                p.kind.as_str(),
+                "system" | "other" | "user_prompt" | "history_user"
+            ) && !p.opaque
                 && p.name.as_deref() != Some(name.as_str())
                 && p.text.contains(ctext)
                 && nxt.len() < 64
             {
-                if let Some(pos) = p.text.find(ctext) {
-                    let before = &p.text[..pos];
-                    let after = &p.text[pos + ctext.len()..];
-                    for (piece, nm) in [
-                        (before, p.name.clone()),
-                        (ctext, Some(name.clone())),
-                        (after, p.name.clone()),
-                    ] {
-                        if !piece.trim().is_empty() {
-                            nxt.push(RawSegment {
-                                kind: p.kind.clone(),
-                                text: piece.to_string(),
-                                role: p.role.clone(),
-                                name: nm,
-                                turn: p.turn,
-                                opaque: false,
-                            });
-                        }
+                let mut rem = p.text.as_str();
+                while let Some(pos) = rem.find(ctext) {
+                    if nxt.len() >= 64 {
+                        break;
                     }
-                } else {
-                    nxt.push(p);
+                    let before = &rem[..pos];
+                    if !before.trim().is_empty() {
+                        nxt.push(RawSegment {
+                            kind: p.kind.clone(),
+                            text: before.to_string(),
+                            role: p.role.clone(),
+                            name: p.name.clone(),
+                            turn: p.turn,
+                            opaque: false,
+                            est_tokens: None,
+                        });
+                    }
+                    nxt.push(RawSegment {
+                        kind: p.kind.clone(),
+                        text: ctext.to_string(),
+                        role: p.role.clone(),
+                        name: Some(name.clone()),
+                        turn: p.turn,
+                        opaque: false,
+                        est_tokens: None,
+                    });
+                    rem = &rem[pos + ctext.len()..];
+                }
+                if !rem.trim().is_empty() {
+                    nxt.push(RawSegment {
+                        kind: p.kind.clone(),
+                        text: rem.to_string(),
+                        role: p.role.clone(),
+                        name: p.name.clone(),
+                        turn: p.turn,
+                        opaque: false,
+                        est_tokens: None,
+                    });
                 }
             } else {
                 nxt.push(p);
@@ -356,7 +432,9 @@ pub fn build_segments(
                 vec![(p.name.clone(), p.text.clone())]
             };
             for (name, body) in sub_items {
-                let tokens = if p.opaque && body.is_empty() {
+                let tokens = if let Some(est_t) = p.est_tokens {
+                    est_t
+                } else if p.opaque && body.is_empty() {
                     0
                 } else {
                     counter.count(&body)
@@ -530,7 +608,14 @@ pub fn build_record(args: BuildRecordArgs<'_>) -> CallRecord {
         segments,
         est_input: est,
         residual,
-        quality: quality_label(residual, reported),
+        quality: if args.parsed.chained_context
+            && residual.unwrap_or(0) > 0
+            && reported.unwrap_or(0) > est
+        {
+            Some("chained".to_string())
+        } else {
+            quality_label(residual, reported)
+        },
         tools_defined: args
             .parsed
             .tools

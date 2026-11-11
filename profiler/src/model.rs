@@ -93,6 +93,8 @@ pub struct RawSegment {
     pub turn: Option<i64>,
     #[serde(default)]
     pub opaque: bool,
+    #[serde(default)]
+    pub est_tokens: Option<i64>,
 }
 
 impl RawSegment {
@@ -104,6 +106,7 @@ impl RawSegment {
             name: None,
             turn: None,
             opaque: false,
+            est_tokens: None,
         }
     }
 }

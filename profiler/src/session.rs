@@ -16,19 +16,57 @@ use std::sync::{mpsc, Arc};
 
 pub const MAX_PROFILE_SECS: u64 = 180;
 
-pub fn parse_capped_duration_secs(spec: Option<&str>) -> u64 {
-    let Some(raw) = spec.map(|s| s.trim()).filter(|s| !s.is_empty()) else {
-        return MAX_PROFILE_SECS;
+pub fn parse_session_duration_secs(spec: Option<&str>) -> Option<u64> {
+    let raw_env;
+    let eff = match spec.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        Some(s) => Some(s),
+        None => {
+            raw_env = std::env::var("TOKPROF_MAX_DURATION").ok();
+            raw_env.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty())
+        }
+    };
+    let Some(raw) = eff else {
+        return Some(MAX_PROFILE_SECS);
     };
     let lower = raw.to_ascii_lowercase();
-    let secs = if let Some(m_str) = lower.strip_suffix('m') {
-        m_str.trim().parse::<f64>().map(|m| (m * 60.0).round() as u64).unwrap_or(MAX_PROFILE_SECS)
+    if matches!(lower.as_str(), "0" | "0s" | "0m" | "unlimited" | "none" | "inf") {
+        return None;
+    }
+    let secs = if let Some(h_str) = lower.strip_suffix('h') {
+        h_str
+            .trim()
+            .parse::<f64>()
+            .map(|h| (h * 3600.0).round() as u64)
+            .unwrap_or(MAX_PROFILE_SECS)
+    } else if let Some(m_str) = lower.strip_suffix('m') {
+        m_str
+            .trim()
+            .parse::<f64>()
+            .map(|m| (m * 60.0).round() as u64)
+            .unwrap_or(MAX_PROFILE_SECS)
     } else if let Some(s_str) = lower.strip_suffix('s') {
-        s_str.trim().parse::<f64>().map(|s| s.round() as u64).unwrap_or(MAX_PROFILE_SECS)
+        s_str
+            .trim()
+            .parse::<f64>()
+            .map(|s| s.round() as u64)
+            .unwrap_or(MAX_PROFILE_SECS)
     } else {
-        lower.parse::<f64>().map(|s| s.round() as u64).unwrap_or(MAX_PROFILE_SECS)
+        lower
+            .parse::<f64>()
+            .map(|s| s.round() as u64)
+            .unwrap_or(MAX_PROFILE_SECS)
     };
-    secs.clamp(1, MAX_PROFILE_SECS)
+    if secs == 0 {
+        None
+    } else {
+        Some(secs.max(1))
+    }
+}
+
+pub fn parse_capped_duration_secs(spec: Option<&str>) -> u64 {
+    parse_session_duration_secs(spec)
+        .unwrap_or(MAX_PROFILE_SECS)
+        .clamp(1, MAX_PROFILE_SECS)
 }
 
 static SIG_STOP: AtomicBool = AtomicBool::new(false);
@@ -57,7 +95,27 @@ pub fn install_signal_handlers() {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+extern "system" fn handle_win_ctrl(_ctrl_type: u32) -> i32 {
+    SIG_STOP.store(true, Ordering::SeqCst);
+    1
+}
+
+#[cfg(windows)]
+pub fn install_signal_handlers() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetConsoleCtrlHandler(
+            handler: Option<extern "system" fn(u32) -> i32>,
+            add: i32,
+        ) -> i32;
+    }
+    unsafe {
+        let _ = SetConsoleCtrlHandler(Some(handle_win_ctrl), 1);
+    }
+}
+
+#[cfg(all(not(unix), not(windows)))]
 pub fn install_signal_handlers() {}
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -70,6 +128,8 @@ const OVERRIDDEN: &[&str] = &[
     "NODE_OPTIONS",
     "TOKPROF_PORT",
     "TOKPROF_TOKEN",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_PROTOCOL",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,6 +163,19 @@ pub fn state_path(override_path: Option<&str>) -> String {
             .to_string_lossy()
             .into_owned()
     });
+    if let Ok(sess_name) = std::env::var("TOKPROF_SESSION") {
+        let clean: String = sess_name
+            .trim()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        if !clean.is_empty() {
+            return Path::new(&base)
+                .join(format!("session-{clean}.json"))
+                .to_string_lossy()
+                .into_owned();
+        }
+    }
     Path::new(&base)
         .join("session.json")
         .to_string_lossy()
@@ -339,12 +412,15 @@ pub fn serve(
 
     SIG_STOP.store(false, Ordering::SeqCst);
     install_signal_handlers();
-    let max_deadline = Instant::now() + Duration::from_secs(MAX_PROFILE_SECS);
+    let max_deadline =
+        parse_session_duration_secs(None).map(|secs| Instant::now() + Duration::from_secs(secs));
     let mut timed_out = false;
     while !gw.shutdown_flag.load(Ordering::SeqCst) && !SIG_STOP.load(Ordering::SeqCst) {
-        if Instant::now() >= max_deadline {
-            timed_out = true;
-            break;
+        if let Some(dl) = max_deadline {
+            if Instant::now() >= dl {
+                timed_out = true;
+                break;
+            }
         }
         thread::sleep(Duration::from_millis(25));
     }
@@ -428,6 +504,10 @@ pub fn start(
 
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut sleep_ms = 10u64;
+    let dur_label = match parse_session_duration_secs(None) {
+        Some(secs) => format!("max {secs}s"),
+        None => "unlimited duration".to_string(),
+    };
     while Instant::now() < deadline {
         if let Some(st) = read_state(state_file) {
             if health(st.port).is_some() {
@@ -437,8 +517,8 @@ pub fn start(
                     .map(|s| format!(", eBPF: {s}"))
                     .unwrap_or_default();
                 println!(
-                    "tokprof: session started (pid {}, gateway 127.0.0.1:{}{}, max 3m/180s)",
-                    st.pid, st.port, ebpf_info
+                    "tokprof: session started (pid {}, gateway 127.0.0.1:{}{}, {})",
+                    st.pid, st.port, ebpf_info, dur_label
                 );
                 println!("  recording to: {}", st.out);
                 if st.ebpf.is_some() {
@@ -467,15 +547,40 @@ pub fn start(
 }
 
 pub fn status(state_file: &str) -> i32 {
+    status_with_format(state_file, false)
+}
+
+pub fn status_with_format(state_file: &str, as_json: bool) -> i32 {
     let Some(st) = read_state(state_file) else {
-        println!("tokprof: no active session");
+        if as_json {
+            println!("{{\"active\":false}}");
+        } else {
+            println!("tokprof: no active session");
+        }
         return 1;
     };
     if !pid_alive(st.pid) {
-        println!("tokprof: no active session");
+        if as_json {
+            println!("{{\"active\":false}}");
+        } else {
+            println!("tokprof: no active session");
+        }
         return 1;
     }
     let h = health(st.port);
+    if as_json {
+        let doc = serde_json::json!({
+            "active": true,
+            "pid": st.pid,
+            "port": st.port,
+            "out": st.out,
+            "started": st.started,
+            "ebpf": st.ebpf,
+            "health": h,
+        });
+        println!("{}", serde_json::to_string_pretty(&doc).unwrap_or_default());
+        return 0;
+    }
     let reqs = h
         .as_ref()
         .and_then(|v| v.get("requests"))
@@ -532,7 +637,7 @@ pub fn render_env(st: &SessionState, shell: &str, unset: bool) -> String {
                 Some(v) => {
                     let cmd = match shell {
                         "powershell" => format!("$env:{k} = {}", quote_shell(shell, v)),
-                        "cmd" => format!("set {k}={v}"),
+                        "cmd" => format!("set \"{k}={}\"", v.replace('"', "\"\"")),
                         "fish" => format!("set -gx {k} {}", quote_shell(shell, v)),
                         _ => format!("export {k}={}", quote_shell(shell, v)),
                     };
@@ -544,7 +649,7 @@ pub fn render_env(st: &SessionState, shell: &str, unset: bool) -> String {
         for (k, v) in &st.env {
             let cmd = match shell {
                 "powershell" => format!("$env:{k} = {}", quote_shell(shell, v)),
-                "cmd" => format!("set {k}={v}"),
+                "cmd" => format!("set \"{k}={}\"", v.replace('"', "\"\"")),
                 "fish" => format!("set -gx {k} {}", quote_shell(shell, v)),
                 _ => format!("export {k}={}", quote_shell(shell, v)),
             };

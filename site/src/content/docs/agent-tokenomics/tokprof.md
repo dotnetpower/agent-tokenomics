@@ -2,7 +2,7 @@
 title: "tokprof: Install & Usage"
 description: Install tokprof from PyPI and profile LLM agent token usage per session, turn, and call without changing agent code.
 track: agent
-verified: 2026-11-06
+verified: 2026-11-11
 sidebar:
   order: 6
 ---
@@ -100,10 +100,10 @@ exit
 
 | Mode | Command | OS | Requires restart? | How it works |
 |------|---------|----|-------------------|--------------|
-| **Gateway + In-process hooks** | `tokprof -- <cmd>`<br>`tokprof run -- <cmd>`<br>`tokprof shell` | Linux, macOS, Windows | Yes (starts child process) | Routes `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `AZURE_OPENAI_ENDPOINT`, and pattern-matched `*_BASE_URL` / `*_ENDPOINT` variables through `127.0.0.1`, plus Python (`httpx`, `requests`, `urllib3`, `aiohttp`, `urllib.request`) and Node (`fetch`, `http`, `https`) hooks for clients that hard-code URLs. |
+| **Gateway + OTLP + In-process hooks** | `tokprof -- <cmd>`<br>`tokprof run -- <cmd>`<br>`tokprof shell` | Linux, macOS, Windows | Yes (starts child process) | Routes `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `AZURE_OPENAI_ENDPOINT`, `OTEL_EXPORTER_OTLP_ENDPOINT` (`/v1/traces`, `/v1/logs`), and pattern-matched `*_BASE_URL` / `*_ENDPOINT` variables through `127.0.0.1` (with Keep-Alive pooling), plus Python (`httpx`, `requests`, `urllib3`, `aiohttp`, `urllib.request`, `curl_cffi`) and Node (`fetch`, `http`, `https`, `http2`) hooks. |
 | **Linux eBPF tap** | `tokprof start`<br>`tokprof ebpf --comm <name>`<br>`tokprof ebpf --pid <PID>` | Linux (x86_64, ARM64) | **No** (attaches live) | Attaches uprobes to OpenSSL and Go `crypto/tls` plus syscall tracepoints for plain `http://` / `h2c` across host processes and Docker containers. Requires root or `CAP_BPF`. |
 | **mitmproxy capture** | `tokprof mitm --local <proc>` | Windows, macOS, Linux | **No** (in `--local` mode) | Uses `mitmdump` with `tokprof`'s addon script. Run `tokprof mitm --trust-help` for per-process CA trust instructions. |
-| **Azure Application Insights / Log Analytics** | `tokprof pull --workspace <ID>`<br>`tokprof pull --app-insights <ID>`<br>`tokprof import <file>` | Any OS & **Azure Cloud Shell** | **No** (reads telemetry) | Queries `AppDependencies` + `AppTraces` (OpenTelemetry GenAI, OpenInference, APIM, or `[TOKPROF_CHUNK]` logs), reassembles prompts/tools, and runs full 7-segment attribution or usage-only fallback. |
+| **Cloud & Telemetry import** | `tokprof pull --workspace <ID>`<br>`tokprof pull --app-insights <ID>`<br>`tokprof import <file>` | Any OS & **Azure Cloud Shell** | **No** (reads telemetry) | Pulls or imports Azure Application Insights / Log Analytics, OpenTelemetry OTLP JSON, AWS Bedrock Model Invocation Logs, Langfuse/LangSmith exports, APIM, or `[TOKPROF_CHUNK]` logs (including `.gz`). |
 
 ---
 
@@ -128,11 +128,15 @@ tokprof report --csv
 # Live-refreshing terminal dashboard while an agent is running
 tokprof report --watch
 
-# Add cost estimates using your own per-1M-token price table
+# Add cost estimates using built-in model rates ('auto') or your own per-1M-token price table
+tokprof report --prices auto
 tokprof report --prices prices.json
 
-# Compare two runs with a 95% bootstrap confidence interval (Stages 3 & 5)
-tokprof compare before.jsonl after.jsonl
+# Compare two runs with a 95% bootstrap CI (auto-paired by session) and optional CI gate (Stages 3 & 5)
+tokprof compare before.jsonl after.jsonl --max-regression 5
+
+# Clean older .jsonl/.jsonl.gz/.html/.csv runs in .tokprof/ while keeping the latest 5
+tokprof clean --keep 5
 ```
 
 ### What the HTML and CLI reports show

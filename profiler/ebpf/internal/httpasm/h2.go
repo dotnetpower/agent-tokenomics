@@ -109,9 +109,22 @@ func (h *h2conn) stream(id uint32, now time.Time) *h2stream {
 	s := h.streams[id]
 	if s == nil {
 		if len(h.streams) >= maxH2Streams {
-			for k := range h.streams {
-				delete(h.streams, k)
-				break
+			var evictID uint32
+			var evictTime time.Time
+			foundDone := false
+			first := true
+			for k, st := range h.streams {
+				isDone := st.reqEnd && st.respEnd
+				if isDone && !foundDone {
+					evictID, evictTime, foundDone, first = k, st.t0, true, false
+					continue
+				}
+				if isDone == foundDone && (first || st.t0.Before(evictTime)) {
+					evictID, evictTime, first = k, st.t0, false
+				}
+			}
+			if !first {
+				delete(h.streams, evictID)
 			}
 		}
 		s = &h2stream{t0: now}

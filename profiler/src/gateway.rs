@@ -5,7 +5,7 @@ use crate::parse_request::parse_request;
 use crate::parse_response::{find_subslice, parse_response_body, SSEParser};
 use crate::segment::{build_record, hash_text, BuildRecordArgs};
 use crate::upstream::{connect_tcp_timeout, connect_via_proxy, make_upstream_tls_config, proxy_for};
-use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
+use flate2::read::{DeflateDecoder, ZlibDecoder};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, StreamOwned};
 use serde_json::{json, Value};
@@ -202,16 +202,14 @@ impl BodyFramer {
     }
 }
 
-pub fn decode_content_encoding(data: &[u8], encoding: Option<&str>) -> Vec<u8> {
-    let enc = encoding.unwrap_or("").trim().to_ascii_lowercase();
+fn decode_single_encoding(data: &[u8], enc: &str, cap: usize) -> Vec<u8> {
     if enc.is_empty() || enc == "identity" {
         return data.to_vec();
     }
-    let cap = 32 * 1024 * 1024usize;
     if enc.contains("gzip") {
-        let mut dec = GzDecoder::new(data).take(cap as u64);
+        let mut dec = flate2::read::MultiGzDecoder::new(data).take(cap as u64);
         let mut out = Vec::new();
-        if dec.read_to_end(&mut out).is_ok() {
+        if dec.read_to_end(&mut out).is_ok() && !out.is_empty() {
             return out;
         }
     } else if enc.contains("deflate") {
@@ -240,6 +238,22 @@ pub fn decode_content_encoding(data: &[u8], encoding: Option<&str>) -> Vec<u8> {
         }
     }
     data.to_vec()
+}
+
+pub fn decode_content_encoding(data: &[u8], encoding: Option<&str>) -> Vec<u8> {
+    let raw = encoding.unwrap_or("").trim().to_ascii_lowercase();
+    if raw.is_empty() || raw == "identity" {
+        return data.to_vec();
+    }
+    let cap = 32 * 1024 * 1024usize;
+    let mut cur = data.to_vec();
+    for layer in raw.rsplit(',') {
+        let l = layer.trim();
+        if !l.is_empty() && l != "identity" {
+            cur = decode_single_encoding(&cur, l, cap);
+        }
+    }
+    cur
 }
 
 fn read_head<R: Read>(reader: &mut R, limit: usize) -> std::io::Result<(Vec<u8>, Vec<u8>)> {
@@ -401,6 +415,10 @@ impl Default for GatewayStats {
     }
 }
 
+const IDLE_POOL_TTL: Duration = Duration::from_secs(45);
+const MAX_IDLE_PER_HOST: usize = 8;
+type UpstreamPoolKey = (String, String, u16);
+
 pub struct Gateway {
     pub routes: Vec<Route>,
     pub sink: Arc<dyn Fn(CallRecord) + Send + Sync>,
@@ -419,6 +437,7 @@ pub struct Gateway {
     pub stats: GatewayStats,
     tls_cfg: std::sync::OnceLock<Arc<ClientConfig>>,
     warned: Mutex<HashSet<String>>,
+    idle_upstreams: Mutex<HashMap<UpstreamPoolKey, Vec<(UpstreamIo, Instant)>>>,
 }
 
 impl Gateway {
@@ -476,7 +495,33 @@ impl Gateway {
             stats: GatewayStats::default(),
             tls_cfg: std::sync::OnceLock::new(),
             warned: Mutex::new(HashSet::new()),
+            idle_upstreams: Mutex::new(HashMap::new()),
         })
+    }
+
+    fn take_pooled_upstream(&self, scheme: &str, host: &str, port: u16) -> Option<UpstreamIo> {
+        let key = (scheme.to_string(), host.to_string(), port);
+        let mut guard = self.idle_upstreams.lock().ok()?;
+        let list = guard.get_mut(&key)?;
+        let now = Instant::now();
+        while let Some((io, parked_at)) = list.pop() {
+            if now.duration_since(parked_at) <= IDLE_POOL_TTL {
+                return Some(io);
+            }
+        }
+        None
+    }
+
+    fn return_pooled_upstream(&self, scheme: &str, host: &str, port: u16, io: UpstreamIo) {
+        let key = (scheme.to_string(), host.to_string(), port);
+        if let Ok(mut guard) = self.idle_upstreams.lock() {
+            let list = guard.entry(key).or_default();
+            let now = Instant::now();
+            list.retain(|(_, ts)| now.duration_since(*ts) <= IDLE_POOL_TTL);
+            if list.len() < MAX_IDLE_PER_HOST {
+                list.push((io, now));
+            }
+        }
     }
 
     fn warn_once(&self, key: &str, msg: &str) {
@@ -594,15 +639,18 @@ impl Gateway {
 
     pub fn handle_connection(self: &Arc<Self>, mut stream: TcpStream) {
         self.stats.active.fetch_add(1, Ordering::SeqCst);
+        let io_timeout = crate::upstream::upstream_io_timeout();
         let _ = stream.set_nodelay(true);
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
-        let _ = stream.set_write_timeout(Some(Duration::from_secs(60)));
+        let _ = stream.set_read_timeout(Some(io_timeout));
+        let _ = stream.set_write_timeout(Some(io_timeout));
         let mut req_idx = 0usize;
         while !self.shutdown_flag.load(Ordering::SeqCst) {
+            if req_idx > 0 {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(15)));
+            }
             match self.serve_one(&mut stream) {
                 Ok(true) => {
                     req_idx += 1;
-                    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
                 }
                 Ok(false) => break,
                 Err(e) => {
@@ -672,6 +720,43 @@ impl Gateway {
             return Ok(false);
         }
 
+        if (target.starts_with("/__tokprof/otlp")
+            || target == "/v1/traces"
+            || target == "/v1/logs")
+            && method == "POST"
+        {
+            let raw_body = read_request_body(stream, &hd, &leftover)?;
+            if self.ingest_token.is_some()
+                && target.starts_with("/__tokprof/otlp")
+                && !self.valid_token(hd.get("x-tokprof-token").map(|s| s.as_str()))
+            {
+                Self::respond(stream, 403, "Forbidden", b"tokprof: bad ingest token", "text/plain")?;
+                return Ok(false);
+            }
+            let decoded = decode_content_encoding(&raw_body, hd.get("content-encoding").map(|s| s.as_str()));
+            let text = String::from_utf8_lossy(&decoded);
+            let opts = crate::appinsights::IngestOptions {
+                salt: self.salt.clone(),
+                components: self.components.clone(),
+                use_tiktoken: self.use_tiktoken,
+                include_text: None,
+                usage_only: false,
+                run_id: self.run_id.clone(),
+                conv_filter: None,
+                comm_filter: None,
+            };
+            if let Ok((recs, _)) = crate::appinsights::parse_app_insights_payload(&text, &opts) {
+                for rec in recs {
+                    (self.sink)(rec);
+                    self.stats.recorded.fetch_add(1, Ordering::SeqCst);
+                }
+            } else {
+                self.stats.record_errors.fetch_add(1, Ordering::SeqCst);
+            }
+            Self::respond_conn(stream, 200, "OK", b"{}", "application/json", want_keep_alive)?;
+            return Ok(want_keep_alive);
+        }
+
         if target.starts_with("/__tokprof/ingest") && method == "POST" {
             let body = read_request_body(stream, &hd, &leftover)?;
             if !self.valid_token(hd.get("x-tokprof-token").map(|s| s.as_str())) {
@@ -687,8 +772,125 @@ impl Gateway {
             return Ok(want_keep_alive);
         }
 
+        let _ = stream.set_read_timeout(Some(crate::upstream::upstream_io_timeout()));
         if let Ok(mut g) = self.stats.last_request_ts.lock() {
             *g = Some(Self::now_secs());
+        }
+        let is_upgrade = hd
+            .get("upgrade")
+            .map(|u| !u.trim().is_empty())
+            .unwrap_or(false)
+            && hd
+                .get("connection")
+                .map(|c| c.to_ascii_lowercase().contains("upgrade"))
+                .unwrap_or(false);
+        if is_upgrade {
+            let Some((scheme, host, port, upath)) = self.resolve(&target) else {
+                self.stats.bypassed.fetch_add(1, Ordering::SeqCst);
+                Self::respond(
+                    stream,
+                    404,
+                    "Not Found",
+                    b"tokprof: no upstream route for this path",
+                    "text/plain",
+                )?;
+                return Ok(false);
+            };
+            let mut up = match self.open_upstream(&scheme, &host, port) {
+                Ok(u) => u,
+                Err(e) => {
+                    let msg = format!("tokprof: upstream upgrade connect failed: {e}");
+                    Self::respond(stream, 502, "Bad Gateway", msg.as_bytes(), "text/plain")?;
+                    return Ok(false);
+                }
+            };
+            let host_hdr = if port != 80 && port != 443 {
+                format!("{host}:{port}")
+            } else {
+                host.clone()
+            };
+            let mut fwd = vec![format!("{method} {upath} HTTP/1.1"), format!("Host: {host_hdr}")];
+            for (k, v) in &headers {
+                if !k.eq_ignore_ascii_case("host") {
+                    fwd.push(format!("{k}: {v}"));
+                }
+            }
+            up.write_all(format!("{}\r\n\r\n", fwd.join("\r\n")).as_bytes())?;
+            if !leftover.is_empty() {
+                up.write_all(&leftover)?;
+            }
+            up.flush()?;
+            let (rhead_raw, pending) = read_head(&mut up, MAX_HEAD)?;
+            stream.write_all(&rhead_raw)?;
+            stream.write_all(b"\r\n\r\n")?;
+            if !pending.is_empty() {
+                stream.write_all(&pending)?;
+            }
+            stream.flush()?;
+            let (sline, _, _) = parse_head(&rhead_raw);
+            let status_code = sline.split_whitespace().nth(1).unwrap_or("");
+            if status_code == "101" {
+                let _ = stream.set_nonblocking(true);
+                match &mut up {
+                    UpstreamIo::Plain(s) => {
+                        let _ = s.set_nonblocking(true);
+                    }
+                    UpstreamIo::Tls(s) => {
+                        let _ = s.sock.set_nonblocking(true);
+                    }
+                }
+                let mut c_buf = [0u8; 16384];
+                let mut u_buf = [0u8; 16384];
+                while !self.shutdown_flag.load(Ordering::SeqCst) {
+                    let mut idle = true;
+                    match stream.read(&mut c_buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            idle = false;
+                            let _ = stream.set_nonblocking(false);
+                            match &mut up {
+                                UpstreamIo::Plain(s) => {
+                                    let _ = s.set_nonblocking(false);
+                                }
+                                UpstreamIo::Tls(s) => {
+                                    let _ = s.sock.set_nonblocking(false);
+                                }
+                            }
+                            if up.write_all(&c_buf[..n]).is_err() || up.flush().is_err() {
+                                break;
+                            }
+                            let _ = stream.set_nonblocking(true);
+                            match &mut up {
+                                UpstreamIo::Plain(s) => {
+                                    let _ = s.set_nonblocking(true);
+                                }
+                                UpstreamIo::Tls(s) => {
+                                    let _ = s.sock.set_nonblocking(true);
+                                }
+                            }
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(_) => break,
+                    }
+                    match up.read(&mut u_buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            idle = false;
+                            let _ = stream.set_nonblocking(false);
+                            if stream.write_all(&u_buf[..n]).is_err() || stream.flush().is_err() {
+                                break;
+                            }
+                            let _ = stream.set_nonblocking(true);
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(_) => break,
+                    }
+                    if idle {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                }
+            }
+            return Ok(false);
         }
         if hd
             .get("expect")
@@ -714,7 +916,16 @@ impl Gateway {
         let mut verdict_opt: Option<Verdict> = None;
         let mut parsed_opt = None;
         if method == "POST" && !body.is_empty() {
-            if let Ok(obj) = serde_json::from_slice::<Value>(&body) {
+            let req_decoded_cow: std::borrow::Cow<'_, [u8]> =
+                if let Some(ce) = hd.get("content-encoding").filter(|s| {
+                    let sl = s.trim().to_ascii_lowercase();
+                    !sl.is_empty() && sl != "identity"
+                }) {
+                    std::borrow::Cow::Owned(decode_content_encoding(&body, Some(ce)))
+                } else {
+                    std::borrow::Cow::Borrowed(&body)
+                };
+            if let Ok(obj) = serde_json::from_slice::<Value>(&req_decoded_cow) {
                 let bare_path = upath.split('?').next().unwrap_or(&upath);
                 let v = self
                     .detector
@@ -736,19 +947,6 @@ impl Gateway {
 
         let t0_ts = Self::now_secs();
         let t0_inst = Instant::now();
-        let mut up = match self.open_upstream(&scheme, &host, port) {
-            Ok(u) => u,
-            Err(e) => {
-                let mut hint = "";
-                if e.contains("CERTIFICATE_VERIFY_FAILED") || e.contains("InvalidCertificate") {
-                    hint = " (the endpoint's certificate is not trusted: for a private CA pass --upstream-ca FILE or set SSL_CERT_FILE)";
-                }
-                let msg = format!("tokprof: upstream connect failed: {e}{hint}");
-                Self::respond(stream, 502, "Bad Gateway", msg.as_bytes(), "text/plain")?;
-                return Ok(false);
-            }
-        };
-
         let host_hdr = if port != 80 && port != 443 {
             format!("{host}:{port}")
         } else {
@@ -767,14 +965,58 @@ impl Gateway {
             }
         }
         fwd.push("Accept-Encoding: identity".to_string());
-        fwd.push("Connection: close".to_string());
+        fwd.push("Connection: keep-alive".to_string());
         if !body.is_empty() || matches!(method.as_str(), "POST" | "PUT" | "PATCH") {
             fwd.push(format!("Content-Length: {}", body.len()));
         }
         let req_head_bytes = format!("{}\r\n\r\n", fwd.join("\r\n"));
-        up.write_all(req_head_bytes.as_bytes())?;
-        up.write_all(&body)?;
-        up.flush()?;
+
+        let mut reused_upstream = false;
+        let mut up = if let Some(pooled) = self.take_pooled_upstream(&scheme, &host, port) {
+            reused_upstream = true;
+            pooled
+        } else {
+            match self.open_upstream(&scheme, &host, port) {
+                Ok(u) => u,
+                Err(e) => {
+                    let mut hint = "";
+                    if e.contains("CERTIFICATE_VERIFY_FAILED") || e.contains("InvalidCertificate") {
+                        hint = " (the endpoint's certificate is not trusted: for a private CA pass --upstream-ca FILE or set SSL_CERT_FILE)";
+                    }
+                    let msg = format!("tokprof: upstream connect failed: {e}{hint}");
+                    Self::respond(stream, 502, "Bad Gateway", msg.as_bytes(), "text/plain")?;
+                    return Ok(false);
+                }
+            }
+        };
+
+        let send_and_read_head = |conn: &mut UpstreamIo| -> std::io::Result<(Vec<u8>, Vec<u8>)> {
+            conn.write_all(req_head_bytes.as_bytes())?;
+            conn.write_all(&body)?;
+            conn.flush()?;
+            let mut hr = read_head(conn, MAX_HEAD);
+            while let Ok((ref rhead_raw, ref pending)) = hr {
+                let (sline, _, _) = parse_head(rhead_raw);
+                let code = sline
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|s| s.parse::<i64>().ok());
+                if code == Some(100) && pending.is_empty() {
+                    hr = read_head(conn, MAX_HEAD);
+                } else {
+                    break;
+                }
+            }
+            hr
+        };
+
+        let mut head_res = send_and_read_head(&mut up);
+        if head_res.is_err() && reused_upstream {
+            if let Ok(fresh) = self.open_upstream(&scheme, &host, port) {
+                up = fresh;
+                head_res = send_and_read_head(&mut up);
+            }
+        }
 
         let status: Option<i64>;
         let ttfb_ms: Option<i64>;
@@ -783,20 +1025,8 @@ impl Gateway {
         let mut sse_parser: Option<SSEParser> = None;
         let mut err_str: Option<String> = None;
         let resp_encoding: Option<String>;
+        let mut can_pool_upstream = false;
 
-        let mut head_res = read_head(&mut up, MAX_HEAD);
-        while let Ok((ref rhead_raw, ref pending)) = head_res {
-            let (sline, _, _) = parse_head(rhead_raw);
-            let code = sline
-                .split_whitespace()
-                .nth(1)
-                .and_then(|s| s.parse::<i64>().ok());
-            if code == Some(100) && pending.is_empty() {
-                head_res = read_head(&mut up, MAX_HEAD);
-            } else {
-                break;
-            }
-        }
         match head_res {
             Ok((rhead_raw, mut pending)) => {
                 ttfb_ms = Some(t0_inst.elapsed().as_millis() as i64);
@@ -806,6 +1036,11 @@ impl Gateway {
                     .nth(1)
                     .and_then(|s| s.parse::<i64>().ok());
                 resp_encoding = rhd.get("content-encoding").cloned();
+                let up_wants_close = rhd
+                    .get("connection")
+                    .map(|c| c.to_ascii_lowercase().contains("close"))
+                    .unwrap_or(false)
+                    || sline.starts_with("HTTP/1.0");
 
                 let mut out_hdr = vec![sline];
                 for (k, v) in &rheaders {
@@ -814,7 +1049,20 @@ impl Gateway {
                         out_hdr.push(format!("{k}: {v}"));
                     }
                 }
-                out_hdr.push("Connection: close".to_string());
+                let has_explicit_end = method == "HEAD"
+                    || matches!(status, Some(204 | 304))
+                    || status.map(|c| (100..200).contains(&c)).unwrap_or(false)
+                    || rhd.contains_key("content-length")
+                    || rhd
+                        .get("transfer-encoding")
+                        .map(|t| t.to_ascii_lowercase().contains("chunked"))
+                        .unwrap_or(false);
+                let down_conn = if want_keep_alive && has_explicit_end {
+                    "keep-alive"
+                } else {
+                    "close"
+                };
+                out_hdr.push(format!("Connection: {down_conn}"));
                 stream.write_all(format!("{}\r\n\r\n", out_hdr.join("\r\n")).as_bytes())?;
                 stream.flush()?;
 
@@ -870,12 +1118,19 @@ impl Gateway {
                         let _ = framer.feed(&data);
                     }
                 }
+                if framer.done && has_explicit_end && !up_wants_close && err_str.is_none() {
+                    can_pool_upstream = true;
+                }
             }
             Err(e) => {
                 let msg = format!("tokprof: upstream closed the connection: {e}");
                 Self::respond(stream, 502, "Bad Gateway", msg.as_bytes(), "text/plain")?;
                 return Ok(false);
             }
+        }
+        let keep_downstream = want_keep_alive && can_pool_upstream;
+        if can_pool_upstream {
+            self.return_pooled_upstream(&scheme, &host, port, up);
         }
 
         let latency_ms = t0_inst.elapsed().as_millis() as i64;
@@ -885,7 +1140,7 @@ impl Gateway {
             let response = if let Some(mut sp) = sse_parser {
                 sp.finish()
             } else {
-                parse_response_body(&parsed.provider, &text, is_sse)
+                crate::parse_response::parse_response_body_bytes(&parsed.provider, &decompressed, is_sse)
             };
             if self.decide(&mut verdict, &host, port, &upath, &text, is_sse) {
                 self.record_call(
@@ -903,7 +1158,7 @@ impl Gateway {
                 );
             }
         }
-        Ok(false)
+        Ok(keep_downstream)
     }
 
     fn decide(
@@ -969,8 +1224,17 @@ impl Gateway {
         if matches!(host.as_str(), "127.0.0.1" | "localhost") && gw_port != 0 && port == gw_port {
             return;
         }
+        let mut truncated_repaired = false;
         let req_obj = match obj.get("request") {
-            Some(Value::String(s)) => serde_json::from_str::<Value>(s).ok(),
+            Some(Value::String(s)) => match serde_json::from_str::<Value>(s) {
+                Ok(v) => Some(v),
+                Err(_) => crate::appinsights::parse_or_repair_json(s).map(|(v, rep)| {
+                    if rep {
+                        truncated_repaired = true;
+                    }
+                    v
+                }),
+            },
             Some(v @ Value::Object(_)) => Some(v.clone()),
             _ => None,
         };
@@ -997,8 +1261,29 @@ impl Gateway {
             parsed.model = verdict.model_hint.clone();
         }
         parsed.stream = parsed.stream || verdict.stream_hint;
-        let resp_text = obj.get("response").and_then(|v| v.as_str()).unwrap_or("");
+        let raw_resp_text = obj.get("response").and_then(|v| v.as_str()).unwrap_or("");
         let sse = obj.get("sse").and_then(|v| v.as_bool()).unwrap_or(false);
+        let repaired_resp_buf;
+        let resp_text = if !sse
+            && raw_resp_text.trim_start().starts_with('{')
+            && serde_json::from_str::<Value>(raw_resp_text).is_err()
+        {
+            let (rep_s, did_rep) = crate::appinsights::repair_truncated_json(raw_resp_text);
+            if did_rep {
+                truncated_repaired = true;
+                repaired_resp_buf = rep_s;
+                repaired_resp_buf.as_str()
+            } else {
+                raw_resp_text
+            }
+        } else {
+            raw_resp_text
+        };
+        if truncated_repaired {
+            verdict
+                .evidence
+                .insert(0, "truncated JSON payload auto-repaired".to_string());
+        }
         let response = parse_response_body(&parsed.provider, resp_text, sse);
         if !self.decide(&mut verdict, &host, port, path, resp_text, sse) {
             return;
@@ -1085,11 +1370,16 @@ impl Gateway {
                     });
                 }
             }
+            let was_repaired = v
+                .evidence
+                .iter()
+                .any(|s| s.contains("truncated JSON payload auto-repaired"));
             let ev: Vec<String> = v.evidence.iter().take(6).cloned().collect();
             rec.detect = Some(json!({
                 "score": v.score,
                 "evidence": ev,
                 "forced": if v.forced { Value::Bool(true) } else { Value::Null },
+                "truncated_repaired": if was_repaired { Value::Bool(true) } else { Value::Null },
             }));
         }
         (self.sink)(rec);
@@ -1115,10 +1405,13 @@ impl GatewayServer {
         let stop = gateway.shutdown_flag.clone();
         let stop_thread = stop.clone();
 
-        let (tx, rx) = std::sync::mpsc::sync_channel::<TcpStream>(256);
+        let worker_count = std::thread::available_parallelism()
+            .map(|n| (n.get() * 4).clamp(16, 64))
+            .unwrap_or(16);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<TcpStream>(512);
         let shared_rx = Arc::new(Mutex::new(rx));
-        let mut workers = Vec::with_capacity(8);
-        for w_idx in 0..8 {
+        let mut workers = Vec::with_capacity(worker_count);
+        for w_idx in 0..worker_count {
             let rx_clone = shared_rx.clone();
             let gw_worker = gateway.clone();
             if let Ok(wh) = thread::Builder::new()
@@ -1135,18 +1428,49 @@ impl GatewayServer {
             }
         }
 
+        let gw_accept = gateway.clone();
         let handle = thread::Builder::new()
             .name("tokprof-gateway".to_string())
             .spawn(move || {
                 while !stop_thread.load(Ordering::SeqCst) {
                     match listener.accept() {
-                        Ok((stream, _)) => {
+                        Ok((mut stream, _)) => {
                             if stop_thread.load(Ordering::SeqCst) {
                                 let _ = stream.shutdown(std::net::Shutdown::Both);
                                 break;
                             }
-                            if tx.try_send(stream).is_err() {
-                                // Channel full or closed
+                            let active_now = gw_accept.stats.active.load(Ordering::Relaxed);
+                            if active_now >= 256 {
+                                gw_accept.stats.dropped.fetch_add(1, Ordering::SeqCst);
+                                let _ = Gateway::respond(
+                                    &mut stream,
+                                    503,
+                                    "Service Unavailable",
+                                    b"tokprof: gateway overloaded",
+                                    "text/plain",
+                                );
+                                let _ = stream.shutdown(std::net::Shutdown::Both);
+                            } else if active_now + 2 >= worker_count {
+                                let gw_ovf = gw_accept.clone();
+                                if thread::Builder::new()
+                                    .name("tokprof-ovf".to_string())
+                                    .spawn(move || gw_ovf.handle_connection(stream))
+                                    .is_err()
+                                {
+                                    gw_accept.stats.dropped.fetch_add(1, Ordering::SeqCst);
+                                }
+                            } else if let Err(std::sync::mpsc::TrySendError::Full(s_full))
+                            | Err(std::sync::mpsc::TrySendError::Disconnected(s_full)) =
+                                tx.try_send(stream)
+                            {
+                                let gw_ovf = gw_accept.clone();
+                                if thread::Builder::new()
+                                    .name("tokprof-ovf".to_string())
+                                    .spawn(move || gw_ovf.handle_connection(s_full))
+                                    .is_err()
+                                {
+                                    gw_accept.stats.dropped.fetch_add(1, Ordering::SeqCst);
+                                }
                             }
                         }
                         Err(_) => {

@@ -1,13 +1,21 @@
 use crate::model::CallRecord;
+use flate2::read::MultiGzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use serde_json::Value;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use std::sync::Mutex;
 
+enum WriterBackend {
+    Plain(BufWriter<File>),
+    Gzip(GzEncoder<BufWriter<File>>),
+}
+
 pub struct JsonlWriter {
     pub path: String,
-    inner: Mutex<Option<BufWriter<File>>>,
+    inner: Mutex<Option<WriterBackend>>,
 }
 
 impl JsonlWriter {
@@ -18,17 +26,29 @@ impl JsonlWriter {
                 fs::create_dir_all(parent)?;
             }
         }
+        let is_gz = p.to_ascii_lowercase().ends_with(".gz");
         let mut opts = OpenOptions::new();
-        opts.create(true).append(true).write(true);
+        opts.create(true).write(true);
+        if is_gz {
+            opts.truncate(true);
+        } else {
+            opts.append(true);
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
             opts.mode(0o600);
         }
         let file = opts.open(&p)?;
+        let buf = BufWriter::with_capacity(65_536, file);
+        let backend = if is_gz {
+            WriterBackend::Gzip(GzEncoder::new(buf, Compression::fast()))
+        } else {
+            WriterBackend::Plain(buf)
+        };
         Ok(Self {
             path: p,
-            inner: Mutex::new(Some(BufWriter::with_capacity(65_536, file))),
+            inner: Mutex::new(Some(backend)),
         })
     }
 
@@ -46,18 +66,34 @@ impl JsonlWriter {
 
     pub fn write_raw_line(&self, line: &str) {
         if let Ok(mut guard) = self.inner.lock() {
-            if let Some(ref mut w) = *guard {
-                let _ = w.write_all(line.as_bytes());
-                let _ = w.write_all(b"\n");
-                let _ = w.flush();
+            if let Some(ref mut backend) = *guard {
+                match backend {
+                    WriterBackend::Plain(w) => {
+                        let _ = w.write_all(line.as_bytes());
+                        let _ = w.write_all(b"\n");
+                        let _ = w.flush();
+                    }
+                    WriterBackend::Gzip(w) => {
+                        let _ = w.write_all(line.as_bytes());
+                        let _ = w.write_all(b"\n");
+                        let _ = w.flush();
+                    }
+                }
             }
         }
     }
 
     pub fn close(&self) {
         if let Ok(mut guard) = self.inner.lock() {
-            if let Some(mut w) = guard.take() {
-                let _ = w.flush();
+            if let Some(backend) = guard.take() {
+                match backend {
+                    WriterBackend::Plain(mut w) => {
+                        let _ = w.flush();
+                    }
+                    WriterBackend::Gzip(w) => {
+                        let _ = w.finish();
+                    }
+                }
             }
         }
     }
@@ -74,11 +110,29 @@ pub struct ReadStats {
     pub bad_lines: usize,
 }
 
-pub fn read_jsonl(path: &str, mut stats: Option<&mut ReadStats>) -> Vec<CallRecord> {
-    let Ok(file) = File::open(path) else {
+pub fn read_jsonl(path: &str, stats: Option<&mut ReadStats>) -> Vec<CallRecord> {
+    let Ok(mut file) = File::open(path) else {
         return Vec::new();
     };
-    let mut reader = BufReader::with_capacity(65_536, file);
+    let mut magic = [0u8; 2];
+    let is_gz = path.to_ascii_lowercase().ends_with(".gz")
+        || (file.read(&mut magic).ok() == Some(2) && magic == [0x1f, 0x8b]);
+    let Ok(reopened) = File::open(path) else {
+        return Vec::new();
+    };
+    if is_gz {
+        let mut reader = BufReader::with_capacity(65_536, MultiGzDecoder::new(reopened));
+        read_jsonl_from_bufread(&mut reader, stats)
+    } else {
+        let mut reader = BufReader::with_capacity(65_536, reopened);
+        read_jsonl_from_bufread(&mut reader, stats)
+    }
+}
+
+pub fn read_jsonl_from_bufread<R: BufRead>(
+    reader: &mut R,
+    mut stats: Option<&mut ReadStats>,
+) -> Vec<CallRecord> {
     let mut raw_line = String::with_capacity(16_384);
     let mut out = Vec::new();
     loop {

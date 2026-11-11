@@ -674,7 +674,7 @@ pub fn classify_body(val: Option<&Value>) -> Shape {
             }
         }
     }
-    for key in ["prompt", "inputs"] {
+    for key in ["prompt", "inputs", "inputText"] {
         if let Some(val) = obj.get(key) {
             let non_empty = match val {
                 Value::String(s) => !s.is_empty(),
@@ -1156,6 +1156,15 @@ impl Detector {
         {
             api = hint.map(|s| s.to_string());
         }
+        if api.is_none()
+            && (forced || hint == Some("generic") || v.host_class == "aws_bedrock")
+            && body
+                .and_then(|b| b.as_object())
+                .map(|o| !o.is_empty())
+                .unwrap_or(false)
+        {
+            api = Some("generic".to_string());
+        }
         v.api = api.clone();
         let Some(api_str) = api else {
             return self.reject(
@@ -1347,8 +1356,9 @@ pub fn parse_url_parts(url: &str) -> (String, String, u16, String) {
     };
     let (scheme_part, rest) = raw.split_once("://").unwrap_or(("https", &raw));
     let scheme = scheme_part.to_ascii_lowercase();
-    let (authority, path_part) = match rest.find('/') {
-        Some(idx) => (&rest[..idx], &rest[idx..]),
+    let (authority, path_part) = match rest.find(['/', '?', '#']) {
+        Some(idx) if rest.as_bytes()[idx] == b'/' => (&rest[..idx], &rest[idx..]),
+        Some(idx) => (&rest[..idx], "/"),
         None => (rest, "/"),
     };
     let host_port = authority.rsplit('@').next().unwrap_or(authority);
@@ -1430,6 +1440,41 @@ pub fn explain(
     }
     if let Some(ref rej) = v.reject {
         lines.push(format!("Rejected:   {rej}"));
+    }
+    if (v.llm || v.candidate) && body.is_some() {
+        if let Some(ref api) = v.api {
+            if let Some(bval) = body {
+                if let Ok(mut pr) = crate::parse_request::parse_request(api, bval) {
+                    if pr.model.is_none() {
+                        pr.model = v.model_hint.clone();
+                    }
+                    let counter = crate::counting::get_counter(pr.model.as_deref(), true);
+                    let segs = crate::segment::build_segments(
+                        &pr.segments,
+                        &counter,
+                        b"explain",
+                        None,
+                        true,
+                        Some(false),
+                    );
+                    let est_sum: i64 = segs.iter().map(|s| s.tokens).sum();
+                    lines.push(format!(
+                        "Segments:   {} segment(s), ~{} est input tokens ({})",
+                        segs.len(),
+                        est_sum,
+                        counter.method
+                    ));
+                    for s in segs.iter().take(12) {
+                        let nm = s
+                            .name
+                            .as_deref()
+                            .map(|n| format!(" [{n}]"))
+                            .unwrap_or_default();
+                        lines.push(format!("  * {:<17} {:>6} tok{}", s.kind, s.tokens, nm));
+                    }
+                }
+            }
+        }
     }
     if v.candidate && response.is_none() {
         lines.push(format!(

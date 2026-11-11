@@ -924,10 +924,220 @@ impl TableColMap {
     }
 }
 
+fn otlp_any_value_to_json(val: &Value) -> Value {
+    let Some(obj) = val.as_object() else {
+        return val.clone();
+    };
+    if let Some(s) = obj.get("stringValue") {
+        return s.clone();
+    }
+    if let Some(i) = obj.get("intValue") {
+        if let Some(s) = i.as_str() {
+            if let Ok(n) = s.parse::<i64>() {
+                return Value::from(n);
+            }
+        }
+        return i.clone();
+    }
+    if let Some(d) = obj.get("doubleValue") {
+        return d.clone();
+    }
+    if let Some(b) = obj.get("boolValue") {
+        return b.clone();
+    }
+    if let Some(arr) = obj
+        .get("arrayValue")
+        .and_then(|v| v.as_object())
+        .and_then(|o| o.get("values"))
+        .and_then(|v| v.as_array())
+    {
+        return Value::Array(arr.iter().map(otlp_any_value_to_json).collect());
+    }
+    if let Some(kvs) = obj
+        .get("kvlistValue")
+        .and_then(|v| v.as_object())
+        .and_then(|o| o.get("values"))
+        .and_then(|v| v.as_array())
+    {
+        let mut out = Map::new();
+        for kv in kvs {
+            if let Some(kvo) = kv.as_object() {
+                if let Some(k) = kvo.get("key").and_then(|v| v.as_str()) {
+                    let v_conv = kvo
+                        .get("value")
+                        .map(otlp_any_value_to_json)
+                        .unwrap_or(Value::Null);
+                    out.insert(k.to_string(), v_conv);
+                }
+            }
+        }
+        return Value::Object(out);
+    }
+    val.clone()
+}
+
+fn otlp_attrs_to_map(attrs_opt: Option<&Value>) -> Map<String, Value> {
+    let mut out = Map::new();
+    let Some(Value::Array(arr)) = attrs_opt else {
+        return out;
+    };
+    for item in arr {
+        if let Some(obj) = item.as_object() {
+            if let Some(k) = obj.get("key").and_then(|v| v.as_str()) {
+                if let Some(v) = obj.get("value") {
+                    out.insert(k.to_string(), otlp_any_value_to_json(v));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn extract_otlp_rows(map: &Map<String, Value>) -> Option<Vec<NormalizedRow>> {
+    let has_spans = map.get("resourceSpans").and_then(|v| v.as_array()).is_some();
+    let has_logs = map.get("resourceLogs").and_then(|v| v.as_array()).is_some();
+    if !has_spans && !has_logs {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut row_idx = 0usize;
+    if let Some(Value::Array(rspans)) = map.get("resourceSpans") {
+        for rs in rspans {
+            let Some(rso) = rs.as_object() else { continue };
+            let res_attrs = otlp_attrs_to_map(
+                rso.get("resource")
+                    .and_then(|v| v.as_object())
+                    .and_then(|o| o.get("attributes")),
+            );
+            let service_name = res_attrs
+                .get("service.name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if let Some(Value::Array(sspans)) = rso.get("scopeSpans").or_else(|| rso.get("instrumentationLibrarySpans")) {
+                for ss in sspans {
+                    let Some(Value::Array(spans)) = ss.as_object().and_then(|o| o.get("spans")) else {
+                        continue;
+                    };
+                    for sp in spans {
+                        let Some(spo) = sp.as_object() else { continue };
+                        let mut props = otlp_attrs_to_map(spo.get("attributes"));
+                        let trace_id = val_to_string(spo.get("traceId"));
+                        let span_id = val_to_string(spo.get("spanId"));
+                        let parent_id = val_to_string(spo.get("parentSpanId"));
+                        let name = val_to_string(spo.get("name"));
+                        let start_ns = spo
+                            .get("startTimeUnixNano")
+                            .and_then(|v| v.as_str().and_then(|s| s.parse::<u128>().ok()).or_else(|| v.as_u64().map(|n| n as u128)))
+                            .unwrap_or(0);
+                        let end_ns = spo
+                            .get("endTimeUnixNano")
+                            .and_then(|v| v.as_str().and_then(|s| s.parse::<u128>().ok()).or_else(|| v.as_u64().map(|n| n as u128)))
+                            .unwrap_or(start_ns);
+                        let dur_ms = ((end_ns.saturating_sub(start_ns)) / 1_000_000) as f64;
+                        let mut span_row = Map::new();
+                        span_row.insert("Type".to_string(), Value::String("AppDependencies".to_string()));
+                        span_row.insert("Name".to_string(), Value::String(name));
+                        span_row.insert("Id".to_string(), Value::String(span_id.clone()));
+                        span_row.insert("OperationId".to_string(), Value::String(trace_id.clone()));
+                        if !parent_id.is_empty() {
+                            span_row.insert("ParentId".to_string(), Value::String(parent_id));
+                        }
+                        if !service_name.is_empty() {
+                            span_row.insert("AppRoleName".to_string(), Value::String(service_name.clone()));
+                        }
+                        span_row.insert("DurationMs".to_string(), Value::from(dur_ms));
+                        let ok = spo
+                            .get("status")
+                            .and_then(|v| v.as_object())
+                            .and_then(|st| st.get("code"))
+                            .and_then(|c| c.as_i64().or_else(|| c.as_str().map(|s| if s.contains("ERROR") { 2 } else { 1 })))
+                            .unwrap_or(1)
+                            != 2;
+                        span_row.insert("Success".to_string(), Value::Bool(ok));
+                        if start_ns > 0 {
+                            props.insert("_otlp_ts_s".to_string(), Value::from((start_ns as f64) / 1e9));
+                        }
+                        span_row.insert("Properties".to_string(), Value::Object(props));
+                        let mut nr = normalize_row_object(&span_row, row_idx);
+                        if start_ns > 0 {
+                            nr.ts = (start_ns as f64) / 1e9;
+                        }
+                        row_idx += 1;
+                        out.push(nr);
+
+                        if let Some(Value::Array(evs)) = spo.get("events") {
+                            for ev in evs {
+                                let Some(evo) = ev.as_object() else { continue };
+                                let ev_name = val_to_string(evo.get("name"));
+                                let mut ev_props = otlp_attrs_to_map(evo.get("attributes"));
+                                ev_props.insert("event.name".to_string(), Value::String(ev_name.clone()));
+                                let mut ev_row = Map::new();
+                                ev_row.insert("Type".to_string(), Value::String("AppTraces".to_string()));
+                                ev_row.insert("Message".to_string(), Value::String(ev_name));
+                                ev_row.insert("OperationId".to_string(), Value::String(trace_id.clone()));
+                                ev_row.insert("ParentId".to_string(), Value::String(span_id.clone()));
+                                ev_row.insert("Properties".to_string(), Value::Object(ev_props));
+                                let mut enr = normalize_row_object(&ev_row, row_idx);
+                                if start_ns > 0 {
+                                    enr.ts = (start_ns as f64) / 1e9;
+                                }
+                                row_idx += 1;
+                                out.push(enr);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(Value::Array(rlogs)) = map.get("resourceLogs") {
+        for rl in rlogs {
+            let Some(rlo) = rl.as_object() else { continue };
+            if let Some(Value::Array(slogs)) = rlo.get("scopeLogs").or_else(|| rlo.get("instrumentationLibraryLogs")) {
+                for sl in slogs {
+                    let Some(Value::Array(lrecs)) = sl.as_object().and_then(|o| o.get("logRecords")) else {
+                        continue;
+                    };
+                    for lr in lrecs {
+                        let Some(lro) = lr.as_object() else { continue };
+                        let mut props = otlp_attrs_to_map(lro.get("attributes"));
+                        let body_v = lro.get("body").map(otlp_any_value_to_json).unwrap_or(Value::Null);
+                        let msg = match &body_v {
+                            Value::String(s) => s.clone(),
+                            Value::Object(bo) => {
+                                for (k, v) in bo {
+                                    props.entry(k.clone()).or_insert_with(|| v.clone());
+                                }
+                                val_to_string(props.get("event.name"))
+                            }
+                            other => other.to_string(),
+                        };
+                        let trace_id = val_to_string(lro.get("traceId"));
+                        let span_id = val_to_string(lro.get("spanId"));
+                        let mut lrow = Map::new();
+                        lrow.insert("Type".to_string(), Value::String("AppTraces".to_string()));
+                        lrow.insert("Message".to_string(), Value::String(msg));
+                        lrow.insert("OperationId".to_string(), Value::String(trace_id));
+                        lrow.insert("ParentId".to_string(), Value::String(span_id));
+                        lrow.insert("Properties".to_string(), Value::Object(props));
+                        out.push(normalize_row_object(&lrow, row_idx));
+                        row_idx += 1;
+                    }
+                }
+            }
+        }
+    }
+    Some(out)
+}
+
 fn extract_normalized_rows_from_json_value(val: &Value) -> Vec<NormalizedRow> {
     let mut out = Vec::new();
     match val {
         Value::Object(map) => {
+            if let Some(otlp_rows) = extract_otlp_rows(map) {
+                return otlp_rows;
+            }
             if let Some(Value::Array(tables)) = map.get("tables") {
                 for tbl in tables {
                     let Some(tbl_obj) = tbl.as_object() else {
@@ -1345,6 +1555,108 @@ fn payload_to_call_record(
     Some(rec)
 }
 
+fn try_external_log_to_event(obj: &Map<String, Value>) -> Option<Value> {
+    // 1. AWS Bedrock ModelInvocationLog (`schemaType == "ModelInvocationLog"`)
+    if obj.get("schemaType").and_then(|v| v.as_str()) == Some("ModelInvocationLog") {
+        let model_id = val_to_string(obj.get("modelId"));
+        let inp = obj.get("input").and_then(|v| v.as_object())?;
+        let req_body = inp.get("inputBodyJson")?.clone();
+        let out_obj = obj.get("output").and_then(|v| v.as_object());
+        let mut resp_body = out_obj
+            .and_then(|o| o.get("outputBodyJson"))
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        if let Some(ro) = resp_body.as_object_mut() {
+            let in_cnt = val_to_i64(inp.get("inputTokenCount"));
+            let out_cnt = val_to_i64(out_obj.and_then(|o| o.get("outputTokenCount")));
+            if !ro.contains_key("usage") && (in_cnt.is_some() || out_cnt.is_some()) {
+                ro.insert(
+                    "usage".to_string(),
+                    json!({
+                        "inputTokens": in_cnt.unwrap_or(0),
+                        "outputTokens": out_cnt.unwrap_or(0),
+                        "cacheReadInputTokens": val_to_i64(inp.get("cacheReadInputTokenCount")).unwrap_or(0),
+                        "cacheWriteInputTokens": val_to_i64(inp.get("cacheWriteInputTokenCount")).unwrap_or(0),
+                    }),
+                );
+            }
+        }
+        return Some(json!({
+            "method": "POST",
+            "host": "bedrock-runtime.us-east-1.amazonaws.com",
+            "port": 443,
+            "path": format!("/model/{model_id}/converse"),
+            "status": 200,
+            "request": req_body,
+            "response": serde_json::to_string(&resp_body).unwrap_or_default(),
+            "sse": false,
+        }));
+    }
+    // 2. Langfuse generation observation / LangSmith LLM run export
+    let is_langfuse = obj
+        .get("type")
+        .and_then(|v| v.as_str())
+        .map(|s| s.eq_ignore_ascii_case("GENERATION"))
+        .unwrap_or(false);
+    let is_langsmith = obj
+        .get("run_type")
+        .and_then(|v| v.as_str())
+        .map(|s| s.eq_ignore_ascii_case("llm"))
+        .unwrap_or(false);
+    if is_langfuse || is_langsmith {
+        let model = val_to_string(
+            obj.get("model")
+                .or_else(|| obj.get("extra").and_then(|v| v.as_object()).and_then(|e| e.get("invocation_params")).and_then(|v| v.as_object()).and_then(|p| p.get("model"))),
+        );
+        let inp_v = obj.get("input").or_else(|| obj.get("inputs"))?;
+        let req_val = if inp_v.is_array() {
+            json!({ "model": if model.is_empty() { "gpt-4o" } else { &model }, "messages": inp_v })
+        } else if let Some(io) = inp_v.as_object() {
+            if io.contains_key("messages") || io.contains_key("prompt") || io.contains_key("contents") {
+                let mut cloned = io.clone();
+                if !model.is_empty() && !cloned.contains_key("model") {
+                    cloned.insert("model".to_string(), Value::String(model.clone()));
+                }
+                Value::Object(cloned)
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        };
+        let out_txt = obj
+            .get("output")
+            .or_else(|| obj.get("outputs"))
+            .map(|v| match v {
+                Value::String(s) => s.clone(),
+                Value::Object(o) => val_to_string(o.get("content").or_else(|| o.get("text"))),
+                other => other.to_string(),
+            })
+            .unwrap_or_default();
+        let usage_obj = obj.get("usage").or_else(|| obj.get("usageDetails")).and_then(|v| v.as_object());
+        let in_t = val_to_i64(usage_obj.and_then(|u| u.get("input").or_else(|| u.get("prompt_tokens")).or_else(|| u.get("input_tokens"))));
+        let out_t = val_to_i64(usage_obj.and_then(|u| u.get("output").or_else(|| u.get("completion_tokens")).or_else(|| u.get("output_tokens"))));
+        let resp_json = json!({
+            "choices": [{"message": {"role": "assistant", "content": out_txt}}],
+            "usage": {
+                "prompt_tokens": in_t,
+                "completion_tokens": out_t,
+            }
+        });
+        return Some(json!({
+            "method": "POST",
+            "host": "api.openai.com",
+            "port": 443,
+            "path": "/v1/chat/completions",
+            "status": 200,
+            "request": req_val,
+            "response": serde_json::to_string(&resp_json).unwrap_or_default(),
+            "sse": false,
+        }));
+    }
+    None
+}
+
 fn handle_bridge_message_line(
     line: &str,
     chunks_by_id: &mut BTreeMap<String, ChunkAssembly>,
@@ -1435,6 +1747,10 @@ pub fn parse_app_insights_payload(
             if handle_bridge_message_line(&nr.message, &mut chunks_by_id, &mut direct_events) {
                 continue;
             }
+            if let Some(ev) = try_external_log_to_event(&nr.props) {
+                direct_events.push(ev);
+                continue;
+            }
             normalized_rows.push(nr);
         }
     } else if let Some(csv_rows) = try_parse_csv_export(trimmed) {
@@ -1490,6 +1806,14 @@ pub fn parse_app_insights_payload(
             }
             if let Ok(Value::Object(m)) = serde_json::from_str::<Value>(ln) {
                 stats.total_rows += 1;
+                if let Some(ev) = try_external_log_to_event(&m) {
+                    direct_events.push(ev);
+                    continue;
+                }
+                if let Some(otlp_rows) = extract_otlp_rows(&m) {
+                    normalized_rows.extend(otlp_rows);
+                    continue;
+                }
                 let nr = normalize_row_object(&m, idx);
                 if handle_bridge_message_line(&nr.message, &mut chunks_by_id, &mut direct_events) {
                     continue;
@@ -2571,6 +2895,138 @@ pub fn is_result_set_too_large(status: u16, body: &str) -> bool {
             || lower.contains("exceeded the maximum"))
 }
 
+fn try_obtain_azure_env_or_imds_token(resource: &str) -> Option<String> {
+    let scope = format!("{}/{}", resource.trim_end_matches('/'), ".default");
+    if let (Ok(tenant), Ok(client_id), Ok(client_secret)) = (
+        std::env::var("AZURE_TENANT_ID"),
+        std::env::var("AZURE_CLIENT_ID"),
+        std::env::var("AZURE_CLIENT_SECRET"),
+    ) {
+        if !tenant.trim().is_empty() && !client_id.trim().is_empty() && !client_secret.trim().is_empty() {
+            let form = format!(
+                "grant_type=client_credentials&client_id={}&client_secret={}&scope={}",
+                url_encode_component(client_id.trim()),
+                url_encode_component(client_secret.trim()),
+                url_encode_component(&scope)
+            );
+            let url = format!("https://login.microsoftonline.com/{}/oauth2/v2.0/token", tenant.trim());
+            if let Some(tok) = post_form_for_access_token(&url, &form) {
+                return Some(tok);
+            }
+        }
+    }
+    if let (Ok(endpoint), Ok(header_secret)) = (
+        std::env::var("IDENTITY_ENDPOINT"),
+        std::env::var("IDENTITY_HEADER"),
+    ) {
+        if !endpoint.trim().is_empty() && !header_secret.trim().is_empty() {
+            let sep = if endpoint.contains('?') { '&' } else { '?' };
+            let url = format!(
+                "{}{sep}api-version=2019-08-01&resource={}",
+                endpoint.trim(),
+                url_encode_component(resource)
+            );
+            if let Some(tok) = get_json_access_token(&url, &[("X-IDENTITY-HEADER", header_secret.trim())]) {
+                return Some(tok);
+            }
+        }
+    }
+    if std::env::var("TOKPROF_TRY_IMDS").ok().as_deref() == Some("1") {
+        let url = format!(
+            "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource={}",
+            url_encode_component(resource)
+        );
+        if let Some(tok) = get_json_access_token(&url, &[("Metadata", "true")]) {
+            return Some(tok);
+        }
+    }
+    None
+}
+
+fn url_encode_component(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+fn post_form_for_access_token(url: &str, form: &str) -> Option<String> {
+    let (scheme, host, port, path) = parse_url_parts(url);
+    let req = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{form}",
+        form.len()
+    );
+    let raw = send_simple_http_request(&scheme, &host, port, req.as_bytes(), Duration::from_secs(5))?;
+    let body = split_http_body(&raw)?;
+    let val: Value = serde_json::from_slice(body).ok()?;
+    val.get("access_token").and_then(|v| v.as_str()).map(|s| s.to_string())
+}
+
+fn get_json_access_token(url: &str, extra_headers: &[(&str, &str)]) -> Option<String> {
+    let (scheme, host, port, base_path) = parse_url_parts(url);
+    let full_path = match url.find('?') {
+        Some(q_idx) => {
+            let query = url[q_idx..].split('#').next().unwrap_or("");
+            format!("{base_path}{query}")
+        }
+        None => base_path,
+    };
+    let mut hdrs = format!("GET {full_path} HTTP/1.1\r\nHost: {host}\r\n");
+    for &(k, v) in extra_headers {
+        hdrs.push_str(&format!("{k}: {v}\r\n"));
+    }
+    hdrs.push_str("Connection: close\r\n\r\n");
+    let raw = send_simple_http_request(&scheme, &host, port, hdrs.as_bytes(), Duration::from_millis(800))?;
+    let body = split_http_body(&raw)?;
+    let val: Value = serde_json::from_slice(body).ok()?;
+    val.get("access_token").and_then(|v| v.as_str()).map(|s| s.to_string())
+}
+
+fn split_http_body(raw: &[u8]) -> Option<&[u8]> {
+    let idx = raw.windows(4).position(|w| w == b"\r\n\r\n")?;
+    let head = std::str::from_utf8(&raw[..idx]).ok()?;
+    let code = head.lines().next()?.split_whitespace().nth(1)?;
+    if !code.starts_with('2') {
+        return None;
+    }
+    Some(&raw[idx + 4..])
+}
+
+fn send_simple_http_request(
+    scheme: &str,
+    host: &str,
+    port: u16,
+    req_bytes: &[u8],
+    timeout: Duration,
+) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    if scheme == "https" {
+        let tcp = if let Some(proxy) = proxy_for(host) {
+            connect_via_proxy(&proxy, host, port, timeout).ok()?
+        } else {
+            connect_tcp_timeout(host, port, timeout).ok()?
+        };
+        let sname = ServerName::try_from(host.to_string()).ok()?;
+        let tls_cfg = make_upstream_tls_config();
+        let conn = ClientConnection::new(tls_cfg, sname).ok()?;
+        let mut tls = StreamOwned::new(conn, tcp);
+        tls.write_all(req_bytes).ok()?;
+        tls.flush().ok()?;
+        let _ = tls.read_to_end(&mut out);
+    } else {
+        let mut tcp = connect_tcp_timeout(host, port, timeout).ok()?;
+        tcp.write_all(req_bytes).ok()?;
+        tcp.flush().ok()?;
+        let _ = tcp.read_to_end(&mut out);
+    }
+    Some(out)
+}
+
 pub fn obtain_azure_bearer_token(explicit: Option<&str>, resource: &str) -> Result<String, String> {
     if let Some(tok) = explicit.map(|s| s.trim()).filter(|s| !s.is_empty()) {
         return Ok(tok.to_string());
@@ -2580,6 +3036,9 @@ pub fn obtain_azure_bearer_token(explicit: Option<&str>, resource: &str) -> Resu
         if !t.is_empty() {
             return Ok(t.to_string());
         }
+    }
+    if let Some(native_tok) = try_obtain_azure_env_or_imds_token(resource) {
+        return Ok(native_tok);
     }
     let out = Command::new("az")
         .args([
@@ -2697,6 +3156,16 @@ pub fn query_azure_logs_with_resilience(
                 }
             }
             if is_result_set_too_large(status, &err_body) {
+                if let Some((kql_older, kql_newer)) = split_kql_window_halves(kql) {
+                    if let (Ok(b1), Ok(b2)) = (
+                        execute_query_with_retries(&full_url, bearer_token, &kql_older),
+                        execute_query_with_retries(&full_url, bearer_token, &kql_newer),
+                    ) {
+                        if let Some(merged) = merge_log_analytics_tables(&b1, &b2) {
+                            return Ok((merged, false));
+                        }
+                    }
+                }
                 if !kql.contains("| take ") {
                     let capped_kql = format!("{kql}\n| take 20000");
                     if let Ok(capped_body) =
@@ -2715,6 +3184,58 @@ pub fn query_azure_logs_with_resilience(
             Err(classify_azure_error(status, &err_body))
         }
     }
+}
+
+fn split_kql_window_halves(kql: &str) -> Option<(String, String)> {
+    // Splits `ago(24h)` or `ago(120m)` into two non-overlapping half windows.
+    let needle = "ago(";
+    let start = kql.find(needle)? + needle.len();
+    let end = start + kql[start..].find(')')?;
+    let spec = kql[start..end].trim();
+    let mins: i64 = if let Some(d) = spec.strip_suffix('d') {
+        d.parse::<i64>().ok()? * 1440
+    } else if let Some(h) = spec.strip_suffix('h') {
+        h.parse::<i64>().ok()? * 60
+    } else if let Some(m) = spec.strip_suffix('m') {
+        m.parse::<i64>().ok()?
+    } else {
+        return None;
+    };
+    if mins < 4 {
+        return None;
+    }
+    let half = mins / 2;
+    let target_expr = format!("ago({spec})");
+    let older = kql.replacen(
+        &format!("> {target_expr}"),
+        &format!("between ({target_expr} .. ago({half}m))"),
+        1,
+    );
+    let newer = kql.replacen(&target_expr, &format!("ago({half}m)"), 1);
+    if older == kql || newer == kql {
+        return None;
+    }
+    Some((older, newer))
+}
+
+fn merge_log_analytics_tables(b1: &str, b2: &str) -> Option<String> {
+    let mut v1: Value = serde_json::from_str(b1).ok()?;
+    let v2: Value = serde_json::from_str(b2).ok()?;
+    let r2 = v2
+        .get("tables")
+        .and_then(|t| t.as_array())
+        .and_then(|a| a.first())
+        .and_then(|t0| t0.get("rows"))
+        .and_then(|r| r.as_array())?
+        .clone();
+    let rows1 = v1
+        .get_mut("tables")
+        .and_then(|t| t.as_array_mut())
+        .and_then(|a| a.first_mut())
+        .and_then(|t0| t0.get_mut("rows"))
+        .and_then(|r| r.as_array_mut())?;
+    rows1.extend(r2);
+    serde_json::to_string(&v1).ok()
 }
 
 fn execute_query_with_retries(

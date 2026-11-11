@@ -23,6 +23,14 @@ const HANDLED_VARS: &[&str] = &[
     "OPENAI_BASE_URL",
     "ANTHROPIC_BASE_URL",
     "AZURE_OPENAI_ENDPOINT",
+    "GOOGLE_GEMINI_BASE_URL",
+    "GEMINI_BASE_URL",
+    "OPENROUTER_BASE_URL",
+    "MISTRAL_BASE_URL",
+    "DEEPSEEK_BASE_URL",
+    "XAI_BASE_URL",
+    "GROQ_BASE_URL",
+    "COHERE_BASE_URL",
 ];
 
 const LLM_NAME_TOKENS: &[&str] = &[
@@ -209,6 +217,26 @@ pub fn build_routes(
         }
     }
 
+    const OPTIONAL_PROVIDER_DEFAULTS: &[(&str, &str, &str)] = &[
+        ("GOOGLE_GEMINI_BASE_URL", "/gemini", "https://generativelanguage.googleapis.com"),
+        ("GEMINI_BASE_URL", "/gemini_alt", "https://generativelanguage.googleapis.com"),
+        ("OPENROUTER_BASE_URL", "/openrouter/api/v1", "https://openrouter.ai/api/v1"),
+        ("MISTRAL_BASE_URL", "/mistral", "https://api.mistral.ai"),
+        ("DEEPSEEK_BASE_URL", "/deepseek", "https://api.deepseek.com"),
+        ("XAI_BASE_URL", "/xai/v1", "https://api.x.ai/v1"),
+        ("GROQ_BASE_URL", "/groq/openai/v1", "https://api.groq.com/openai/v1"),
+        ("COHERE_BASE_URL", "/cohere", "https://api.cohere.com"),
+    ];
+    for &(var_name, prefix_base, _default_url) in OPTIONAL_PROVIDER_DEFAULTS {
+        if let Some(custom_val) = env_map.get(var_name).filter(|s| !s.is_empty()) {
+            let (_, _, _, p) = parse_url_parts(custom_val);
+            let path = p.trim_end_matches('/');
+            let prefix = format!("{prefix_base}{path}");
+            routes.push(Route::from_urls(&prefix, custom_val));
+            overrides.insert(var_name.to_string(), format!("http://127.0.0.1:{{port}}{prefix}"));
+        }
+    }
+
     let auto = auto_opt.unwrap_or_else(|| {
         env_map.get("TOKPROF_NO_AUTO_ENV").map(|s| s.as_str()) != Some("1")
     });
@@ -281,6 +309,26 @@ pub fn hook_env(
     out.insert("TOKPROF_TOKEN".to_string(), token.to_string());
     out.insert("PYTHONPATH".to_string(), py_path);
     out.insert("NODE_OPTIONS".to_string(), node_opts);
+    if base_env
+        .get("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true)
+    {
+        out.insert(
+            "OTEL_EXPORTER_OTLP_ENDPOINT".to_string(),
+            format!("http://127.0.0.1:{port}"),
+        );
+        if base_env
+            .get("OTEL_EXPORTER_OTLP_PROTOCOL")
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true)
+        {
+            out.insert(
+                "OTEL_EXPORTER_OTLP_PROTOCOL".to_string(),
+                "http/json".to_string(),
+            );
+        }
+    }
     out
 }
 
@@ -362,6 +410,22 @@ pub fn run_profiled(
     }
     child_env.insert("TOKPROF_ACTIVE".to_string(), "1".to_string());
 
+    if !quiet && hooks {
+        let prog = std::path::Path::new(&cmd[0])
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        if prog.starts_with("python")
+            && cmd[1..]
+                .iter()
+                .take_while(|a| a.starts_with('-'))
+                .any(|a| a == "-I" || a == "-E")
+        {
+            eprintln!(
+                "tokprof: note: Python -I/-E ignores PYTHONPATH so in-process hooks will not load; base-URL gateway routing remains active"
+            );
+        }
+    }
     if !quiet {
         let mut how = Vec::new();
         if gateway_env {

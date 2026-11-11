@@ -105,9 +105,16 @@ func (a *Assembler) Feed(pid uint32, comm string, ssl uint64, dir int, data []by
 		if len(a.conns) >= maxConns {
 			a.Sweep(now)
 			if len(a.conns) >= maxConns {
-				for ok := range a.conns {
-					delete(a.conns, ok)
-					break
+				var oldestKey key
+				var oldestTime time.Time
+				first := true
+				for ok, oc := range a.conns {
+					if first || oc.lastAt.Before(oldestTime) {
+						oldestKey, oldestTime, first = ok, oc.lastAt, false
+					}
+				}
+				if !first {
+					delete(a.conns, oldestKey)
 				}
 			}
 		}
@@ -239,11 +246,6 @@ func (a *Assembler) flush(k key, c *conn) {
 	if a.OnDone != nil {
 		defer a.OnDone(k.pid, k.ssl)
 	}
-	if wDamaged {
-		a.Stats.Incomplete++
-		return
-	}
-
 	rh, rbody, ok := splitMessage(req)
 	if !ok {
 		a.Stats.Incomplete++
@@ -255,11 +257,23 @@ func (a *Assembler) flush(k key, c *conn) {
 		return
 	}
 	body, complete := decodeBody(rh, rbody)
-	if !complete {
-		a.Stats.Incomplete++
-		return
+	if wDamaged || !complete {
+		// Salvage uncompressed truncated JSON requests (>256 KiB single SSL_write) so tokprof can repair & decompose them.
+		if rh.get("content-encoding") == "" && rh.get("transfer-encoding") == "" && len(rbody) >= 16 {
+			trimmed := bytes.TrimSpace(rbody)
+			if len(trimmed) > 0 && trimmed[0] == '{' {
+				body = trimmed
+			} else {
+				a.Stats.Incomplete++
+				return
+			}
+		} else {
+			a.Stats.Incomplete++
+			return
+		}
+	} else {
+		body = bytes.TrimSpace(body)
 	}
-	body = bytes.TrimSpace(body)
 	if !Plausible(method, path, body) {
 		a.Stats.Ignored++
 		return
@@ -276,14 +290,18 @@ func (a *Assembler) flush(k key, c *conn) {
 		ex.TTFBMs = float64(firstResp.Sub(reqAt).Microseconds()) / 1000
 		ex.LatencyMs = float64(lastRead.Sub(reqAt).Microseconds()) / 1000
 	}
-	if ph, pbody, ok := splitMessage(resp); ok && !rDamaged {
+	if ph, pbody, ok := splitMessage(resp); ok {
 		ex.Status = statusCode(ph.start)
 		ex.SSE = strings.Contains(ph.get("content-type"), "text/event-stream")
-		text, _ := decodeBody(ph, pbody)
-		if text == nil && len(pbody) > 0 {
-			a.Stats.Unreadable++
+		if !rDamaged {
+			text, _ := decodeBody(ph, pbody)
+			if text == nil && len(pbody) > 0 {
+				a.Stats.Unreadable++
+			}
+			ex.Response = string(text)
+		} else if ph.get("content-encoding") == "" && ph.get("transfer-encoding") == "" {
+			ex.Response = string(pbody)
 		}
-		ex.Response = string(text)
 	}
 	a.Stats.Exchanges++
 	a.emit(ex)

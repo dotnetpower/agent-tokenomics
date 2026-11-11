@@ -62,17 +62,23 @@ COMMANDS
   ebpf       Linux: capture LLM calls (HTTPS & plain HTTP/h2c) of running processes via eBPF
   mitm       Windows/macOS/Linux: capture LLM calls via mitmproxy (--local or --mode)
   pull       Pull LLM calls from Azure Application Insights / Log Analytics (--workspace or --app-insights)
-  import     Import exported Application Insights, OpenTelemetry GenAI, APIM, or container logs into JSONL
-  compare    Compare two JSONL runs (input tokens/request and calls/request with 95% CI)
+  import     Import Application Insights, OTel GenAI/OTLP, Bedrock, Langfuse/LangSmith, or container logs
+  compare    Compare two JSONL runs (input, output, calls, latency, paired CI & --max-regression gate)
   export     Export records in the legacy examples/token_report.py JSONL schema
-  explain    Show how tokprof classifies a request URL + JSON body and why
-  doctor     Check environment capabilities (kernel BTF/uprobes, tokenizers, mitmproxy, Node)
+  explain    Show how tokprof classifies a request URL + JSON body and preview segments
+  clean      Remove older .jsonl/.jsonl.gz/.html/.csv artifacts in .tokprof/ (--keep N, default: 5)
+  doctor     Check environment capabilities (--json supported)
   selftest   Verify the full capture & decomposition pipeline against a local mock LLM
 
 GLOBAL & DETECTION OPTIONS
   -h, --help                 Show this detailed help message
-  -l, --lang {en,ko}         Help and UI language: 'en' (English) or 'ko' (Korean / 한국어)
+  -l, --lang {en,ko}         Help and report UI language: 'en' (English) or 'ko' (Korean / 한국어)
   --version                  Show tokprof version
+  --session-name NAME        Isolate background start/status/stop state for parallel experiments
+  --upstream-timeout DUR     Socket timeout for slow reasoning models (default: 600s; e.g. 15m, 1800s)
+  --prices {auto,FILE}       Estimate USD cost using built-in model rates ('auto') or a custom JSON file
+  --redact-pii               Also redact email addresses, phone numbers, and national ID patterns
+  --redact-pattern REGEX     Additional custom regex to redact from stored prompt/response texts
   --llm-host HOST[:PORT]     Force matching hosts (glob or CIDR) to be treated as LLM endpoints
   --llm-path REGEX           Force matching URL paths to be treated as LLM endpoints
   --exclude-host HOST[:PORT] Never treat matching hosts as LLM endpoints
@@ -146,17 +152,23 @@ pub const HELP_KO: &str = "\
   ebpf       Linux: 재시작 없이 실행 중인 프로세스의 TLS/평문 HTTP 호출을 eBPF로 직접 캡처
   mitm       Windows/macOS/Linux: mitmproxy를 통한 프로세스별 로컬 캡처 (--local 또는 --mode)
   pull       Azure Application Insights / Log Analytics에서 배포된 에이전트 로그를 직접 조회·분석
-  import     내보낸 Application Insights, OpenTelemetry GenAI, APIM, 컨테이너 로그 파일을 JSONL로 변환
-  compare    개선 전(before)과 후(after) 두 JSONL 실행의 요청당 토큰·호출 수 변화 검증
+  import     Application Insights, OTel/OTLP, Bedrock, Langfuse/LangSmith, 컨테이너 로그를 JSONL로 변환
+  compare    개선 전·후 두 JSONL 실행의 토큰·출력·지연시간·에러율 검증 및 CI 게이트(--max-regression)
   export     examples/token_report.py 호환 JSONL 스키마로 내보내기
-  explain    특정 URL과 요청 본문이 LLM 호출로 판정되는지(또는 제외되는지) 점수와 이유 설명
-  doctor     현재 머신의 커널 eBPF/BTF, 토크나이저, Node, mitmproxy 지원 상태 점검
+  explain    특정 URL과 요청 본문의 LLM 판정 점수·이유 및 세그먼트 미리보기 출력
+  clean      .tokprof/ 내 오래된 아티팩트 정리 (--keep N, 기본 최근 5개 유지)
+  doctor     현재 머신의 커널 eBPF/BTF, 토크나이저, Node, mitmproxy 지원 상태 점검 (--json 지원)
   selftest   내장 모의(mock) LLM 서버로 캡처·분해 파이프라인 전체 자동 검증
 
 공통 및 감지 옵션 (GLOBAL & DETECTION OPTIONS)
   -h, --help                 상세 도움말 및 사용 예시 출력
-  -l, --lang {en,ko}         도움말 언어 선택: 'en'(영어) 또는 'ko'(한국어)
+  -l, --lang {en,ko}         도움말 및 리포트 UI 언어 선택: 'en'(영어) 또는 'ko'(한국어)
   --version                  버전 출력
+  --session-name NAME        병렬 실험을 위한 백그라운드 세션 상태 격리
+  --upstream-timeout DUR     장시간 추론 모델을 위한 업스트림 타임아웃 (기본값: 600s; 예: 15m)
+  --prices {auto,FILE}       내장 모델 단가표('auto') 또는 사용자 JSON 단가표로 예상 비용 산출
+  --redact-pii               이메일·전화번호 등 개인식별정보(PII) 추가 마스킹
+  --redact-pattern REGEX     사용자 지정 정규식 패턴 추가 마스킹
   --llm-host HOST[:PORT]     지정한 호스트(와일드카드 또는 CIDR)를 LLM 엔드포인트로 강제 인식
   --llm-path REGEX           정규식과 일치하는 경로를 LLM 엔드포인트로 강제 인식
   --exclude-host HOST[:PORT] 지정한 호스트를 캡처 대상에서 제외
@@ -190,10 +202,32 @@ pub fn subcommand_help_ko(subcmd: &str) -> Option<&'static str> {
         "mitm" => Some("mitmproxy를 사용해 선택된 프로세스의 LLM 호출을 캡처합니다 (Windows/macOS/Linux).\n  예시:\n    tokprof mitm --trust-help\n    tokprof mitm --local python,node --report"),
         "pull" => Some("Azure Application Insights 또는 Log Analytics 워크스페이스에서 배포된 에이전트의 LLM 호출 로그를 가져와 세그먼트 분해 및 리포트를 생성합니다.\n  예시:\n    tokprof pull --workspace <WORKSPACE_ID> --since 24h\n    tokprof pull --app-insights <APP_ID> --since 2h --conv <OPERATION_ID>\n    tokprof pull --print-kql --since 6h"),
         "import" => Some("Application Insights, OpenTelemetry GenAI, APIM, 또는 컨테이너 로그([TOKPROF_CHUNK]) 파일을 tokprof JSONL로 변환하고 분석합니다.\n  예시:\n    tokprof import appinsights_export.json --report\n    tokprof import container_stdout.log --out .tokprof/run.jsonl --report"),
-        "compare" => Some("최적화 전(before)과 후(after) 두 실행 기록을 95% 부트스트랩 신뢰구간으로 비교합니다.\n  예시:\n    tokprof compare before.jsonl after.jsonl"),
-        "explain" => Some("특정 URL과 요청 본문 JSON이 어떻게 분류되는지 점수와 판정 이유를 설명합니다.\n  예시:\n    tokprof explain http://vllm.internal:8000/v1/chat/completions --body req.json"),
-        "doctor" => Some("현재 환경의 토크나이저, Linux eBPF 커널 지원, mitmproxy 설치 여부를 점검합니다."),
-        "selftest" => Some("로컬 모의(mock) LLM 서버를 띄워 게이트웨이·분해 파이프라인 전체를 자체 검증합니다."),
+        "compare" => Some("최적화 전(before)과 후(after) 두 실행 기록을 95% 부트스트랩 신뢰구간(대응표본 자동 감지)으로 비교합니다.\n  예시:\n    tokprof compare before.jsonl after.jsonl --max-regression 5"),
+        "explain" => Some("특정 URL과 요청 본문 JSON이 어떻게 분류되는지 점수와 세그먼트 분해 미리보기를 출력합니다.\n  예시:\n    tokprof explain http://vllm.internal:8000/v1/chat/completions --body req.json"),
+        "clean" => Some(".tokprof/ 폴더의 오래된 기록(.jsonl, .jsonl.gz, .html, .csv)을 정리합니다 (활성 세션 보호).\n  예시:\n    tokprof clean --keep 5"),
+        "doctor" => Some("현재 환경의 토크나이저, Linux eBPF 커널 지원, mitmproxy 설치 여부를 점검합니다 (--json 지원)."),
+        "selftest" => Some("로컬 모의(mock) LLM 서버를 띄워 게이트웨이·OTLP·분해 파이프라인 전체를 자체 검증합니다."),
+        _ => None,
+    }
+}
+
+pub fn subcommand_help_en(subcmd: &str) -> Option<&'static str> {
+    match subcmd {
+        "start" => Some("Start a background profiling session (auto-attaches eBPF on Linux; supports --duration 30m|unlimited and --session-name NAME).\n  Examples:\n    tokprof start\n    tokprof start --comm fdai --duration 30m"),
+        "stop" => Some("Stop the active background session, print the terminal report, and write .tokprof/latest.{html,csv}.\n  Examples:\n    tokprof stop\n    tokprof stop --prices auto"),
+        "status" => Some("Show active background session health and recorded LLM call count (--json supported).\n  Examples:\n    tokprof status\n    tokprof status --json"),
+        "profile" => Some("Run a command or attach to --pid/--comm in one step and emit terminal + HTML/CSV reports.\n  Examples:\n    tokprof profile -- python my_agent.py\n    tokprof profile --comm python,node --duration 60s"),
+        "report" => Some("Render a recorded .jsonl or .jsonl.gz run across pretty, text, html, csv, md, or json formats.\n  Examples:\n    tokprof report --prices auto\n    tokprof report --watch\n    tokprof report --format md --lang ko"),
+        "run" => Some("Run a command with LLM base URLs, OTLP HTTP endpoint, and Python/Node hooks routed through the local gateway.\n  Examples:\n    tokprof run --report --prices auto -- python agent.py"),
+        "ebpf" => Some("Linux: capture HTTPS (OpenSSL, Go crypto/tls) and plain HTTP/h2c LLM calls of running processes.\n  Examples:\n    tokprof ebpf --comm my_agent --report"),
+        "mitm" => Some("Capture LLM calls via mitmproxy on Windows, macOS, or Linux.\n  Examples:\n    tokprof mitm --trust-help\n    tokprof mitm --local python,node --report"),
+        "pull" => Some("Pull LLM calls from Azure Application Insights / Log Analytics (supports az CLI, Service Principal env, and Managed Identity).\n  Examples:\n    tokprof pull --workspace <WORKSPACE_ID> --since 24h --report"),
+        "import" => Some("Import Application Insights, OTel/OTLP, AWS Bedrock Invocation Logs, Langfuse/LangSmith, or container logs.\n  Examples:\n    tokprof import traces.json --out .tokprof/run.jsonl.gz --report"),
+        "compare" => Some("Compare before vs. after runs with 95% bootstrap CI (auto-paired by session) and optional CI gate.\n  Examples:\n    tokprof compare before.jsonl after.jsonl --max-regression 5"),
+        "explain" => Some("Explain why a URL + JSON body is classified as an LLM call and preview its segment token counts.\n  Examples:\n    tokprof explain https://vllm.internal:8000/v1/chat/completions --body req.json"),
+        "clean" => Some("Delete older .jsonl/.jsonl.gz/.html/.csv artifacts in .tokprof/ while keeping the most recent N files (default: 5).\n  Examples:\n    tokprof clean --keep 5"),
+        "doctor" => Some("Check platform capabilities (tokenizers, Linux eBPF/BTF/CAP_BPF, mitmproxy, Node, Azure auth; --json supported)."),
+        "selftest" => Some("Run end-to-end verification against an in-process mock LLM and OTLP trace span."),
         _ => None,
     }
 }
@@ -205,6 +239,12 @@ pub fn render_detailed_help(lang: Option<&str>, subcmd: Option<&str>) -> String 
             format!("[한국어 설명 — tokprof {sc}]\n  {desc}\n")
         } else {
             HELP_KO.to_string()
+        }
+    } else if let Some(sc) = subcmd {
+        if let Some(desc) = subcommand_help_en(sc) {
+            format!("[tokprof {sc}]\n  {desc}\n")
+        } else {
+            HELP_EN.to_string()
         }
     } else if loc == "ko" {
         HELP_KO.to_string()
