@@ -70,7 +70,7 @@ When testing token optimizations (such as `/compact`, observation masking, or to
 To let engineers, PMs, and domain experts edit and review test cases together in Microsoft Excel without wrestling with nested JSON, use **one row per evaluated turn** in an `.xlsx` workbook and group multi-turn dialogues by `session_id` and `turn_index` (`1..5`):
 
 - **Download the actual Excel workbook (2 sheets: `Golden_Dataset` 16 rows + `Rubric_Criteria` guide)**:
-  - [📥 Download `sample-golden-dataset.xlsx` (Excel Workbook)](https://github.com/dotnetpower/agent-tokenomics/raw/main/examples/sample-golden-dataset.xlsx) · [Open local demo `.xlsx`](/demo/sample-golden-dataset.xlsx)
+  - [📥 Download `sample-golden-dataset.xlsx` (Excel Workbook)](https://github.com/dotnetpower/agent-tokenomics/raw/main/examples/sample-golden-dataset.xlsx)
   - [📥 Download `sample-golden-dataset.csv` (UTF-8 BOM CSV)](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/sample-golden-dataset.csv) · [Generator & grader `golden_dataset_tool.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/golden_dataset_tool.py)
 
 | Column name | Format | Purpose & example |

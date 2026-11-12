@@ -70,7 +70,7 @@ sidebar:
 엔지니어와 도메인 담당자(기획·QA·현업)가 함께 골든 데이터셋을 관리할 때는 중첩된 JSON보다 **엑셀 통합 문서(`.xlsx`)의 표(1행 = 평가 턴 1건, 같은 대화는 동일한 `session_id`에 `turn_index` 1~5로 연결)** 형태가 훨씬 효율적입니다.
 
 - **실제 엑셀 파일 다운로드 (시트 2개: `Golden_Dataset` 16행 + `Rubric_Criteria` 루브릭 기준표)**:
-  - [📥 `sample-golden-dataset.xlsx` 다운로드 (Excel 통합 문서)](https://github.com/dotnetpower/agent-tokenomics/raw/main/examples/sample-golden-dataset.xlsx) · [로컬 데모 파일 열기](/demo/sample-golden-dataset.xlsx)
+  - [📥 `sample-golden-dataset.xlsx` 다운로드 (Excel 통합 문서)](https://github.com/dotnetpower/agent-tokenomics/raw/main/examples/sample-golden-dataset.xlsx)
   - [📥 `sample-golden-dataset.csv` 다운로드 (UTF-8 BOM CSV)](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/sample-golden-dataset.csv) · [생성·채점 스크립트 `golden_dataset_tool.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/golden_dataset_tool.py)
 
 | 열 이름 (Column) | 입력 형식 | 설명 및 작성 요령 |
