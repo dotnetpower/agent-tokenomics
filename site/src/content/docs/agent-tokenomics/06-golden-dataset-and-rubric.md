@@ -176,6 +176,55 @@ Decision           : KEEP (Quality held & tokens reduced)
 
 ---
 
+## 6. Example: draft a Golden Dataset from prompts captured with `tokprof`
+
+Writing `user_input`, `prior_turns_context` and `baseline_response` by hand is slow and error-prone. If the agent already runs, [`tokprof`](../tokprof/) records the exact (secret-redacted) prompts and answers of a real run, so you only add the judgment: what a correct answer must contain.
+
+| Step | Who | Action | Output |
+|------|-----|--------|--------|
+| 1 | Engineer | Run one realistic scenario with the **baseline** agent under `tokprof`, then export prompts to CSV | `baseline-run.csv` |
+| 2 | Script | Convert it to one row per user turn: history, user input, baseline answer, baseline tokens | `draft.csv` |
+| 3 | Domain owner | Review each row: confirm or edit `must_include_all`, add `must_include_any` / `must_not_include` / `expected_tools`, write `expected_intent` | reviewed dataset |
+| 4 | Engineer | Apply **one** fix from Stage 4, replay the **same** user inputs, export again, and merge the new answers by `case_id` | `golden.csv` |
+| 5 | Judge | Score both answers with the 10-point rubric (section 4) and run `--eval` | PASS / FAIL and token delta |
+
+```bash
+# 1. Capture the baseline run (any OS, any language) and export the prompts
+tokprof -- python my_agent.py
+tokprof report --csv            # writes .tokprof/latest.csv (or: --format csv --out baseline-run.csv)
+
+# 2. Build the draft dataset (one row per user turn)
+python3 examples/tokprof_to_golden.py baseline-run.csv -o draft.csv
+
+# 3. Edit draft.csv (or open it in Excel), then apply one fix and capture the same scenario again
+tokprof -- python my_agent.py
+python3 examples/tokprof_to_golden.py candidate-run.csv --merge draft.csv -o golden.csv
+
+# 4. Print the judge prompt for a row, score both answers, then evaluate
+python3 examples/golden_dataset_tool.py --print-judge-prompt S1-T2
+python3 examples/golden_dataset_tool.py --eval golden.csv
+```
+
+What [`examples/tokprof_to_golden.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/tokprof_to_golden.py) does with the `tokprof` CSV (`row_type=call` rows):
+
+| `tokprof` column | Golden Dataset column | Note |
+|------------------|-----------------------|------|
+| `session` + `turn` | `case_id` (`S1-T2`), `session_id`, `turn_index` | `tokprof` groups calls into turns by idle gap, so make sure each scenario step is a separate turn |
+| `conversation_history` | `prior_turns_context` | Fixed history for Pinned-History Slicing (Mode A) |
+| `user_prompt` (first call of the turn) | `user_input` | |
+| `assistant_response` (last call of the turn) | `baseline_response` / `candidate_response` | The final answer, not intermediate tool-call rounds |
+| `input_total` + `output_tokens`, summed over all calls of the turn | `baseline_tokens` / `candidate_tokens` | Every call in the agent loop is billed, so the turn total is the cost |
+| number-like tokens in the answer (for example `4567891230`) | `must_include_all` (**suggestion**) | Confirm each one; delete values that vary between runs |
+
+**Rules for using captured data**
+
+- A captured answer is the baseline's *behavior*, not the *truth*. A baseline that was wrong would become the golden answer, so a human must verify `expected_intent` and `must_*` against the real requirement before relying on the row.
+- `tokprof` redacts secrets by default, but it does not remove personal data such as names or order numbers. Redact or replace them (and consider `tokprof` prompt-omission modes) before the CSV leaves your machine.
+- The generated `rubric_score` columns stay empty and count as `0`, so every row shows `FAIL` until the judge fills in both scores. The `Decision` line is only meaningful after that.
+- Replay the same inputs for the candidate run; when the agent decides its own follow-up questions, use Mode B (`pass^k`) from section 2.
+
+---
+
 ## Further reading (papers)
 
 - [Cost-of-Pass: An Economic Framework for Evaluating Language Models](https://arxiv.org/abs/2504.13359) — preprint 2025. Evaluates models by expected cost per successful task (`Cost-of-Pass`) rather than per-call price alone.

@@ -178,6 +178,55 @@ Decision           : KEEP (Quality held & tokens reduced)
 
 ---
 
+## 6. 예시: `tokprof`로 추출한 프롬프트로 골든 데이터셋 초안 만들기
+
+`user_input`, `prior_turns_context`, `baseline_response`를 손으로 채우는 일은 느리고 오류가 잘 납니다. 에이전트가 이미 동작하고 있다면 [`tokprof`](../tokprof/)가 실제 실행의 프롬프트와 응답(비밀값은 마스킹)을 그대로 기록하므로, 사람은 "정답이라면 무엇이 들어 있어야 하는가"라는 판단만 추가하면 됩니다.
+
+| 단계 | 담당 | 작업 | 산출물 |
+|------|------|------|--------|
+| 1 | 엔지니어 | **baseline** 에이전트로 대표 시나리오 1개를 `tokprof` 아래에서 실행하고 프롬프트를 CSV로 내보냅니다 | `baseline-run.csv` |
+| 2 | 스크립트 | 사용자 턴당 1행으로 변환합니다 (이전 대화, 사용자 입력, baseline 응답, baseline 토큰) | `draft.csv` |
+| 3 | 도메인 담당자 | 행마다 `must_include_all` 후보를 확정·수정하고, `must_include_any` / `must_not_include` / `expected_tools`를 추가하고, `expected_intent`를 작성합니다 | 검수된 데이터셋 |
+| 4 | 엔지니어 | 4단계 개선안을 **하나만** 적용하고 **같은** 사용자 입력으로 다시 실행해 내보낸 뒤, `case_id` 기준으로 새 응답을 병합합니다 | `golden.csv` |
+| 5 | 채점 | 4장의 10점 루브릭으로 두 응답을 채점하고 `--eval`을 실행합니다 | PASS / FAIL 및 토큰 증감 |
+
+```bash
+# 1. baseline 실행을 캡처하고 프롬프트를 CSV로 내보내기 (OS·언어 무관)
+tokprof -- python my_agent.py
+tokprof report --csv            # .tokprof/latest.csv 생성 (또는: --format csv --out baseline-run.csv)
+
+# 2. 초안 데이터셋 생성 (사용자 턴당 1행)
+python3 examples/tokprof_to_golden.py baseline-run.csv -o draft.csv
+
+# 3. draft.csv를 편집(엑셀로 열어도 됨)한 뒤, 개선안 1개를 적용하고 같은 시나리오를 다시 캡처
+tokprof -- python my_agent.py
+python3 examples/tokprof_to_golden.py candidate-run.csv --merge draft.csv -o golden.csv
+
+# 4. 특정 행의 Judge 프롬프트를 출력해 두 응답을 채점한 뒤 평가
+python3 examples/golden_dataset_tool.py --print-judge-prompt S1-T2
+python3 examples/golden_dataset_tool.py --eval golden.csv
+```
+
+[`examples/tokprof_to_golden.py`](https://github.com/dotnetpower/agent-tokenomics/blob/main/examples/tokprof_to_golden.py)가 `tokprof` CSV(`row_type=call` 행)를 변환하는 규칙입니다.
+
+| `tokprof` 열 | 골든 데이터셋 열 | 비고 |
+|--------------|------------------|------|
+| `session` + `turn` | `case_id`(`S1-T2`), `session_id`, `turn_index` | `tokprof`는 유휴 시간 간격으로 호출을 턴으로 묶으므로 시나리오 단계마다 턴이 나뉘도록 실행해야 합니다 |
+| `conversation_history` | `prior_turns_context` | 고정 이전 대화 (방식 A: 이전 대화 고정 슬라이싱) |
+| `user_prompt` (턴의 첫 호출) | `user_input` | |
+| `assistant_response` (턴의 마지막 호출) | `baseline_response` / `candidate_response` | 도구 호출 중간 단계가 아닌 최종 답변 |
+| 턴 내 모든 호출의 `input_total` + `output_tokens` 합계 | `baseline_tokens` / `candidate_tokens` | 에이전트 루프의 모든 호출이 과금되므로 턴 합계가 비용입니다 |
+| 응답 속 숫자형 토큰 (예: `4567891230`) | `must_include_all` (**제안값**) | 하나씩 확인하고, 실행마다 달라지는 값은 삭제합니다 |
+
+**캡처 데이터 사용 시 규칙**
+
+- 캡처된 응답은 baseline의 *동작*일 뿐 *정답*이 아닙니다. baseline이 틀렸다면 그대로 정답이 되어 버리므로, 실제 요구사항을 기준으로 사람이 `expected_intent`와 `must_*`를 검증한 뒤에 사용합니다.
+- `tokprof`는 비밀값을 기본으로 마스킹하지만 이름·주문번호 같은 개인정보는 제거하지 않습니다. CSV를 외부로 내보내기 전에 치환하거나 마스킹하고, 필요하면 `tokprof`의 프롬프트 제외 모드도 검토합니다.
+- 생성된 `rubric_score` 열은 비어 있어 `0`으로 계산되므로, 채점자가 두 점수를 채우기 전까지 모든 행이 `FAIL`로 표시됩니다. `Decision` 줄도 그 이후에만 의미가 있습니다.
+- candidate 실행에서도 같은 입력을 재생해야 합니다. 에이전트가 후속 질문을 스스로 결정하는 경우에는 2장의 방식 B(`pass^k`)를 사용합니다.
+
+---
+
 ## 관련 연구(논문)
 
 - [Cost-of-Pass: An Economic Framework for Evaluating Language Models](https://arxiv.org/abs/2504.13359) — 프리프린트 2025. 단일 호출 비용이 아니라 성공한 작업 1건당 기대 비용(`Cost-of-Pass`)으로 모델을 평가합니다.
