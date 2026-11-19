@@ -29,6 +29,9 @@ sidebar:
 | micro-skill | 마이크로 스킬 | A short, confirmed repository fact stated at session start. |
 | failure loop | 실패 루프 | A turn repeatedly hitting the same failure. |
 | loop guard | 루프 가드 | Mechanism that detects a failure loop and redirects the agent once. |
+| backoff | 백오프 | Waiting longer between retries; a delay policy is separate from a limit on retry count. |
+| retrieval-augmented generation (RAG) | 검색 증강 생성 | Retrieving relevant material to include in a model request as evidence. |
+| request trace | 요청 추적 | Linked records showing the model calls, tool calls, retries, and outcome of one user request. |
 | turn | 턴 | The agent's work on one user prompt. |
 | baseline | 기준선 | The measured starting point to compare against. |
 | subagent | 서브에이전트 | A separate agent run that keeps exploration out of the main conversation. |

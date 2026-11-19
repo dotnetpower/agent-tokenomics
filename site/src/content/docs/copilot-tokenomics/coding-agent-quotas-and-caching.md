@@ -12,6 +12,8 @@ sidebar:
 
 Coding agent subscriptions can drain faster than expected because **raw total tokens**, **API charges**, and **subscription quota deductions** are different measurements. This guide compares **GitHub Copilot** (VS Code · CLI · SDK), **OpenAI Codex** (CLI · IDE · Cloud), and **Claude Code** using official documentation.
 
+For agents you build or operate, use the [general LLM agent checklist](../../agent-tokenomics/#practical-checklist) to connect measurement, quality, and release evidence without making these product-specific controls mandatory.
+
 > **Written and verified as of 2026-11-19.** Prices, plan limits, supported models, and cache behavior can change. This is a review of public documentation, not an independent billing experiment. Check the linked original sources and your account's usage screen before making a purchasing or operating decision. API prices do not automatically describe subscription deductions.
 
 <a id="total-tokens-vs-cost-vs-quota"></a>

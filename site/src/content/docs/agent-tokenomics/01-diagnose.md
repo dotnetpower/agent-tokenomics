@@ -1,6 +1,6 @@
 ---
 created: 2026-11-03
-updated: 2026-11-06
+updated: 2026-11-19
 dateSource: git
 title: "1. Diagnose the current state"
 description: "LLM agent tokenomics Stage 1 (Diagnose): measure per-request input, cached, output, and reasoning tokens, fixed prompt overhead, and turn growth curves."
@@ -12,6 +12,8 @@ sidebar:
 ---
 
 **Goal:** a baseline you trust. Do not optimize yet.
+
+Collecting the baseline through a discussion? Use the [practical checklist](../#practical-checklist) to agree on evidence and quality gates without requiring a particular product.
 
 ## Symptoms
 
