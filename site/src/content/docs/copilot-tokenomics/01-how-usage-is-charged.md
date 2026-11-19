@@ -35,7 +35,7 @@ Cache behavior depends on model, harness, request layout, and retention. A model
 
 ## How to verify
 
-Record plan, client/version, harness, authentication, model, task success, and account readings. Compare request/session credits with the account meter; label missing categories **not exposed**, not zero. See [the full product comparison](../../agent-tokenomics/coding-agent-quotas-and-caching/).
+Record plan, client/version, harness, authentication, model, task success, and account readings. Compare request/session credits with the account meter; label missing categories **not exposed**, not zero. See [the full product comparison](../coding-agent-quotas-and-caching/).
 
 ## Trade-offs
 

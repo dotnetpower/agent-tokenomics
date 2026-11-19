@@ -8,7 +8,7 @@ const root = import.meta.env.BASE_URL.replace(/\/?$/, "/");
 
 <MarkdownContent>
   {entry?.data.created && (
-    <aside class="document-dates" aria-label={isKo ? "문서 날짜" : "Document dates"}>
+    <aside class="document-dates not-content" aria-label={isKo ? "문서 날짜" : "Document dates"}>
       <dl>
         <div>
           <dt>{entry.data.dateSource === "git"
@@ -49,9 +49,11 @@ const root = import.meta.env.BASE_URL.replace(/\/?$/, "/");
 
 <style is:global>
   .document-dates { font-size: .85rem; color: var(--sl-color-gray-2); margin-block: 1rem; }
-  .document-dates dl { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; }
-  .document-dates dl div { display: flex; flex-wrap: wrap; gap: .25rem .5rem; }
+  .document-dates dl { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem 1.5rem; margin: 0; }
+  .document-dates dl div { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .5rem; }
+  .document-dates dt { font-weight: 700; }
   .document-dates dd { margin: 0; }
+  .document-dates time { white-space: nowrap; font-variant-numeric: tabular-nums; }
   .answer-capsule { min-height: 8rem; contain: layout; padding: 1rem; border-inline-start: .25rem solid var(--sl-color-accent); margin-block: 1rem; }
   .answer-capsule dt { font-weight: 700; }
   .answer-capsule dd { margin-inline-start: 0; margin-block-end: .5rem; }

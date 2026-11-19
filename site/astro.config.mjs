@@ -47,6 +47,10 @@ export default defineConfig({
   site: SITE_URL,
   base: BASE_PATH,
   trailingSlash: "always",
+  redirects: {
+    "/agent-tokenomics/coding-agent-quotas-and-caching/": `${BASE_PATH.replace(/\/$/, "")}/copilot-tokenomics/coding-agent-quotas-and-caching/`,
+    "/ko/agent-tokenomics/coding-agent-quotas-and-caching/": `${BASE_PATH.replace(/\/$/, "")}/ko/copilot-tokenomics/coding-agent-quotas-and-caching/`,
+  },
   markdown: {
     remarkPlugins: [remarkCjkFriendly],
     rehypePlugins: [rehypeDocumentLinksNewTab],

@@ -60,6 +60,8 @@ Every page follows *Problem → Action → How to verify → Trade-offs*:
 - [10. Checklist](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/10-checklist/): One-page operational checklist prioritized by impact.
 - [cctx: VS Code Copilot Token Saver & Accelerator](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/cctx/): Install `dotnetpower.code-context-native` from the VS Code Marketplace to replace multi-turn `grep` + `view` loops with single-call block-clamped lookups (`#cctxNativeContext`, `#cctxNativeRead`), accelerate development speed (`15.20×` faster retrieval, `-61.9%` tool calls, `-26.7%` turns, `-24.7%` task wall time), and inspect live per-model AIC/USD savings in the VS Code status bar and `cctx usage --hours 24`.
 
+- [Coding Agent Token, Cache & Quota Anatomy (Copilot · Codex · Claude)](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/coding-agent-quotas-and-caching/): Why total tokens differ from API cost and subscription quotas, 2026 prompt-cache read/write multipliers, silent cache invalidators, and the 5-metric comparison standard.
+
 ## Track B — LLM Agent Token Troubleshooting
 
 Treat high agent token cost like a production incident — measure first and change one variable per experiment:
@@ -74,7 +76,6 @@ Treat high agent token cost like a production incident — measure first and cha
 - [06. Golden Dataset and Rubric Evaluation](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/06-golden-dataset-and-rubric/): Excel/CSV golden datasets, hybrid keyword + intent grading, and bias-resistant multi-turn rubrics (`examples/golden_dataset_tool.py`).
 - [tokprof: Install & Usage](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/tokprof/): Complete installation, CLI workflow, capture modes, and HTML Edition Dossier guide.
 - [Case Study: TokenEconomizer](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/case-tokeneconomizer/): How `microsoft/TokenEconomizer` maps to Stages 1–5.
-- [Coding Agent Token, Cache & Quota Anatomy (Claude · Copilot · Codex)](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/coding-agent-quotas-and-caching/): Why total tokens differ from API cost and subscription quotas, 2026 prompt-cache read/write multipliers, silent cache invalidators, and the 5-metric comparison standard.
 
 ## Reference & Research
 
@@ -88,11 +89,11 @@ Treat high agent token cost like a production incident — measure first and cha
 - [한국어 홈 (Korean Home)](https://dotnetpower.github.io/agent-tokenomics/ko/)
 - [트랙 A: Copilot 토큰 이코노믹스](https://dotnetpower.github.io/agent-tokenomics/ko/copilot-tokenomics/)
 - [cctx: VS Code Copilot 토큰 절감 및 개발 가속](https://dotnetpower.github.io/agent-tokenomics/ko/copilot-tokenomics/cctx/)
+- [코딩 에이전트 토큰·캐시·구독 한도 해부 (Copilot · Codex · Claude)](https://dotnetpower.github.io/agent-tokenomics/ko/copilot-tokenomics/coding-agent-quotas-and-caching/)
 - [트랙 B: 에이전트 토큰 이코노믹스](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/)
 - [tokprof: 설치 및 사용법](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/tokprof/)
 - [6. 골든 데이터셋과 루브릭 평가](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/06-golden-dataset-and-rubric/)
 - [사례 연구: TokenEconomizer](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/case-tokeneconomizer/)
-- [코딩 에이전트 토큰·캐시·구독 한도 해부 (Claude · Copilot · Codex)](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/coding-agent-quotas-and-caching/)
 - [리소스 (참고 자료)](https://dotnetpower.github.io/agent-tokenomics/ko/resources/)
 - [논문 75선](https://dotnetpower.github.io/agent-tokenomics/ko/papers/)
 - [용어집 (English ↔ 한국어)](https://dotnetpower.github.io/agent-tokenomics/ko/glossary/)

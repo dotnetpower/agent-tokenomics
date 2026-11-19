@@ -26,7 +26,7 @@ verified: 2026-11-19
 | 간결하지만 완전한 요청 | [프롬프트·출력](06-prompt-and-output-style/) · [언어·토큰화](07-language-and-tokenization/) |
 | 실행·도구 목록 제어 | [모드·예산](08-agent-modes-and-budget/) · [MCP 감사](09-mcp-audit/) |
 | 적용·재확인 | [체크리스트](10-checklist/) · [선택적 cctx 조회](cctx/) |
-| 다른 제품과 비교 | [Copilot·Codex·Claude Code 해부](../agent-tokenomics/coding-agent-quotas-and-caching/) |
+| 다른 제품과 비교 | [Copilot·Codex·Claude Code 해부](coding-agent-quotas-and-caching/) |
 
 ## 확인 방법
 

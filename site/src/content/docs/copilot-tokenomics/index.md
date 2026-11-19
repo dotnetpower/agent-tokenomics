@@ -26,7 +26,7 @@ The [2026-11-18 announcement](https://code.visualstudio.com/blogs/2026/11/18/cop
 | Keep concise but complete requests | [Prompt/output style](06-prompt-and-output-style/) · [Language/tokenization](07-language-and-tokenization/) |
 | Control execution and catalog size | [Modes/budgets](08-agent-modes-and-budget/) · [MCP audit](09-mcp-audit/) |
 | Apply and re-check | [Checklist](10-checklist/) · [Optional cctx retrieval](cctx/) |
-| Compare other products | [Copilot, Codex, Claude Code anatomy](../agent-tokenomics/coding-agent-quotas-and-caching/) |
+| Compare other products | [Copilot, Codex, Claude Code anatomy](coding-agent-quotas-and-caching/) |
 
 ## How to verify
 

@@ -76,6 +76,7 @@ tokprof --lang ko
 | 09 | [MCP 감사](https://dotnetpower.github.io/agent-tokenomics/ko/copilot-tokenomics/09-mcp-audit/) | 작업 영역별로 어떤 MCP 서버만 활성화해야 하나요? |
 | 10 | [체크리스트](https://dotnetpower.github.io/agent-tokenomics/ko/copilot-tokenomics/10-checklist/) | 세션 시작 전·중·후에 바로 점검할 수 있는 한 페이지 루틴은 무엇인가요? |
 | VSC | [`cctx`: VS Code 토큰 절감 및 개발 가속](https://dotnetpower.github.io/agent-tokenomics/ko/copilot-tokenomics/cctx/) | VS Code Marketplace에서 `cctx`를 설치해 탐색 토큰을 줄이고 개발 속도(탐색 `15.20배`, 작업 완료 `-24.7%`)와 실시간 AIC/USD 절감량을 확인하는 방법은? |
+| 해부 | [코딩 에이전트 토큰·캐시·구독 한도 해부 (Copilot · Codex · Claude)](https://dotnetpower.github.io/agent-tokenomics/ko/copilot-tokenomics/coding-agent-quotas-and-caching/) | 총토큰 vs API 비용 vs 구독 한도(Ultra/5h/주간), 캐시 읽기·쓰기 단가와 캐시 착시 비교 |
 
 ### 트랙 B — LLM 에이전트 토큰 문제 해결 (`ko/agent-tokenomics/`)
 
@@ -90,7 +91,6 @@ tokprof --lang ko
 | 06 | [골든 데이터셋과 루브릭 평가](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/06-golden-dataset-and-rubric/) | 단일 턴·멀티턴 품질 검증을 위한 엑셀(CSV) 골든 데이터셋과 키워드·의도 하이브리드 채점 |
 | 도구 | [`tokprof`: 설치 및 사용법](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/tokprof/) | eBPF, 로컬 게이트웨이, 프로세스 내부 훅을 통한 무수정 토큰 프로파일링 |
 | 사례 | [사례 연구: TokenEconomizer](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/case-tokeneconomizer/) | SWE-Bench 평균 비용을 18.4~30.9% 줄인 `microsoft/TokenEconomizer` 설계 분석 |
-| 해부 | [코딩 에이전트 토큰·캐시·구독 한도 해부 (Claude · Copilot · Codex)](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/coding-agent-quotas-and-caching/) | 총토큰 vs API 비용 vs 구독 한도(Ultra/5h/주간), 캐시 읽기·쓰기 단가와 캐시 착시 비교 |
 
 ### 참고 자료 및 연구
 

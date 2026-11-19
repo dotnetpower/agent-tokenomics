@@ -75,6 +75,7 @@ Every guide follows *Problem → Action → How to verify → Trade-offs*:
 | 09 | [MCP audit](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/09-mcp-audit/) | Which MCP servers should stay enabled per workspace? |
 | 10 | [Checklist](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/10-checklist/) | What is the one-page operational routine prioritized by impact? |
 | VSC | [`cctx`: VS Code Token Saver & Accelerator](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/cctx/) | How do I install `cctx` from the VS Code Marketplace to cut lookup tokens, speed up coding (`15.20×` retrieval, `-24.7%` task time), and see live AIC/USD savings? |
+| Deep | [Coding Agent Token, Cache & Quota Anatomy](https://dotnetpower.github.io/agent-tokenomics/copilot-tokenomics/coding-agent-quotas-and-caching/) | How Claude Code (Ultra), GitHub Copilot (AI Credits), and OpenAI Codex price prompt-cache reads/writes and enforce 5h/weekly quotas |
 
 ### Track B — LLM Agent Token Troubleshooting (`agent-tokenomics/`)
 
@@ -89,7 +90,6 @@ Every guide follows *Problem → Action → How to verify → Trade-offs*:
 | 06 | [Golden dataset and rubric evaluation](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/06-golden-dataset-and-rubric/) | Excel/CSV golden dataset and hybrid keyword + intent rubric for single/multi-turn evals |
 | CLI | [`tokprof`: Install & Usage](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/tokprof/) | Zero-code per-call token profiling via eBPF, local gateway, and in-process hooks |
 | Case | [Case study: TokenEconomizer](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/case-tokeneconomizer/) | How `microsoft/TokenEconomizer` (18.4–30.9% lower mean SWE-Bench cost) maps to Stages 1–5 |
-| Deep | [Coding Agent Token, Cache & Quota Anatomy](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/coding-agent-quotas-and-caching/) | How Claude Code (Ultra), GitHub Copilot (AI Credits), and OpenAI Codex price prompt-cache reads/writes and enforce 5h/weekly quotas |
 
 ### Reference & Research
 

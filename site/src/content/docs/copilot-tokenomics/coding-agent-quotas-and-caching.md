@@ -4,10 +4,10 @@ updated: 2026-11-19
 dateSource: recorded
 title: "Coding Agent Token, Cache & Quota Anatomy (Copilot · Codex · Claude)"
 description: "Compare GitHub Copilot, OpenAI Codex, and Claude Code billing, cache behavior, usage diagnostics, session management, and subscription limits."
-track: agent
+track: copilot
 verified: 2026-11-19
 sidebar:
-  order: 7
+  order: 12
 ---
 
 Coding agent subscriptions can drain faster than expected because **raw total tokens**, **API charges**, and **subscription quota deductions** are different measurements. This guide compares **GitHub Copilot** (VS Code · CLI · SDK), **OpenAI Codex** (CLI · IDE · Cloud), and **Claude Code** using official documentation.
@@ -224,13 +224,13 @@ These are application checklists for the [diagnostic paths](#usage-observability
 
 ### Five metrics required for fair agent & tool comparisons
 
-Whenever you compare coding agents or evaluate an optimization, record the task, model/version, client/version, authentication/billing mode, and cache settings first. Then record these **five groups** side by side, using available telemetry such as [`tokprof`](../tokprof/):
+Whenever you compare coding agents or evaluate an optimization, record the task, model/version, client/version, authentication/billing mode, and cache settings first. Then record these **five groups** side by side, using available telemetry such as [`tokprof`](../../agent-tokenomics/tokprof/):
 
 1. **Uncached input and cache-write tokens, separately:** retain lifetime/rate differences rather than treating them as one price.
 2. **Cache-read tokens and hit rate:** state the denominator, for example the fraction of total input served from cache.
 3. **Billed output with any reported reasoning subset:** do not count reasoning twice.
 4. **Actual metered cost/credits and end-to-end time:** keep API estimates separate from subscription usage readings.
-5. **Passed tests / task success ([Rule Zero](../#rule-zero)):** report quality next to cost, including failed attempts.
+5. **Passed tests / task success ([Rule Zero](../../agent-tokenomics/#rule-zero)):** report quality next to cost, including failed attempts.
 
 <a id="controlled-comparison-exercise"></a>
 ### Controlled comparison exercise, not a measured benchmark

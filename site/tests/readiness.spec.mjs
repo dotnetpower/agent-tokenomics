@@ -23,10 +23,47 @@ async function expectDocumentDates(page) {
     await expect(dates.locator("time").nth(index)).toHaveAttribute("datetime", value);
     await expect(dates.locator("time").nth(index)).toHaveText(value);
   }
+  const layout = await dates.locator("dl > div").evaluateAll((groups) => groups.map((group) => {
+    const label = group.querySelector("dt");
+    const value = group.querySelector("dd");
+    return {
+      top: group.getBoundingClientRect().top,
+      labelTop: label.getBoundingClientRect().top,
+      valueTop: value.getBoundingClientRect().top,
+      valueMargin: getComputedStyle(value).marginTop,
+      valueIndent: getComputedStyle(value).paddingInlineStart,
+    };
+  }));
+  for (const group of layout) {
+    expect(group.valueMargin).toBe("0px");
+    expect(group.valueIndent).toBe("0px");
+    expect(Math.abs(group.labelTop - group.valueTop)).toBeLessThan(1);
+  }
+  if (page.viewportSize().width >= 1280) {
+    expect(Math.max(...layout.map((group) => group.top)) - Math.min(...layout.map((group) => group.top))).toBeLessThan(1);
+  }
 }
 
 for (const locale of ["en", "ko"]) {
   for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+    test(`${locale} ${viewport.width}px: coding agent anatomy belongs to Copilot with aligned dates`, async ({ page }, testInfo) => {
+      await page.setViewportSize(viewport);
+      const prefix = `${base}/${locale === "ko" ? "ko/" : ""}`;
+      const path = "copilot-tokenomics/coding-agent-quotas-and-caching/";
+      await page.goto(`${origin}${prefix}${path}`, { waitUntil: "networkidle" });
+      await expect(page.locator("h1")).toContainText(locale === "ko" ? "코딩 에이전트" : "Coding Agent");
+      await expectDocumentDates(page);
+      const currentLink = page.locator(`nav.sidebar a[href="${prefix}${path}"]`);
+      await expect(currentLink).toHaveCount(1);
+      await expect(currentLink).toHaveAttribute("aria-current", "page");
+      const group = currentLink.locator("xpath=ancestor::details[last()]");
+      await expect(group.locator("summary").first()).toHaveText(locale === "ko" ? "Copilot 토큰 절약" : "Copilot Tokenomics");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+      await page.screenshot({ path: testInfo.outputPath("document-dates.png") });
+      await page.goto(`${origin}${prefix}agent-tokenomics/coding-agent-quotas-and-caching/`);
+      await expect(page).toHaveURL(`${origin}${prefix}${path}`);
+    });
+
     test(`${locale} ${viewport.width}px: visible summary, budget math, and CLS < 0.10`, async ({ page }) => {
       await page.setViewportSize(viewport);
       await page.addInitScript(() => {
