@@ -41,8 +41,10 @@ export async function inspectBuild() {
     check(!descriptions.has(description), `${url}: duplicate description`);
     descriptions.add(description);
     check($("h1").length === 1 && !!$("h1").text().trim(), `${url}: expected one nonempty h1`);
-    if (!url.includes("/demo/"))
+    if (url === root || url === `${root}ko/`)
       check($(".answer-capsule dl, dl.answer-capsule").length > 0, `${url}: initial HTML summary missing`);
+    else if (!url.includes("/demo/"))
+      check($(".answer-capsule").length === 0, `${url}: generic article summary must not be injected`);
     if (!url.includes("/demo/")) {
       const created = get("date.created");
       const updated = get("date.updated");

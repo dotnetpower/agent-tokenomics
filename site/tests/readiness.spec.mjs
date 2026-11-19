@@ -53,6 +53,7 @@ for (const locale of ["en", "ko"]) {
       await page.goto(`${origin}${prefix}${path}`, { waitUntil: "networkidle" });
       await expect(page.locator("h1")).toContainText(locale === "ko" ? "코딩 에이전트" : "Coding Agent");
       await expectDocumentDates(page);
+      await expect(page.locator(".answer-capsule")).toHaveCount(0);
       const currentLink = page.locator(`nav.sidebar a[href="${prefix}${path}"]`);
       await expect(currentLink).toHaveCount(1);
       await expect(currentLink).toHaveAttribute("aria-current", "page");

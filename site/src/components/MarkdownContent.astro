@@ -1,9 +1,7 @@
 ---
 import MarkdownContent from "@astrojs/starlight/components/MarkdownContent.astro";
-const { entry, lang, id } = Astro.locals.starlightRoute;
+const { entry, lang } = Astro.locals.starlightRoute;
 const isKo = lang === "ko";
-const isArticle = !["", "index", "ko", "ko/index", "404", "ko/404"].includes(id);
-const root = import.meta.env.BASE_URL.replace(/\/?$/, "/");
 ---
 
 <MarkdownContent>
@@ -27,21 +25,6 @@ const root = import.meta.env.BASE_URL.replace(/\/?$/, "/");
           </div>
         )}
       </dl>
-    </aside>
-  )}
-  {isArticle && entry?.data.description && (
-    <aside class="answer-capsule" aria-label={isKo ? "핵심 요약" : "At a glance"}>
-      <dl>
-        <dt>{isKo ? "핵심 요약" : "Key takeaway"}</dt>
-        <dd>{entry.data.description}</dd>
-        <dt>{isKo ? "검증 기준" : "Quality guardrail"}</dt>
-        <dd>{isKo
-          ? "비용과 작업 성공률을 함께 측정합니다. 절감 효과는 모델과 작업에 따라 달라집니다."
-          : "Measure cost alongside task success. Savings depend on the model and workload."}</dd>
-      </dl>
-      <a href={`${root}${isKo ? "ko/" : ""}agent-tokenomics/05-result/`}>
-        {isKo ? "비용과 품질 검증하기" : "Validate cost and quality"}
-      </a>
     </aside>
   )}
   <slot />
