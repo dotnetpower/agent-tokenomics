@@ -1,92 +1,83 @@
 ---
+created: 2026-11-03
+updated: 2026-11-19
+dateSource: git
 title: 에이전트 모드와 예산 가드
 description: Ask, Plan, Agent 모드의 차이, 에이전트 루프 제한, 추론 강도, 클라우드 에이전트 설정을 설명합니다.
 track: copilot
-verified: 2026-11-03
+verified: 2026-11-19
 sidebar:
   order: 8
 ---
 
+> **적용 기준: 2026-11-19 공개 문서 검토.** 가격·정책·화면·설정은 바뀔 수 있습니다. 클라이언트·버전·하네스에 맞는 원문을 확인합니다. 이 날짜는 설치 환경·실청구·모델 품질 실험을 새로 재현했다는 뜻이 아닙니다.
+
 ## 문제
 
-에이전트 실행은 **루프**입니다. 각 단계가 모델 호출이며, 호출할 때마다 지침, 도구 정의, 지금까지의 대화가 다시 전송됩니다. 프롬프트가 모호하면 에이전트가 오래 탐색한 끝에 의도를 잘못 이해해 처음부터 다시 시작해야 할 수 있습니다.
-
-<figure class="at-doc-figure">
-  <div class="at-doc-figure-grid">
-    <img src="https://code.visualstudio.com/assets/docs/agents/chat-debug-view/agent-flow-chart-v2.png" alt="모델 요청과 도구 호출을 보여 주는 Agent Debug View 흐름도" loading="lazy" />
-    <img src="https://code.visualstudio.com/assets/docs/agent-customization/customization/create-custom-agent-2.png" alt="VS Code에서 사용자 지정 에이전트를 만드는 화면" loading="lazy" />
-  </div>
-  <figcaption>에이전트 실행을 살펴보고(왼쪽) 사용자 지정 에이전트를 만듭니다(오른쪽). 출처: <a href="https://code.visualstudio.com/docs/copilot/chat/chat-debug-view">Agent Debug View</a> 및 <a href="https://code.visualstudio.com/docs/agent-customization/custom-agents">Custom Agents</a>.</figcaption>
-</figure>
+모드 이름은 고정 모델 호출 횟수나 달러 예산이 아닙니다. 읽기 전용 조사와 계획도 검색·도구 호출·여러 모델 요청을 포함할 수 있습니다.
 
 ## 조치
 
-### 상황에 맞는 가장 저렴한 모드를 선택합니다
+### 작업에 맞는 모드를 고릅니다
 
-| 모드 | 일반적인 형태 | 용도 |
-|------|---------------|---------|
-| Ask | 모델 호출 1회 | 질문, 설명, 조회 |
-| Plan | 계획 단계 1회 | 코드를 작성하기 전에 변경 범위 정리 |
-| Agent | 다수의 호출(도구 루프) | 여러 파일에 걸친 리팩터링, 처음부터 기능 구현 |
+| 작업 흐름 | 목적 | 피해야 할 가정 |
+|---|---|---|
+| Ask·읽기 전용 조사 | 코드 수정 없이 이해 | 정확히 한 번 호출·조회 없음·무료 |
+| Plan | 구현 전 조사하고 접근 방식 검토 | 한 번의 계획 호출이나 무료 작업 |
+| Agent 구현 | 한정된 수정과 검증 실행 | 한도에 닿을 때까지 범위를 넓혀도 된다는 허가 |
 
-질문에는 Ask를 기본으로 사용하고, 범위를 명확히 할 때는 Plan을 사용합니다. 작업에 정말로 도구가 필요할 때만 Agent를 사용합니다. 비용이 큰 패턴은 모호한 프롬프트로 Agent를 실행하는 것입니다.
+접근 방식이 불확실하면 [계획 작업 흐름](https://code.visualstudio.com/docs/agents/run/planning)을 사용합니다. 작고 명확한 수정은 바로 구현할 수 있습니다.
 
 ### 루프를 제한합니다
 
-- **`chat.agent.maxRequests`** — 한 번의 실행에서 에이전트가 보낼 수 있는 최대 요청 수입니다(2026-11-03 기준으로 확인한 VS Code 설정 참조 문서의 기본값은 25). 루프가 걷잡을 수 없이 늘어나는 것이 걱정되면 값을 낮추고, 긴 작업이 필요한 경우에만 높입니다.
-- 에이전트가 탐색을 멈추도록 **명확한 완료 기준**을 지정합니다(예: "완료 = 테스트 통과, lint 오류 없음").
-- 복잡한 작업은 에이전트가 먼저 **계획 파일**을 작성한 뒤 실행하게 합니다.
-- 사용할 도구를 알고 있다면 이름을 지정해("GitHub create-PR 도구만 사용") 도구 탐색을 줄입니다.
-- **구체적인 컨텍스트**(파일, 오류 메시지, 제약 조건)를 제공합니다([컨텍스트를 간결하게 유지하기](../03-context-hygiene/) 참조).
-
-Autopilot이나 백그라운드 에이전트에는 작업 프롬프트에 명시적인 루프 가드를 추가하세요.
+합격 검사와 재시도 가드를 명시합니다.
 
 ```text
-먼저 관련 범위의 테스트를 실행하세요. 같은 명령이나 테스트가 같은 오류로 두 번 실패하면 반복 재시도하지 말고 멈춰서 장애 원인을 보고하세요.
+Run focused tests. If the same command fails twice with the same error,
+stop and report the blocker, attempts, and unresolved checks.
+Do not silently skip failed verification.
 ```
 
-이는 강제 실행 제한이 아닌 지시입니다. 로그를 확인하고 요청 또는 예산 한도도 추가 안전장치로 사용하세요.
+이는 **프롬프트 지시**이지 강제 지출 한도가 아닙니다. `chat.agent.maxRequests`의 제공 여부·의미·기본값은 설치 버전과 하네스에 맞는 [현재 설정 참조](https://code.visualstudio.com/docs/copilot/reference/copilot-settings)에서 확인합니다. 이 문서는 보편적인 기본값을 단정하지 않습니다. Copilot 하네스·Agent Host를 Local과 동일하게 취급하지 않습니다.
 
-### 모델과 추론
+### 한도의 적용 범위
 
-- 기본값으로 **자동 모델 선택**을 사용합니다. 계획 단계에는 더 강력한 모델을, 범위가 정해진 구현에는 더 저렴한 모델을 지정합니다([모델, 계획, 위임](../05-models-and-planning/) 참조).
-- 자동 선택은 편리하지만 **비용 최적화 도구는 아닙니다**. 지출을 제어하는 데 의존하기 전에 모델 선택 방식을 문서에서 확인합니다.
-- **추론 강도(thinking effort)**는 기본값으로 둡니다. 어려운 문제에서만 높입니다. 강도가 높을수록 추론 토큰이 늘어나 비용과 지연 시간이 커집니다.
-- 모델을 바꾸면 프롬프트 캐시가 새로 시작됩니다. 캐싱은 공급자, 모델, 배포마다 별도로 동작하므로, 세션 중간에 모델을 바꾸면 이전 캐시를 재사용하지 못합니다.
+| 제어 | 제한 대상 | 한계 |
+|---|---|---|
+| 재시도 지시 | 의도한 에이전트 행동 | 로그로 준수를 확인해야 합니다. |
+| 지원되는 요청 제한 | 문서화된 범위의 요청 수 | 달러·토큰 한도가 아니며 자식·다른 세션 적용 범위를 확인합니다. |
+| GitHub 사용자 예산·지출 한도 | 계정·조직 소비량 또는 지출 | 사용자 예산은 사용을 중단하지만 지출 한도는 강제 옵션이 필요합니다. |
 
-### Copilot 클라우드 에이전트(이슈 → PR)
+[조직 예산 규칙](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/billing)이나 [개인 추가 사용 규칙](https://docs.github.com/en/copilot/concepts/billing-and-usage/individuals/billing)을 확인합니다. 크레딧 소비 기능의 중단이 모든 코드 완성 중단을 뜻하지는 않습니다.
 
-클라우드 에이전트 작업 하나가 많은 토큰을 사용할 수 있습니다. 시작 비용을 줄이는 방법은 다음과 같습니다.
+### Copilot cloud agent (이슈 → PR)
 
-- 이슈를 정확하게 작성합니다. "이거 고쳐줘"가 아니라 수락 기준(테스트 또는 동작), 재현 단계, 관련 파일 링크, 명확한 범위를 포함합니다.
-- 리포지토리의 **Copilot setup steps** 워크플로(`.github/workflows/copilot-setup-steps.yml`)에서 종속성을 미리 설치하고 빌드를 미리 실행합니다. 에이전트가 매번 환경을 새로 파악하지 않아도 됩니다.
-
-### 한도가 적용되는 위치
-
-사용량 기반 청구에서는 편집기 내 루프 제한 외에 GitHub의 계정 수준 예산 제어(예: 사용자별 또는 코스트 센터별 지출 한도)도 사용할 수 있습니다. 요금제에서 현재 지원하는 옵션은 [GitHub Docs](https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-individuals)에서 확인하세요. Copilot을 호출하는 자동화(CI 리뷰, 생성된 테스트, 검사)는 실행할 때마다 크레딧을 소비한다는 점에 유의합니다.
+파일, 재현 절차, 범위, 합격 검사를 제공합니다. [Copilot setup steps](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/customize-the-agent-environment)로 지원되는 의존성을 준비합니다. 설정·검토 작업과 별도 인프라 요금도 구분하며 모든 자동화를 무료로 취급하지 않습니다.
 
 ## 확인 방법
 
-각 모드가 적합한 작업을 골라 여러 단계로 이루어진 작업을 Ask, Plan, Agent로 한 번씩 실행하고, 세션 크레딧과 **Agent Debug Logs**의 도구 호출 수를 비교합니다. 루프가 요청 한도에 걸려서가 아니라 사용자가 정한 완료 기준에서 끝나는지 확인합니다.
+대표적인 제한된 수정 하나로 요청, 재시도, 자식 작업, 크레딧, 테스트, 중단 이유를 기록합니다. 작업 완료·지시 준수·요청 제한·예산 중단·오류를 구분합니다.
 
-## 트레이드오프
+## 절충점
 
-`maxRequests`를 너무 낮게 설정하면 정당한 긴 작업이 중간에 끊겨, 이미 쓴 토큰이 낭비될 수 있습니다. 한도를 지나치게 낮추기보다 명확한 완료 기준과 계획 파일을 우선합니다.
+제한이 너무 작으면 유효한 작업도 중간에 남습니다. 계획·강한 모델이 초기에 더 비싸도 재시도를 줄일 수 있으므로 모드 이름 대신 성공한 결과를 비교합니다.
 
 ## 추가 자료(논문)
 
 학회 등급, 인용 수 순으로 정렬했습니다. 각 연구 결과는 가설이므로 자신의 워크로드에서 검증해야 합니다. 전체 목록은 [논문](../../papers/)을 참고하세요.
 
-- [Training Language Models to Reason Efficiently](https://arxiv.org/abs/2502.04463) — NeurIPS 2025, 인용 285회. 정확도와 추론 길이 사이의 균형을 조절하도록 추론 모델을 학습시킵니다.
-- [Token-Budget-Aware LLM Reasoning](https://arxiv.org/abs/2412.18547) — ACL 2024, 인용 259회. 문제마다 토큰 예산을 추정해 chain-of-thought 추론을 짧게 만듭니다.
-- [Do NOT Think That Much for 2+3=? On the Overthinking of o1-Like LLMs](https://arxiv.org/abs/2412.21187) — 프리프린트 2024, 인용 605회. o1 계열 모델이 단순한 질문에도 지나치게 많은 토큰을 쓴다는 점을 보이고, 이를 줄이는 방법을 제안합니다.
-- [Agentless: Demystifying LLM-based Software Engineering Agents](https://arxiv.org/abs/2407.01489) — 프리프린트 2024, 인용 566회. 위치 파악, 수정, 검증으로 이루어진 고정 파이프라인이 낮은 비용으로 SWE-bench Lite에서 개방형 에이전트 루프와 경쟁할 수 있음을 보여 줍니다.
-- [L1: Controlling How Long A Reasoning Model Thinks With Reinforcement Learning](https://arxiv.org/abs/2503.04697) — 프리프린트 2025, 인용 416회. 사용자가 지정한 길이 예산을 따르도록 추론 모델을 학습시킵니다.
-- [Efficient Agents: Building Effective Agents While Reducing Cost](https://arxiv.org/abs/2508.02694) — 프리프린트 2025, 인용 40회. 에이전트 시스템을 설계할 때 효율과 효과 사이의 트레이드오프를 체계적으로 연구합니다.
+- [Training Language Models to Reason Efficiently](https://arxiv.org/abs/2502.04463) - NeurIPS 2025, 인용 285회. 정확도와 추론 길이 사이의 균형을 조절하도록 추론 모델을 학습시킵니다.
+- [Token-Budget-Aware LLM Reasoning](https://arxiv.org/abs/2412.18547) - ACL 2024, 인용 259회. 문제마다 토큰 예산을 추정해 chain-of-thought 추론을 짧게 만듭니다.
+- [Do NOT Think That Much for 2+3=? On the Overthinking of o1-Like LLMs](https://arxiv.org/abs/2412.21187) - 프리프린트 2024, 인용 605회. o1 계열 모델이 단순한 질문에도 지나치게 많은 토큰을 쓴다는 점을 보이고, 이를 줄이는 방법을 제안합니다.
+- [Agentless: Demystifying LLM-based Software Engineering Agents](https://arxiv.org/abs/2407.01489) - 프리프린트 2024, 인용 566회. 위치 파악, 수정, 검증으로 이루어진 고정 파이프라인이 낮은 비용으로 SWE-bench Lite에서 개방형 에이전트 루프와 경쟁할 수 있음을 보여 줍니다.
+- [L1: Controlling How Long A Reasoning Model Thinks With Reinforcement Learning](https://arxiv.org/abs/2503.04697) - 프리프린트 2025, 인용 416회. 사용자가 지정한 길이 예산을 따르도록 추론 모델을 학습시킵니다.
+- [Efficient Agents: Building Effective Agents While Reducing Cost](https://arxiv.org/abs/2508.02694) - 프리프린트 2025, 인용 40회. 에이전트 시스템을 설계할 때 효율과 효과 사이의 트레이드오프를 체계적으로 연구합니다.
 
 ## 출처
 
-- [VS Code Copilot settings reference](https://code.visualstudio.com/docs/copilot/reference/copilot-settings) (`chat.agent.maxRequests`)
-- [Optimize AI credit usage in VS Code](https://code.visualstudio.com/docs/agents/guides/optimize-usage)
-- [Customize the cloud agent environment (copilot-setup-steps.yml)](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/customize-the-agent-environment)
-- Token Efficiency and Context Engineering — 개발자 발표 자료(2026년 6월). 모드 비교와 클라우드 에이전트 팁(정성적인 내용만 참고했으며, 발표 자료의 토큰 수치는 이 문서에 재현하지 않음)
+- [code.visualstudio.com: harness](https://code.visualstudio.com/blogs/2026/11/18/copilot-harness)
+- [code.visualstudio.com: planning](https://code.visualstudio.com/docs/agents/run/planning)
+- [code.visualstudio.com: settings](https://code.visualstudio.com/docs/copilot/reference/copilot-settings)
+- [docs.github.com: org](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/billing)
+- [docs.github.com: billing](https://docs.github.com/en/copilot/concepts/billing-and-usage/individuals/billing)
+- [docs.github.com: setup](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/customize-the-agent-environment)

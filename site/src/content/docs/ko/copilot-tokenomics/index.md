@@ -1,41 +1,47 @@
 ---
+created: 2026-11-03
+updated: 2026-11-19
+dateSource: git
 title: "Copilot 토큰 이코노믹스 (Tokenomics · Token Economics)"
 description: "VS Code GitHub Copilot을 위한 실전 토큰 이코노믹스(Token Economics, 토큰 경제학): 토큰과 AI 크레딧 절약, 컨텍스트·MCP 최적화, cctx 개발 가속."
 track: copilot
-verified: 2026-11-03
+verified: 2026-11-19
 ---
 
-Track A는 VS Code에서 GitHub Copilot을 **사용하는** 개발자를 위한 **Copilot 토큰 이코노믹스(Tokenomics · Token Economics)** 가이드입니다. 각 페이지는 *문제 → 조치 → 확인 방법 → 트레이드오프* 순서로 설명합니다.
+> **적용 기준: 2026-11-19 공개 문서 검토.** 가격·정책·화면·설정은 바뀔 수 있습니다. 클라이언트·버전·하네스에 맞는 원문을 확인합니다. 이 날짜는 설치 환경·실청구·모델 품질 실험을 새로 재현했다는 뜻이 아닙니다.
 
-먼저 Copilot 청구 설정에서 사용 중인 플랜을 확인하세요. 과금 방식에 따라 우선할 절약 방법이 다릅니다.
+## 문제
 
-| 과금 방식 | 과금 단위 | 먼저 볼 페이지 |
-|---|---|---|
-| AI 크레딧(사용량 기반) | 입력, 캐시된 입력, 출력 토큰 각각에 모델 요율 적용 | [사용량 측정](02-measure-usage/), [컨텍스트](03-context-hygiene/), [도구](04-instructions-and-tools/) |
-| 기존 프리미엄 요청 | 프롬프트/턴당 모델 배수 적용 | [과금](01-how-usage-is-charged/), [모델](05-models-and-planning/), [예산 가드](08-agent-modes-and-budget/) |
+트랙 A는 **작업 성공률을 유지하면서** GitHub Copilot 비용을 줄이는 방법을 다룹니다. 약속된 절감률보다 실제 과금 방식과 클라이언트·하네스를 먼저 확인합니다.
 
-<figure class="at-doc-figure">
-  <img src="https://code.visualstudio.com/assets/docs/agents/concepts/context-assembly.png" alt="여러 소스에서 에이전트 컨텍스트를 구성하는 과정을 보여 주는 VS Code 다이어그램" loading="lazy" />
-  <figcaption>에이전트 컨텍스트는 여러 소스에서 구성됩니다. 출처: <a href="https://code.visualstudio.com/docs/agents/concepts/context">VS Code Docs — Context in Agents</a>.</figcaption>
-</figure>
+## 조치
 
-| 페이지 | 살펴볼 질문 |
-|------|---------------------|
-| [Copilot 사용량은 어떻게 과금되는가](01-how-usage-is-charged/) | 무엇에 비용이 드는가? |
-| [사용량 측정](02-measure-usage/) | 어떤 채팅과 요청의 비용이 큰가? |
-| [컨텍스트를 가볍게 유지하기](03-context-hygiene/) | 불필요한 대화 기록에 드는 비용을 어떻게 막을 수 있는가? |
-| [지침과 도구](04-instructions-and-tools/) | 요청마다 전송되는 내용을 어떻게 줄일 수 있는가? |
-| [모델, 계획, 위임](05-models-and-planning/) | 저렴한 모델이나 계획 우선 방식은 언제 효과가 있는가? |
-| [프롬프트와 출력 스타일](06-prompt-and-output-style/) | 프롬프트를 어떻게 줄이고 답변 길이를 제한하는가? |
-| [언어와 토큰화](07-language-and-tokenization/) | 한국어 등 다른 언어로 작성하면 비용이 더 드는가? |
-| [에이전트 모드와 예산 가드](08-agent-modes-and-budget/) | Ask, Plan, Agent는 어떻게 다르며 반복 실행을 어떻게 제한하는가? |
-| [MCP 점검](09-mcp-audit/) | 어떤 도구 서버를 계속 사용 설정해 둘 것인가? |
-| [체크리스트](10-checklist/) | 한 페이지로 정리한 점검 루틴입니다. |
-| [cctx: VS Code 토큰 절감 및 개발 가속](cctx/) | VS Code Marketplace 확장으로 탐색 토큰을 줄이고 개발 속도와 실시간 절감액을 확인하려면? |
-| [리소스](../resources/) | 알아 두면 좋은 도구와 리포지토리입니다. |
-| [논문](../papers/) | 이 전략의 바탕이 되는 연구를 신뢰도 순으로 정리했습니다. |
+[2026-11-18 공식 발표](https://code.visualstudio.com/blogs/2026/11/18/copilot-harness)는 새 VS Code 에이전트 세션의 기본값을 Copilot 하네스로 안내하며 Local은 전환 중입니다. Local 전용 설정이나 편집기 네이티브 도구가 모든 SDK·Agent Host 세션에서도 지원된다고 가정하지 않습니다.
 
-:::note
-Copilot의 과금 방식, UI, 설정은 빠르게 바뀝니다. 각 페이지에는 확인한 날짜와 공식 출처 링크를 함께 적었습니다.
-사용 중인 VS Code와 내용이 다르면 공식 문서를 기준으로 확인하세요.
-:::
+| 단계 | 문서 |
+|---|---|
+| 계기판·기준선 확립 | [과금](01-how-usage-is-charged/) · [사용량 측정](02-measure-usage/) |
+| 반복 문맥 줄이기 | [컨텍스트 관리](03-context-hygiene/) · [지침과 도구](04-instructions-and-tools/) |
+| 작업에 맞는 역량 선택 | [모델·계획·위임](05-models-and-planning/) |
+| 간결하지만 완전한 요청 | [프롬프트·출력](06-prompt-and-output-style/) · [언어·토큰화](07-language-and-tokenization/) |
+| 실행·도구 목록 제어 | [모드·예산](08-agent-modes-and-budget/) · [MCP 감사](09-mcp-audit/) |
+| 적용·재확인 | [체크리스트](10-checklist/) · [선택적 cctx 조회](cctx/) |
+| 다른 제품과 비교 | [Copilot·Codex·Claude Code 해부](../agent-tokenomics/coding-agent-quotas-and-caching/) |
+
+## 확인 방법
+
+같은 대표 작업·리비전에서 모델·강도, 클라이언트·하네스, 인증, 캐시 상태를 기록하고 한 변수만 바꿉니다. 실제 크레딧·시간·재시도·합격 검사를 비교하며 비공개 지표를 0으로 처리하지 않습니다.
+
+## 절충점
+
+제품 동작, 제공자 API 동작, 로컬 텍스트 측정을 구분합니다. 연결한 연구·작성자 벤치마크는 가설이지 본인 작업의 절감 보장이 아닙니다. 기존 논문 목록의 메타데이터 조회일은 유지하며 문서 수정이 새 실험을 뜻하지는 않습니다.
+
+## 문서 날짜
+
+모든 사이트 문서는 작성일·수정일·해당되는 검증일을 구분해 표시합니다. 과거 작성일은 Git 최초 등록 기준이며 최초 초안 작성 시점을 단정하지 않습니다. 작성 근거가 없는 페이지는 기록 시작일로 표시합니다. 수정일은 내용 변경 시, 검증일은 관련 출처 확인 시 갱신하며 단순 재빌드로 바꾸지 않습니다.
+
+## 출처
+
+- [code.visualstudio.com: harness](https://code.visualstudio.com/blogs/2026/11/18/copilot-harness)
+- [code.visualstudio.com: optimize](https://code.visualstudio.com/docs/agents/guides/optimize-usage)
+- [docs.github.com: billing](https://docs.github.com/en/copilot/concepts/billing-and-usage/individuals/billing)

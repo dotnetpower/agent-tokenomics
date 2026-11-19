@@ -1,103 +1,65 @@
 ---
+created: 2026-11-03
+updated: 2026-11-19
+dateSource: git
 title: MCP audit
 description: Every enabled tool is a per-request tax. Audit servers by usage and scope them per workspace.
 track: copilot
-verified: 2026-11-03
+verified: 2026-11-19
 sidebar:
   order: 9
 ---
 
+> **Scope: public documentation reviewed on 2026-11-19.** Prices, policies, UI, and settings can change. Check the original source for your client/version/harness. This date does not claim a new installation, billing, or model-quality experiment.
+
 ## Problem
 
-MCP **tool definitions (schemas)** included in a request add input whether used or not. Some clients defer schemas through virtual tool grouping, as described below. When all schemas are sent on each step of an agent loop, the cost multiplies:
-
-```text
-tokens per task ≈ (tool schema tokens × steps) + accumulated conversation + tool responses
-```
-
-An idle server whose full schemas are loaded still costs tokens on each step; deferred schemas can change this baseline.
-
-<figure class="at-doc-figure">
-  <div class="at-diag-stack">
-    <div class="at-diag-row" aria-label="Five enabled MCP servers: tool definitions 65%, other prefix 35%">
-      <span>5 MCP servers</span>
-      <div class="at-diag-bar"><div class="at-diag-seg seg-tool" style="width:65%">Tools 65%</div><div class="at-diag-seg seg-prefix" style="width:35%">Other 35%</div></div>
-      <span>100%</span>
-    </div>
-    <div class="at-diag-row" aria-label="One task-relevant MCP server: tool definitions 15%, other prefix 35%">
-      <span>1 relevant server</span>
-      <div class="at-diag-bar"><div class="at-diag-seg seg-hit" style="width:15%">Tools 15%</div><div class="at-diag-seg seg-prefix" style="width:35%">Other 35%</div></div>
-      <span>50%</span>
-    </div>
-  </div>
-  <figcaption>Synthetic illustration, not a measured result: against the original prefix, tool definitions fall from 65% to 15%, while the other prefix stays at 35%; the new total is 50% of the original. Keeping one relevant server reduces the definitions sent on each turn; actual savings vary. Green indicates the pruned configuration, not a cache hit.</figcaption>
-</figure>
+Distinguish an installed server, a discovered tool, a loaded full schema, and an executed call. Only measuring server/tool counts cannot establish billed token savings.
 
 ## Actions
 
-### Run a monthly audit
+| Audit field | Record |
+|---|---|
+| Scope | Client/version/harness/model and repository configuration |
+| Catalog | Enabled servers, discovered tools, loaded definitions where visible |
+| Actual work | Call counts, result size, failures, latency |
+| Outcome | Credits, retries, and tests/task success |
 
-1. List every MCP server and its tool count (the tools picker, **Configure Tools**, shows them).
-2. For each server, note how often you used it last month (Agent Debug Logs show tool calls).
-3. Decide per server:
-
-| Usage | Decision |
-|-------|----------|
-| Used most days | Keep |
-| Used occasionally | Keep **disabled by default**, enable per task |
-| Rarely/never, or duplicated by another tool | Remove |
-| Large server where you need two tools | Use a narrower server or a small CLI the agent calls from the terminal |
-
-4. Re-measure the first-request input size and the baseline task ([Measure your usage](../02-measure-usage/)).
+In VS Code's Copilot harness, use [Chat: Open Customizations → Tools](https://code.visualstudio.com/docs/agents/run/tools) and inspect [actual requests](https://code.visualstudio.com/docs/agents/agent-troubleshooting/chat-debug-view). The selection persists for the harness/host and can affect other sessions; Local's controls differ. In CLI, use [/mcp and explicit tool selection](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers). Keep repository settings reviewable and do not commit credentials.
 
 ### On-demand tool loading and virtual grouping
 
-Recent VS Code Copilot builds can group a large tool catalog into virtual tools and defer full schemas until a group is activated (a tool-search step such as `tool_search`, where supported). Once activated, the group's schemas can remain in later requests for the session; behavior depends on the build and model. If grouping is disabled or unsupported, full schemas may be sent from the start. Check Agent Debug Logs and Cache Explorer rather than assuming a cache saving. The experimental `github.copilot.chat.virtualTools.threshold` controls when grouping is used ([VS Code settings reference](https://code.visualstudio.com/docs/copilot/reference/copilot-settings)). Disabling unused MCP servers per workspace remains the most reliable baseline for reducing the available catalog.
+Deferred loading and grouping depend on the current harness, model, and runtime. Old experimental keys such as `github.copilot.chat.virtualTools.threshold` are **not a universal current tuning recipe**. Confirm that a setting is supported before changing it. Compare loaded schemas, discovery overhead, and later calls rather than assuming "unused means free" or "enabled means full schema every turn."
 
 ### Scope per workspace, not globally
 
-Put MCP configuration in the repository (`.vscode/mcp.json`) so each project loads only what it needs: a
-backend repo does not need design-tool servers; a frontend repo does not need database-schema tools. Reviewing
-a per-repo file is also easier than a global list.
-
-### Replace long knowledge with Skills
-
-Repeated or large reference material (a house style, a runbook, API notes) can be packaged as an **agent
-skill** that loads on demand instead of sitting in always-on instructions. Benefits: less repeated input,
-one place to update, consistent results.
+Keep only required servers/tools active for a task. Configuration paths differ by client; do not copy VS Code `.vscode/mcp.json` into another runtime and assume it is discovered. A tool allowlist and an execution permission policy solve different problems.
 
 ### Keep tool output small
 
-Tool results are often the largest part of the context (file reads, grep, shell output). Prefer targeted
-searches over reading whole files, and exclude noisy paths ([Keep context lean](../03-context-hygiene/)).
+Filter new results before adding them to history, preserving failures and counts. Copilot CLI supports large-output offloading; inspect the file with bounded reads rather than loading it all again. See [context and output controls](https://docs.github.com/en/copilot/concepts/prompting-and-context/context-management).
 
 ## How to verify
 
-Record the first-request input tokens in Agent Debug Logs before and after pruning, then run the same task and
-compare credits and success. Keep the change only if quality held.
+Disable one unused server or narrow one catalog. Repeat the same task and compare first-request input, search/loading calls, whole-session credits, and success using [the baseline template](../02-measure-usage/). Restore a needed tool instead of accepting a broken cheaper workflow.
 
 ## Trade-offs
 
-A pruned tool the task needed leads to workarounds and extra steps. Keep a fast way to re-enable tools, and prune
-by evidence (usage), not by guesswork.
-
-## Illustrative numbers
-
-The talk deck this page draws on describes a team that reduced 187 tools to 52 and reports about a 72% drop in
-agent-task token use. We could not verify that case independently; use it as an example of the *method*,
-and measure your own result. TokenEconomizer automates the same idea by pruning tools that go unused across
-sessions (see the [case study](../../agent-tokenomics/case-tokeneconomizer/)).
+Delayed discovery can add a call. A curated terminal script can replace repetitive operations but needs maintenance and security review. Unlinked deck figures previously used here are excluded; fewer tool definitions are not themselves a measured end-to-end saving.
 
 ## Further reading (papers)
 
 Ordered by venue tier, then citations. Findings are hypotheses to verify on your own workload; see the full list in [Papers](../../papers/).
 
-- [MCP-Zero: Active Tool Discovery for Autonomous LLM Agents](https://arxiv.org/abs/2506.01056) — preprint 2025, 55 citations. Lets the agent request tools on demand instead of injecting all tool schemas.
-- [RAG-MCP: Mitigating Prompt Bloat in LLM Tool Selection via Retrieval-Augmented Generation](https://arxiv.org/abs/2505.03275) — preprint 2025, 41 citations. Retrieves only the relevant MCP tool descriptions instead of loading every tool (prompt bloat).
-- [Less is More: Optimizing Function Calling for LLM Execution on Edge Devices](https://arxiv.org/abs/2411.15399) — preprint 2024, 33 citations. Presents a smaller selected tool set at function-calling time to cut cost on edge devices.
+- [MCP-Zero: Active Tool Discovery for Autonomous LLM Agents](https://arxiv.org/abs/2506.01056) - preprint 2025, 55 citations. Lets the agent request tools on demand instead of injecting all tool schemas.
+- [RAG-MCP: Mitigating Prompt Bloat in LLM Tool Selection via Retrieval-Augmented Generation](https://arxiv.org/abs/2505.03275) - preprint 2025, 41 citations. Retrieves only the relevant MCP tool descriptions instead of loading every tool (prompt bloat).
+- [Less is More: Optimizing Function Calling for LLM Execution on Edge Devices](https://arxiv.org/abs/2411.15399) - preprint 2024, 33 citations. Presents a smaller selected tool set at function-calling time to cut cost on edge devices.
 
 ## Sources
 
-- [Optimize AI credit usage — Keep the tool catalog focused](https://code.visualstudio.com/docs/agents/guides/optimize-usage)
-- [Use tools with agents (VS Code)](https://code.visualstudio.com/docs/agents/run/tools)
-- Token Efficiency and Context Engineering — developer talk deck (June 2026), MCP sections (figures as reported)
+- [code.visualstudio.com: harness](https://code.visualstudio.com/blogs/2026/11/18/copilot-harness)
+- [code.visualstudio.com: tools](https://code.visualstudio.com/docs/agents/run/tools)
+- [docs.github.com: mcp](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers)
+- [code.visualstudio.com: debug](https://code.visualstudio.com/docs/agents/agent-troubleshooting/chat-debug-view)
+- [code.visualstudio.com: cache](https://code.visualstudio.com/docs/agents/agent-troubleshooting/cache-explorer)
+- [docs.github.com: context](https://docs.github.com/en/copilot/concepts/prompting-and-context/context-management)

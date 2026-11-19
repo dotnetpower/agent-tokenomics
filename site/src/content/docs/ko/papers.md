@@ -1,4 +1,7 @@
 ---
+created: 2026-11-03
+updated: 2026-11-06
+dateSource: git
 title: 논문
 description: 토큰 절약과 관련된 논문 75편을 학회 등급과 인용 수 순으로 정리했습니다.
 sidebar:

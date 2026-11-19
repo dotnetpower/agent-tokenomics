@@ -1,94 +1,65 @@
 ---
+created: 2026-11-03
+updated: 2026-11-19
+dateSource: git
 title: MCP 감사
 description: 사용량을 기준으로 MCP 서버를 점검하고 작업 영역별로 필요한 도구만 사용합니다.
 track: copilot
-verified: 2026-11-03
+verified: 2026-11-19
 sidebar:
   order: 9
 ---
 
+> **적용 기준: 2026-11-19 공개 문서 검토.** 가격·정책·화면·설정은 바뀔 수 있습니다. 클라이언트·버전·하네스에 맞는 원문을 확인합니다. 이 날짜는 설치 환경·실청구·모델 품질 실험을 새로 재현했다는 뜻이 아닙니다.
+
 ## 문제
 
-요청에 포함된 MCP **도구 정의(스키마)**는 사용하지 않아도 입력 비용을 발생시킵니다. 아래에서 설명하듯 일부 클라이언트는 가상 도구 그룹으로 스키마 로딩을 늦춥니다. 모든 스키마를 에이전트 루프의 매 단계에 전송하는 경우에는 비용이 단계 수만큼 곱해집니다.
-
-```text
-tokens per task ≈ (tool schema tokens × steps) + accumulated conversation + tool responses
-```
-
-사용하지 않는 서버라도 전체 스키마가 로드되어 있으면 단계마다 토큰을 소비합니다. 스키마 로딩이 지연되면 이 기준 비용은 달라질 수 있습니다.
-
-<figure class="at-doc-figure">
-  <div class="at-diag-stack">
-    <div class="at-diag-row" aria-label="MCP 서버 5개 사용: 도구 정의 65%, 나머지 접두부 35%">
-      <span>MCP 서버 5개</span>
-      <div class="at-diag-bar"><div class="at-diag-seg seg-tool" style="width:65%">도구 65%</div><div class="at-diag-seg seg-prefix" style="width:35%">기타 35%</div></div>
-      <span>100%</span>
-    </div>
-    <div class="at-diag-row" aria-label="작업에 필요한 MCP 서버 1개 사용: 도구 정의 15%, 나머지 접두부 35%">
-      <span>필요한 서버 1개</span>
-      <div class="at-diag-bar"><div class="at-diag-seg seg-hit" style="width:15%">도구 15%</div><div class="at-diag-seg seg-prefix" style="width:35%">기타 35%</div></div>
-      <span>50%</span>
-    </div>
-  </div>
-  <figcaption>측정 결과가 아닌 가상의 예시입니다. 변경 전 접두부를 기준으로 도구 정의는 65%에서 15%로 줄고 나머지는 35%로 유지되어, 변경 후 접두부는 기존의 50%가 됩니다. 필요한 서버 하나만 남기면 매 턴 전송하는 도구 정의가 줄어들지만, 실제 절감량은 다릅니다. 초록색은 도구를 줄인 구성일 뿐 캐시 적중을 뜻하지 않습니다.</figcaption>
-</figure>
+설치한 서버, 발견한 도구, 전체 스키마를 로드한 도구, 실제 실행한 호출을 구분합니다. 서버·도구 개수만으로 청구 토큰 절감을 입증할 수는 없습니다.
 
 ## 조치
 
-### 매월 감사를 실행합니다
+| 감사 항목 | 기록 |
+|---|---|
+| 범위 | 클라이언트·버전·하네스·모델·저장소 설정 |
+| 도구 목록 | 활성 서버·발견한 도구·확인 가능한 로드 정의 |
+| 실제 작업 | 호출 수·결과 크기·실패·지연 |
+| 결과 | 크레딧·재시도·테스트와 작업 성공 |
 
-1. 모든 MCP 서버와 서버별 도구 수를 나열합니다(도구 선택기인 **Configure Tools**에서 확인할 수 있습니다).
-2. 서버마다 지난달에 얼마나 자주 사용했는지 기록합니다(Agent Debug Logs에서 도구 호출을 볼 수 있습니다).
-3. 서버별로 다음과 같이 결정합니다.
+VS Code의 Copilot 하네스는 [Chat: Open Customizations → Tools](https://code.visualstudio.com/docs/agents/run/tools)와 [실제 요청](https://code.visualstudio.com/docs/agents/agent-troubleshooting/chat-debug-view)을 확인합니다. 선택은 하네스·호스트에 유지되어 다른 세션에도 영향을 줄 수 있으며 Local의 제어는 다릅니다. CLI는 [/mcp와 명시적 도구 선택](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers)을 사용합니다. 저장소 설정은 검토 가능하게 유지하고 자격 증명은 커밋하지 않습니다.
 
-| 사용량 | 결정 |
-|-------|----------|
-| 거의 매일 사용 | 유지 |
-| 가끔 사용 | 기본적으로 **비활성화**, 필요한 작업에서만 활성화 |
-| 거의 또는 전혀 사용하지 않음, 또는 다른 도구와 중복 | 제거 |
-| 필요한 도구는 두 개뿐인 대형 서버 | 더 작은 서버 또는 터미널에서 호출하는 CLI 사용 |
+### 필요 시 도구 로딩과 가상 그룹
 
-4. 첫 요청의 입력 크기와 기준선 작업을 다시 측정합니다([사용량 측정하기](../02-measure-usage/)).
+지연 로딩·그룹화는 현재 하네스·모델·런타임에 따라 다릅니다. 과거 실험 설정인 `github.copilot.chat.virtualTools.threshold`를 **보편적인 현재 조정법으로 제시하지 않습니다.** 변경 전에 지원 여부를 확인합니다. “안 쓰면 무료”나 “활성화하면 매번 전체 스키마 전송”을 가정하지 말고 로드 정의, 검색 비용, 후속 호출을 비교합니다.
 
-<a id="on-demand-tool-loading-and-virtual-grouping"></a>
-### 필요 시 도구 로딩과 가상 도구 그룹
+### 전역 대신 작업 영역에 맞춥니다
 
-최근 VS Code Copilot 빌드는 도구 목록이 크면 가상 도구로 묶고 그룹이 활성화될 때까지 전체 스키마 로딩을 늦출 수 있습니다. 지원되는 환경에서는 `tool_search` 같은 도구 검색 단계를 거칩니다. 활성화된 그룹의 스키마는 이후 세션 요청에도 남을 수 있으며, 동작은 빌드와 모델에 따라 다릅니다. 그룹화가 비활성화되었거나 지원되지 않으면 처음부터 전체 스키마가 전송될 수 있습니다. 캐시 절감을 가정하지 말고 Agent Debug Logs와 Cache Explorer에서 확인하세요. 실험적 설정 `github.copilot.chat.virtualTools.threshold`는 그룹화가 시작되는 도구 수를 지정합니다([VS Code 설정 참조](https://code.visualstudio.com/docs/copilot/reference/copilot-settings)). 작업 영역별로 사용하지 않는 MCP 서버를 비활성화하는 것이 사용 가능한 목록을 줄이는 가장 확실한 기본 방법입니다.
+작업에 필요한 서버·도구만 활성화합니다. 설정 경로는 클라이언트마다 다르므로 VS Code의 `.vscode/mcp.json`을 다른 런타임에서도 자동으로 읽는다고 가정하지 않습니다. 도구 허용 목록과 실행 권한 정책은 서로 다른 문제를 해결합니다.
 
-### 전역이 아니라 작업 영역별로 범위를 정합니다
+### 도구 출력을 줄입니다
 
-MCP 구성을 리포지토리(`.vscode/mcp.json`)에 두면 프로젝트마다 필요한 서버만 로드됩니다. 백엔드 리포지토리에는 디자인 도구 서버가, 프런트엔드 리포지토리에는 데이터베이스 스키마 도구가 필요하지 않습니다. 리포지토리별 파일은 전역 목록보다 검토하기도 쉽습니다.
-
-### 긴 지식은 스킬로 대체합니다
-
-반복되거나 분량이 큰 참고 자료(사내 스타일 가이드, 런북, API 메모)는 상시 로드되는 지침에 두는 대신 필요할 때 로드되는 **에이전트 스킬**로 패키징할 수 있습니다. 반복해서 전송하는 입력을 줄이고 한 곳에서 내용을 관리할 수 있습니다.
-
-### 도구 출력을 작게 유지합니다
-
-도구 결과(파일 읽기, grep, 셸 출력)는 컨텍스트에서 가장 큰 부분을 차지하는 경우가 많습니다. 파일 전체를 읽기보다 대상을 좁혀 검색하고, 노이즈가 많은 경로는 제외합니다([컨텍스트를 간결하게 유지하기](../03-context-hygiene/) 참조).
+새 결과를 기록에 넣기 전에 필터링하되 실패·개수는 보존합니다. Copilot CLI의 큰 출력 분리 기능을 쓰더라도 파일을 다시 통째로 읽지 말고 범위를 제한합니다. [문맥·출력 제어](https://docs.github.com/en/copilot/concepts/prompting-and-context/context-management)를 참고합니다.
 
 ## 확인 방법
 
-도구를 가지치기하기 전후로 Agent Debug Logs에서 첫 요청의 입력 토큰을 기록합니다. 그런 다음 같은 작업을 실행해 크레딧과 성공 여부를 비교합니다. 품질이 유지된 경우에만 변경을 유지합니다.
+사용하지 않는 서버 하나를 끄거나 도구 목록 하나를 좁힌 뒤 같은 작업을 반복합니다. [기준선 표](../02-measure-usage/)로 첫 입력, 검색·로딩 호출, 전체 세션 크레딧, 성공 여부를 비교합니다. 필요한 도구를 없애 더 저렴하게 실패하는 대신 복구합니다.
 
-## 트레이드오프
+## 절충점
 
-작업에 필요한 도구를 가지치기하면 우회 방법을 찾느라 단계가 늘어납니다. 도구를 빠르게 다시 활성화할 방법을 마련해 두고, 추측이 아니라 실제 사용량을 확인한 뒤 도구를 가지치기합니다.
-
-## 참고용 수치
-
-이 문서의 바탕이 된 발표 자료에는 도구를 187개에서 52개로 줄인 팀이 나오며, 에이전트 작업의 토큰 사용량이 약 72% 감소했다고 보고합니다. 이 사례는 독립적으로 검증하지 못했습니다. *방법*의 예시로만 참고하고, 결과는 직접 측정하세요. TokenEconomizer는 여러 세션에 걸쳐 사용되지 않는 도구를 가지치기하는 방식으로 같은 아이디어를 자동화합니다([사례 연구](../../agent-tokenomics/case-tokeneconomizer/) 참조).
+지연 발견에는 호출이 추가될 수 있습니다. 일괄 터미널 스크립트는 반복 작업을 대체할 수 있지만 유지보수·보안 검토가 필요합니다. 원문 링크 없는 기존 발표 수치는 제외하며 도구 정의 감소 자체를 실측 종단 간 절감으로 제시하지 않습니다.
 
 ## 추가 자료(논문)
 
 학회 등급, 인용 수 순으로 정렬했습니다. 각 연구 결과는 가설이므로 자신의 워크로드에서 검증해야 합니다. 전체 목록은 [논문](../../papers/)을 참고하세요.
 
-- [MCP-Zero: Active Tool Discovery for Autonomous LLM Agents](https://arxiv.org/abs/2506.01056) — 프리프린트 2025, 인용 55회. 모든 도구 스키마를 주입하지 않고, 에이전트가 필요한 도구를 직접 요청하게 합니다.
-- [RAG-MCP: Mitigating Prompt Bloat in LLM Tool Selection via Retrieval-Augmented Generation](https://arxiv.org/abs/2505.03275) — 프리프린트 2025, 인용 41회. 모든 도구를 로드하는 대신 관련 있는 MCP 도구 설명만 검색해 가져옵니다(프롬프트 비대화 완화).
-- [Less is More: Optimizing Function Calling for LLM Execution on Edge Devices](https://arxiv.org/abs/2411.15399) — 프리프린트 2024, 인용 33회. 함수 호출 시점에 선별한 소규모 도구 집합만 제시해 엣지 디바이스의 비용을 줄입니다.
+- [MCP-Zero: Active Tool Discovery for Autonomous LLM Agents](https://arxiv.org/abs/2506.01056) - 프리프린트 2025, 인용 55회. 모든 도구 스키마를 주입하지 않고, 에이전트가 필요한 도구를 직접 요청하게 합니다.
+- [RAG-MCP: Mitigating Prompt Bloat in LLM Tool Selection via Retrieval-Augmented Generation](https://arxiv.org/abs/2505.03275) - 프리프린트 2025, 인용 41회. 모든 도구를 로드하는 대신 관련 있는 MCP 도구 설명만 검색해 가져옵니다(프롬프트 비대화 완화).
+- [Less is More: Optimizing Function Calling for LLM Execution on Edge Devices](https://arxiv.org/abs/2411.15399) - 프리프린트 2024, 인용 33회. 함수 호출 시점에 선별한 소규모 도구 집합만 제시해 엣지 디바이스의 비용을 줄입니다.
 
 ## 출처
 
-- [Optimize AI credit usage — Keep the tool catalog focused](https://code.visualstudio.com/docs/agents/guides/optimize-usage)
-- [Use tools with agents (VS Code)](https://code.visualstudio.com/docs/agents/run/tools)
-- Token Efficiency and Context Engineering — 개발자 발표 자료(2026년 6월), MCP 부분(수치는 보고된 그대로)
+- [code.visualstudio.com: harness](https://code.visualstudio.com/blogs/2026/11/18/copilot-harness)
+- [code.visualstudio.com: tools](https://code.visualstudio.com/docs/agents/run/tools)
+- [docs.github.com: mcp](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers)
+- [code.visualstudio.com: debug](https://code.visualstudio.com/docs/agents/agent-troubleshooting/chat-debug-view)
+- [code.visualstudio.com: cache](https://code.visualstudio.com/docs/agents/agent-troubleshooting/cache-explorer)
+- [docs.github.com: context](https://docs.github.com/en/copilot/concepts/prompting-and-context/context-management)

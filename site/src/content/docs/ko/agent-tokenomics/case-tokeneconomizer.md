@@ -1,4 +1,7 @@
 ---
+created: 2026-11-03
+updated: 2026-11-06
+dateSource: git
 title: "사례 연구: TokenEconomizer"
 description: microsoft/TokenEconomizer의 작동 방식과 이 가이드의 문제 해결 단계와의 관계를 설명합니다.
 track: agent

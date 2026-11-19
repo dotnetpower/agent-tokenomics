@@ -1,4 +1,5 @@
 ---
+import TokenBudget from "./TokenBudget.astro";
 interface Props {
   locale?: "en" | "ko";
 }
@@ -36,6 +37,16 @@ const demoReportUrl = `${base}demo/tokprof-sample.html`;
           </>
         )}
       </h1>
+      <dl class="answer-capsule">
+        <dt>{isKo ? "어디서 시작하나요?" : "Where should I start?"}</dt>
+        <dd>{isKo ? "Copilot 사용자는 트랙 A, 에이전트 개발자는 트랙 B에서 시작합니다." : "Choose Track A for Copilot use or Track B for agents you build."}</dd>
+        <dt>{isKo ? "절감은 어떻게 판단하나요?" : "What counts as a saving?"}</dt>
+        <dd>{isKo ? "토큰 비용과 작업 성공률을 함께 비교합니다. 절감률을 보장하지 않습니다." : "Compare token cost and task success together. Savings are not guaranteed."}</dd>
+      </dl>
+      <a href="#faq">{isKo ? "토큰 비용 관련 자주 묻는 질문" : "Common questions about token cost"}</a>
+      <p>{isKo
+        ? "외부 벤치마크는 보고된 수치이며 이 사이트에서 독립 검증하지 않았습니다. 모델·제품 동작은 각 문서의 출처와 확인 날짜를 기준으로 검토합니다."
+        : "External benchmarks are reported, not independently verified here. Check each guide's sources and verification date for model and product behavior."}</p>
       <p class="at-hero-subtitle">
         {isKo
           ? "LLM과 AI 에이전트를 위한 실전 토큰 이코노믹스(Tokenomics · Token Economics, 토큰 경제학) 가이드입니다. VS Code에서 GitHub Copilot을 사용하는 개발자(트랙 A)는 마켓플레이스 확장 cctx로 탐색 토큰을 줄이고 개발 속도를 가속하며, 에이전트를 개발·운영하는 엔지니어(트랙 B)는 코드 수정 없는 프로파일러 tokprof로 LLM 호출을 분석하고 비용과 품질을 검증할 수 있습니다."
@@ -1004,6 +1015,8 @@ Assistant: Patched boundary check (&gt;= 100); 14 passed.</pre>
     </div>
   </section>
 
+  <TokenBudget isKo={isKo} />
+
   <!-- 5. Frequently Asked Questions (GEO & FAQPage Schema Paired) -->
   <section id="faq" aria-labelledby="faq-title">
     <div class="at-sec-head">
@@ -1069,11 +1082,11 @@ Assistant: Patched boundary check (&gt;= 100); 14 passed.</pre>
         <p>
           {isKo ? (
             <>
-              작업마다 새 채팅을 시작해(부수적인 질문은 <code>/fork</code> 활용) 이전 대화 기록이 매 턴 재전송되지 않게 하고, 사용하지 않는 <a href={docUrl("copilot-tokenomics/09-mcp-audit/")}>MCP 서버와 도구</a>를 비활성화하며, <code>#file</code>·<code>#selection</code>으로 필요한 컨텍스트만 지정합니다. 또한 VS Code Marketplace에서 <a href={docUrl("copilot-tokenomics/cctx/")}><code>Code Context (cctx)</code></a>를 설치하면 다단계 <code>grep</code> + <code>view</code> 루프를 블록 클램핑 1회 조회로 대체해 탐색 속도를 15.20배 높이고 작업 완료 시간을 24.7% 단축하면서 상태 표시줄과 <code>cctx usage</code>에서 실시간 절감 비용을 확인할 수 있습니다.
+              작업마다 새 채팅을 시작해 이전 대화 기록 재전송을 줄이고, 사용하지 않는 <a href={docUrl("copilot-tokenomics/09-mcp-audit/")}>MCP 서버와 도구</a>를 비활성화하며, <code>#file</code>·<code>#selection</code>으로 필요한 컨텍스트만 지정합니다. <a href={docUrl("copilot-tokenomics/cctx/")}><code>Code Context (cctx)</code></a>의 효과도 같은 작업 집합에서 비용과 성공률을 함께 측정해 판단합니다. 외부 보고 수치는 이 사이트에서 독립 검증하지 않았으며 절감률을 보장하지 않습니다.
             </>
           ) : (
             <>
-              Start a new chat per task (or use <code>/fork</code> for side questions) so stale history is not re-sent on every turn, disable unused <a href={docUrl("copilot-tokenomics/09-mcp-audit/")}>MCP servers and tool definitions</a>, and scope attachments with <code>#file</code> and <code>#selection</code>. In addition, install <a href={docUrl("copilot-tokenomics/cctx/")}><code>Code Context (cctx)</code></a> from the VS Code Marketplace to replace multi-turn <code>grep</code> + <code>view</code> loops with single-call block-clamped lookups (15.20× faster warm retrieval and 24.7% faster task completion, as reported) and track live AIC/USD savings in the status bar and <code>cctx usage</code>.
+              Start a new chat per task, disable unused <a href={docUrl("copilot-tokenomics/09-mcp-audit/")}>MCP servers and tool definitions</a>, and scope attachments with <code>#file</code> and <code>#selection</code>. Evaluate <a href={docUrl("copilot-tokenomics/cctx/")}><code>Code Context (cctx)</code></a> on the same task set with cost and success measured together. Third-party reports are not independently verified here and do not guarantee savings.
             </>
           )}
         </p>

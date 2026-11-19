@@ -1,60 +1,51 @@
 ---
+created: 2026-11-03
+updated: 2026-11-19
+dateSource: git
 title: How Copilot usage is charged
 description: "Copilot tokenomics & token economics billing guide: understand GitHub AI Credits (input, cached, output token rates) vs. legacy Premium Request multipliers."
 track: copilot
-verified: 2026-11-03
+verified: 2026-11-19
 sidebar:
   order: 1
 ---
 
+> **Scope: public documentation reviewed on 2026-11-19.** Prices, policies, UI, and settings can change. Check the original source for your client/version/harness. This date does not claim a new installation, billing, or model-quality experiment.
+
 ## Problem
 
-You cannot reduce what you do not understand. Two billing models exist today, and they reward
-different habits.
+Total tokens, GitHub AI Credits, and legacy premium requests are different meters. Decide which applies before choosing a saving tactic.
 
-## What changed
+## Actions
 
-- **Usage-based billing (current).** GitHub announced that from **June 1, 2026**, Copilot usage
-  consumes **GitHub AI Credits**. Credits are consumed at different rates depending on the **model**
-  and the **number of tokens processed**. Each plan includes a monthly allowance.
-- **Legacy premium-request billing.** Some Pro / Pro+ subscribers on an existing annual plan stayed on
-  request-based billing. There, each prompt in chat counts as one premium request multiplied by the
-  model's rate, and autonomous tool calls inside an agent run do not count separately.
-
-| | Usage-based (AI credits) | Legacy (premium requests) |
+| Billing path | What to measure | Important boundary |
 |---|---|---|
-| Unit | Tokens × model rate | Prompts × model multiplier |
-| Long chat history | Costs more (re-sent as input) | Not billed per token |
-| Large tool catalog / instructions | Costs more (sent every request) | Not billed per token |
-| Strongest lever | Smaller context, right model | Fewer prompts, lower-multiplier model |
+| Usage-based individual plan | Model-priced input, cached input, cache writes where applicable, and output; account credits | Base credits and variable flex allowance are not a universal token quota. |
+| Business / Enterprise | Consumption, shared allowance, user budget, paid-usage policy | User budgets hard-stop; spending limits need the stop-usage option. |
+| Legacy annual Pro/Pro+ | User prompts and applicable model/feature multipliers | Autonomous tool calls do not each become a premium request. |
+| SDK BYOK | Provider usage and billing | Separate from GitHub-billed model usage. |
 
-Check which plan you are on in your GitHub Copilot billing settings before choosing tactics.
-
-<figure class="at-doc-figure">
-  <img src="https://code.visualstudio.com/assets/docs/agents/optimize-usage-guide/copilot-status-dashboard.png" alt="VS Code Copilot status dashboard displaying usage" loading="lazy" />
-  <figcaption>Use the Copilot status dashboard to review usage. Source: <a href="https://code.visualstudio.com/docs/agents/guides/optimize-usage">VS Code Docs — Optimize AI credit usage in VS Code</a>.</figcaption>
-</figure>
-
-## Why tokens matter for every request
-
-Each request sends **input tokens** (system prompt, instructions, tool definitions, the whole
-conversation so far, attachments, tool results) and receives **output tokens** (including any
-reasoning). Input grows with every turn, so a long session pays for old context again and again.
-Providers can reuse an unchanged request prefix (**prompt caching**), which lowers cost and latency
-when the beginning of the request stays stable.
+[GitHub defines one AI credit as $0.01 USD](https://docs.github.com/en/copilot/concepts/billing-and-usage/individuals/billing). Use [GitHub's model/context-tier rate card](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing), not an assumed provider discount. Check [legacy eligibility and feature rules](https://docs.github.com/en/copilot/reference/copilot-billing/request-based-billing-legacy/copilot-requests) and [SDK BYOK](https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/byok) separately.
 
 ### Cached input and billing
 
-When a prefix cache hits, `cached_input_tokens` are charged at the model's discounted cache-read rate under AI Credits, rather than the uncached input rate. Under legacy premium-request billing, the prompt still consumes `1 × model multiplier` premium requests regardless of a cache hit; caching can still reduce latency and rate-limit pressure. Check the model picker hover for the applicable rates and Agent Debug Logs for the request's cache usage; verify billing details in your plan's usage report.
+Logical conversation input can recur without identical network retransmission. An unchanged eligible prefix may be reused at its cached-input rate. Do not add cached input to an inclusive input total or add reasoning to inclusive billed output.
+
+Cache behavior depends on model, harness, request layout, and retention. A model or effort change can affect reuse, but **not every effort change guarantees a full cache miss**. Inspect [reported reuse and request divergence](https://code.visualstudio.com/docs/agents/agent-troubleshooting/cache-explorer); a diff is not proof of provider billing. Earlier engineering rollouts are not permanent defaults.
+
+## How to verify
+
+Record plan, client/version, harness, authentication, model, task success, and account readings. Compare request/session credits with the account meter; label missing categories **not exposed**, not zero. See [the full product comparison](../../agent-tokenomics/coding-agent-quotas-and-caching/).
 
 ## Trade-offs
 
-Everything in this track trades *context* against *cost*. Removing context the model needs leads to
-retries and rework, which can cost more than it saves.
+Less input is not a win if it causes retries. Compare cost per successful task, including failures and delegated work.
 
 ## Sources
 
-- [GitHub Copilot is moving to usage-based billing (GitHub Blog, 2026-04-27)](https://github.blog/news-insights/company-news/github-copilot-is-moving-to-usage-based-billing/)
-- [Usage-based billing for individuals (GitHub Docs)](https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-individuals)
-- [Requests in GitHub Copilot — legacy (GitHub Docs)](https://docs.github.com/en/copilot/concepts/billing/copilot-requests)
-- [Optimize AI credit usage in VS Code](https://code.visualstudio.com/docs/agents/guides/optimize-usage)
+- [code.visualstudio.com: harness](https://code.visualstudio.com/blogs/2026/11/18/copilot-harness)
+- [docs.github.com: billing](https://docs.github.com/en/copilot/concepts/billing-and-usage/individuals/billing)
+- [docs.github.com: org](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/billing)
+- [docs.github.com: rates](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing)
+- [docs.github.com: legacy](https://docs.github.com/en/copilot/reference/copilot-billing/request-based-billing-legacy/copilot-requests)
+- [code.visualstudio.com: cache](https://code.visualstudio.com/docs/agents/agent-troubleshooting/cache-explorer)

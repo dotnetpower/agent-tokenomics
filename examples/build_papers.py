@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from datetime import date
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -328,6 +329,22 @@ def page_ko(rows: list[dict], retrieved: str, ko: dict) -> str:
     return "\n".join(out)
 
 
+def dated_page(content: str, previous: str, initial_updated: str, today: str) -> str:
+    """Preserve dates; paper pages were first registered in Git on 2026-11-03."""
+    keys = r"^(?:created|updated|dateSource):[^\n]*\n"
+    fields = dict(re.findall(r"^(created|updated|dateSource):\s*(\S+)$", previous, re.M))
+    unchanged = re.sub(keys, "", previous, flags=re.M) == content
+    created = fields.get("created", "2026-11-03")
+    updated = fields.get("updated", initial_updated) if unchanged else today
+    source = fields.get("dateSource", "git")
+    return content.replace("---\n", f"---\ncreated: {created}\nupdated: {updated}\ndateSource: {source}\n", 1)
+
+
+def write_page(output: Path, content: str, initial_updated: str) -> None:
+    previous = output.read_text() if output.exists() else ""
+    output.write_text(dated_page(content, previous, initial_updated, date.today().isoformat()))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--topic")
@@ -348,7 +365,7 @@ def main() -> None:
         print(bullets(rows, args.topic, args.top))
         return
     retrieved = json.loads((HERE / "papers-meta.json").read_text())["retrieved"]
-    OUT.write_text(page(rows, retrieved))
+    write_page(OUT, page(rows, retrieved), "2026-11-03")
     print(f"wrote {OUT} ({len(rows)} papers)")
     ko_path = HERE / "papers-ko.json"
     if ko_path.exists():
@@ -357,7 +374,7 @@ def main() -> None:
         if missing:
             raise SystemExit(f"papers-ko.json is missing ids: {missing}")
         OUT_KO.parent.mkdir(parents=True, exist_ok=True)
-        OUT_KO.write_text(page(rows, retrieved, ko))
+        write_page(OUT_KO, page(rows, retrieved, ko), "2026-11-06")
         print(f"wrote {OUT_KO}")
 
 

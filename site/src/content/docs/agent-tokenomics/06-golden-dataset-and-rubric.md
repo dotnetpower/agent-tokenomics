@@ -1,4 +1,7 @@
 ---
+created: 2026-11-06
+updated: 2026-11-12
+dateSource: git
 title: "6. Golden dataset and rubric evaluation"
 description: "Design an Excel/CSV Golden Dataset for single-turn and multi-turn LLM agents, combine keyword and intent matching, and score quality with a rubric."
 track: agent

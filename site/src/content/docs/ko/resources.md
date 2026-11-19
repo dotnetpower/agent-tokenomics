@@ -1,4 +1,7 @@
 ---
+created: 2026-11-03
+updated: 2026-11-06
+dateSource: git
 title: 리소스
 description: 토큰을 절약하는 데 도움이 되는 리포지토리, 논문, 문서입니다. 2026-11-03에 존재 여부를 확인하여 엄선했습니다.
 sidebar:

@@ -1,4 +1,7 @@
 ---
+created: 2026-11-06
+updated: 2026-11-11
+dateSource: git
 title: "tokprof: 설치 및 사용법"
 description: PyPI에서 tokprof를 설치하고 에이전트 코드 수정 없이 세션별, 턴별, 호출별 LLM 토큰 사용량을 분석합니다.
 track: agent

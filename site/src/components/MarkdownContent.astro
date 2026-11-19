@@ -1,0 +1,58 @@
+---
+import MarkdownContent from "@astrojs/starlight/components/MarkdownContent.astro";
+const { entry, lang, id } = Astro.locals.starlightRoute;
+const isKo = lang === "ko";
+const isArticle = !["", "index", "ko", "ko/index", "404", "ko/404"].includes(id);
+const root = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+---
+
+<MarkdownContent>
+  {entry?.data.created && (
+    <aside class="document-dates" aria-label={isKo ? "문서 날짜" : "Document dates"}>
+      <dl>
+        <div>
+          <dt>{entry.data.dateSource === "git"
+            ? (isKo ? "작성일 (Git 최초 등록 기준)" : "Created (first Git record)")
+            : (isKo ? "작성 기록일 (최초 작성일 미확인)" : "Recorded on (creation date unknown)")}</dt>
+          <dd><time datetime={entry.data.created}>{entry.data.created}</time></dd>
+        </div>
+        <div>
+          <dt>{isKo ? "수정일" : "Modified"}</dt>
+          <dd><time datetime={entry.data.updated}>{entry.data.updated}</time></dd>
+        </div>
+        {entry.data.verified && (
+          <div>
+            <dt>{isKo ? "검증 기준일" : "Verified as of"}</dt>
+            <dd><time datetime={entry.data.verified.toISOString().slice(0, 10)}>{entry.data.verified.toISOString().slice(0, 10)}</time></dd>
+          </div>
+        )}
+      </dl>
+    </aside>
+  )}
+  {isArticle && entry?.data.description && (
+    <aside class="answer-capsule" aria-label={isKo ? "핵심 요약" : "At a glance"}>
+      <dl>
+        <dt>{isKo ? "핵심 요약" : "Key takeaway"}</dt>
+        <dd>{entry.data.description}</dd>
+        <dt>{isKo ? "검증 기준" : "Quality guardrail"}</dt>
+        <dd>{isKo
+          ? "비용과 작업 성공률을 함께 측정합니다. 절감 효과는 모델과 작업에 따라 달라집니다."
+          : "Measure cost alongside task success. Savings depend on the model and workload."}</dd>
+      </dl>
+      <a href={`${root}${isKo ? "ko/" : ""}agent-tokenomics/05-result/`}>
+        {isKo ? "비용과 품질 검증하기" : "Validate cost and quality"}
+      </a>
+    </aside>
+  )}
+  <slot />
+</MarkdownContent>
+
+<style is:global>
+  .document-dates { font-size: .85rem; color: var(--sl-color-gray-2); margin-block: 1rem; }
+  .document-dates dl { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; }
+  .document-dates dl div { display: flex; flex-wrap: wrap; gap: .25rem .5rem; }
+  .document-dates dd { margin: 0; }
+  .answer-capsule { min-height: 8rem; contain: layout; padding: 1rem; border-inline-start: .25rem solid var(--sl-color-accent); margin-block: 1rem; }
+  .answer-capsule dt { font-weight: 700; }
+  .answer-capsule dd { margin-inline-start: 0; margin-block-end: .5rem; }
+</style>

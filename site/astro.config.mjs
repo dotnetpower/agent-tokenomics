@@ -11,8 +11,13 @@ const BASE_PATH = process.env.BASE_PATH ?? (IS_PROD ? "/agent-tokenomics" : "/")
 
 /** Open external document content links in a new tab while keeping internal links in the same tab. */
 function rehypeDocumentLinksNewTab() {
+  const siteRoot = new URL(`${BASE_PATH.replace(/\/$/, "")}/`, SITE_URL);
+  /** @param {string} href */
   const isExternalHref = (href) =>
-    /^https?:\/\//i.test(href) && !href.startsWith("https://dotnetpower.github.io/agent-tokenomics");
+    /^https?:\/\//i.test(href) &&
+    (new URL(href).origin !== siteRoot.origin ||
+      (!new URL(href).pathname.startsWith(siteRoot.pathname) && new URL(href).pathname !== siteRoot.pathname.slice(0, -1)));
+  /** @param {import("hast").Root | import("hast").RootContent} node */
   const visit = (node) => {
     if (!node || typeof node !== "object") return;
     if (node.type === "element" && node.tagName === "a") {
@@ -20,25 +25,28 @@ function rehypeDocumentLinksNewTab() {
       const href = String(props.href ?? "").trim();
       if (isExternalHref(href)) {
         props.target = "_blank";
-        props.rel = "noopener noreferrer";
+        props.rel = ["noopener", "noreferrer"];
       }
     } else if (node.type === "raw" && typeof node.value === "string" && node.value.includes("<a ")) {
       node.value = node.value.replace(
-        /<a\s+(?![^>]*\btarget=)([^>]*\bhref=["'](https?:\/\/(?!dotnetpower\.github\.io\/agent-tokenomics)[^"']+)["'][^>]*)>/gi,
-        '<a target="_blank" rel="noopener noreferrer" $1>',
+        /<a\s+(?![^>]*\btarget=)([^>]*\bhref=["'](https?:\/\/[^"']+)["'][^>]*)>/gi,
+        (tag, attrs, href) => isExternalHref(href)
+          ? `<a target="_blank" rel="noopener noreferrer" ${attrs}>`
+          : tag,
       );
     }
-    if (Array.isArray(node.children)) {
+    if ("children" in node) {
       for (const child of node.children) visit(child);
     }
   };
+  /** @param {import("hast").Root} tree */
   return (tree) => visit(tree);
 }
 
 export default defineConfig({
   site: SITE_URL,
   base: BASE_PATH,
-  trailingSlash: "ignore",
+  trailingSlash: "always",
   markdown: {
     remarkPlugins: [remarkCjkFriendly],
     rehypePlugins: [rehypeDocumentLinksNewTab],
@@ -61,6 +69,8 @@ export default defineConfig({
       customCss: ["./src/styles/custom.css"],
       components: {
         Head: "./src/components/Head.astro",
+        Hero: "./src/components/Hero.astro",
+        MarkdownContent: "./src/components/MarkdownContent.astro",
       },
       social: [
         {

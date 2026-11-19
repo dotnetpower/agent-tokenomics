@@ -1,4 +1,7 @@
 ---
+created: 2026-11-03
+updated: 2026-11-03
+dateSource: git
 title: Papers
 description: 75 papers on saving tokens, ranked by venue tier and citations.
 sidebar:

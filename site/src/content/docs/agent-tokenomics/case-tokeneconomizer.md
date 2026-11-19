@@ -1,4 +1,7 @@
 ---
+created: 2026-11-03
+updated: 2026-11-06
+dateSource: git
 title: "Case study: TokenEconomizer"
 description: What microsoft/TokenEconomizer does and how it maps to the troubleshooting stages.
 track: agent

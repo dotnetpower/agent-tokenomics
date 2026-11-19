@@ -1,0 +1,53 @@
+---
+interface Props { isKo: boolean }
+const { isKo } = Astro.props;
+---
+
+<section class="token-budget" aria-labelledby="token-budget-title">
+  <h2 id="token-budget-title">{isKo ? "컨텍스트 예산 체커" : "Context budget checker"}</h2>
+  <p>{isKo
+    ? "직접 측정한 토큰 수를 항목당 10억 이하로 입력합니다. 토크나이저나 요금 견적이 아니며, 기본값은 가상 예시입니다."
+    : "Enter measured token counts, up to 1 billion per field. This is not a tokenizer or a price quote; defaults are hypothetical."}</p>
+  <form data-token-budget data-locale={isKo ? "ko" : "en"}>
+    <label>{isKo ? "컨텍스트 윈도우" : "Context window"}
+      <input name="window" type="number" min="1" max="1000000000" step="1" value="32000" required />
+    </label>
+    <label>{isKo ? "입력 토큰" : "Input tokens"}
+      <input name="input" type="number" min="0" max="1000000000" step="1" value="12000" required />
+    </label>
+    <label>{isKo ? "예약 출력 토큰" : "Reserved output tokens"}
+      <input name="output" type="number" min="0" max="1000000000" step="1" value="4000" required />
+    </label>
+    <button type="submit">{isKo ? "예산 확인" : "Check budget"}</button>
+    <output aria-live="polite">{isKo ? "남은 예산: 16,000 토큰" : "Remaining budget: 16,000 tokens"}</output>
+  </form>
+</section>
+
+<script>
+  for (const form of document.querySelectorAll<HTMLFormElement>("[data-token-budget]")) {
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (!form.reportValidity()) return;
+      const get = (name: string) => {
+        const element = form.elements.namedItem(name);
+        if (!(element instanceof HTMLInputElement)) throw new Error(`Missing budget input: ${name}`);
+        return element.valueAsNumber;
+      };
+      const remaining = get("window") - get("input") - get("output");
+      const output = form.querySelector("output");
+      if (!output) throw new Error("Missing budget output");
+      const isKo = form.dataset.locale === "ko";
+      output.value = remaining < 0
+        ? (isKo ? `예산 초과: ${(-remaining).toLocaleString("ko")} 토큰` : `Over budget: ${(-remaining).toLocaleString("en")} tokens`)
+        : (isKo ? `남은 예산: ${remaining.toLocaleString("ko")} 토큰` : `Remaining budget: ${remaining.toLocaleString("en")} tokens`);
+    });
+  }
+</script>
+
+<style>
+  .token-budget { min-height: 22rem; contain: layout; padding: 1.5rem; border: 1px solid var(--sl-color-gray-5); border-radius: 1rem; }
+  form { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: 1rem; }
+  label { display: grid; gap: .4rem; }
+  input, button { font: inherit; padding: .5rem; min-width: 0; }
+  output { display: block; grid-column: 1 / -1; min-height: 4rem; overflow-wrap: anywhere; }
+</style>

@@ -1,0 +1,7 @@
+---
+import Hero from "@astrojs/starlight/components/Hero.astro";
+const { id } = Astro.locals.starlightRoute;
+const customLanding = ["", "index", "ko", "ko/index"].includes(id);
+---
+
+{!customLanding && <Hero><slot /></Hero>}

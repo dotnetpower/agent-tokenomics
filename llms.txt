@@ -2,6 +2,22 @@
 
 > Practical bilingual (English / Korean) **tokenomics (token economics)** engineering guide to reducing LLM token consumption and accelerating coding workflows without degrading answer or task quality. Covers Track A (everyday VS Code GitHub Copilot tokenomics + `cctx` Marketplace extension), Track B (a 6-stage agent tokenomics troubleshooting procedure: Diagnose → Isolate → Prove → Improve → Result → Golden Dataset Rubric), and `tokprof` (`pip install tokprof`), a standalone zero-code native Rust token profiler. Inspired by [microsoft/TokenEconomizer](https://github.com/microsoft/TokenEconomizer).
 
+## Sources and limitations
+
+This is a public documentation site, not a commerce service. No checkout, ACP/AP2, OAuth flow, or agent account issuer is offered. The read-only documentation index is generated from real published pages.
+
+Guidance is not a savings guarantee. Pricing and product behavior change; consult each page's linked primary sources and verification date. Third-party benchmark figures are reported, not independently verified here. Compare cost with task success; illustrative examples are not customer data.
+
+GitHub Pages serves static resources under `/agent-tokenomics/`. It does not support Accept-based Markdown negotiation, custom HTTP Link headers, or domain-root discovery. Those features require the optional HTTP server behind HTTPS. Static Markdown alternates are available per page. Search/retrieval bots are allowed; training-only bots are disallowed by voluntary robots policy.
+
+## Agent resources
+
+- [Documentation metadata](https://dotnetpower.github.io/agent-tokenomics/api/pages.json): anonymous read-only GET; real page titles, summaries, locales, canonical URLs, and Markdown alternates.
+- [OpenAPI 3.1](https://dotnetpower.github.io/agent-tokenomics/openapi.json): describes only the documentation metadata endpoint.
+- [Authentication policy](https://dotnetpower.github.io/agent-tokenomics/auth.md): public anonymous reads; no OAuth or account issuance.
+- [Full rendered corpus](https://dotnetpower.github.io/agent-tokenomics/llms-full.txt): English and Korean page bodies, excluding navigation and executable scripts.
+- [API catalog file](https://dotnetpower.github.io/agent-tokenomics/.well-known/api-catalog): project-path copy; origin-root RFC 9727 discovery and its required MIME type need the HTTP server.
+
 ## Key Facts
 
 - **Documentation site (English)**: <https://dotnetpower.github.io/agent-tokenomics/>
@@ -58,6 +74,7 @@ Treat high agent token cost like a production incident — measure first and cha
 - [06. Golden Dataset and Rubric Evaluation](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/06-golden-dataset-and-rubric/): Excel/CSV golden datasets, hybrid keyword + intent grading, and bias-resistant multi-turn rubrics (`examples/golden_dataset_tool.py`).
 - [tokprof: Install & Usage](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/tokprof/): Complete installation, CLI workflow, capture modes, and HTML Edition Dossier guide.
 - [Case Study: TokenEconomizer](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/case-tokeneconomizer/): How `microsoft/TokenEconomizer` maps to Stages 1–5.
+- [Coding Agent Token, Cache & Quota Anatomy (Claude · Copilot · Codex)](https://dotnetpower.github.io/agent-tokenomics/agent-tokenomics/coding-agent-quotas-and-caching/): Why total tokens differ from API cost and subscription quotas, 2026 prompt-cache read/write multipliers, silent cache invalidators, and the 5-metric comparison standard.
 
 ## Reference & Research
 
@@ -75,6 +92,7 @@ Treat high agent token cost like a production incident — measure first and cha
 - [tokprof: 설치 및 사용법](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/tokprof/)
 - [6. 골든 데이터셋과 루브릭 평가](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/06-golden-dataset-and-rubric/)
 - [사례 연구: TokenEconomizer](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/case-tokeneconomizer/)
+- [코딩 에이전트 토큰·캐시·구독 한도 해부 (Claude · Copilot · Codex)](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/coding-agent-quotas-and-caching/)
 - [리소스 (참고 자료)](https://dotnetpower.github.io/agent-tokenomics/ko/resources/)
 - [논문 75선](https://dotnetpower.github.io/agent-tokenomics/ko/papers/)
 - [용어집 (English ↔ 한국어)](https://dotnetpower.github.io/agent-tokenomics/ko/glossary/)

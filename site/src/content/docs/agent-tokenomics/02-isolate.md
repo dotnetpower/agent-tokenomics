@@ -1,4 +1,7 @@
 ---
+created: 2026-11-03
+updated: 2026-11-06
+dateSource: git
 title: "2. Isolate the problem"
 description: "LLM agent tokenomics Stage 2 (Isolate): attribute token cost to unused tools, failure loops, bloated tool outputs, or history growth one variable at a time."
 track: agent

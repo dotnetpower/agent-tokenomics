@@ -1,6 +1,12 @@
 name: Deploy docs site to GitHub Pages
 
 on:
+  pull_request:
+    paths:
+      - "site/**"
+      - "examples/**"
+      - "llms.txt"
+      - ".github/workflows/pages.yml"
   push:
     branches: [main]
     paths:
@@ -19,6 +25,12 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+env:
+  SITE_URL: ${{ vars.SITE_URL || 'https://dotnetpower.github.io' }}
+  BASE_PATH: ${{ vars.BASE_PATH || '/agent-tokenomics' }}
+  PUBLIC_GOOGLE_SITE_VERIFICATION: ${{ vars.PUBLIC_GOOGLE_SITE_VERIFICATION }}
+  PUBLIC_NAVER_SITE_VERIFICATION: ${{ vars.PUBLIC_NAVER_SITE_VERIFICATION }}
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -33,16 +45,83 @@ jobs:
       - run: npm --prefix site run check:pairs -- --strict
       - run: npm --prefix site run build
       - run: npm --prefix site run check:seo
+      - run: npm --prefix site test
+      - run: npm --prefix site run check:http
+      - run: npm --prefix site exec -- playwright install --with-deps chromium
+      - run: npm --prefix site run test:browser
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site/dist
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-24.04
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  postflight:
+    needs: deploy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm --prefix site ci --no-audit --no-fund
+      - uses: actions/download-artifact@v4
+        with:
+          name: github-pages
+          path: _pages
+      - run: mkdir -p site/dist && tar -xf _pages/artifact.tar -C site/dist
+      - name: Check deployed Pages files and real 404s
+        env:
+          DEPLOYMENT_URL: ${{ needs.deploy.outputs.page_url }}
+        run: npm --prefix site run check:http -- "--url=$DEPLOYMENT_URL" --static-host
+      - name: Record static-host capability limits
+        run: |
+          echo '::warning::GitHub Pages is static-only: Accept negotiation, custom Link/Vary/CDN headers, origin-root robots and RFC 9727 discovery are NOT certified.'
+          echo '### Agent HTTP readiness: not certified on GitHub Pages' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Static postflight passed. Deploy the Node server behind HTTPS and run the full HTTP gate before claiming full readiness.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Record disabled indexing submission
+        if: vars.ENABLE_INDEX_SUBMISSION != 'true'
+        run: echo '::notice::GSC and IndexNow submission is disabled. Configure GSC credentials and ENABLE_INDEX_SUBMISSION to enable it; no search engine submission was performed.'
+      - name: Check full HTTP deployment when configured
+        if: vars.AGENT_PREFLIGHT_URL != ''
+        env:
+          AGENT_PREFLIGHT_URL: ${{ vars.AGENT_PREFLIGHT_URL }}
+        run: npm --prefix site run check:http -- "--url=$AGENT_PREFLIGHT_URL"
+
+  submit-index:
+    needs: postflight
+    if: vars.ENABLE_INDEX_SUBMISSION == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@v4
+        with:
+          name: github-pages
+          path: _pages
+      - run: mkdir -p site/dist && tar -xf _pages/artifact.tar -C site/dist
+      - id: google
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/webmasters
+          create_credentials_file: false
+      - run: npm --prefix site run submit:index
+        env:
+          GSC_ACCESS_TOKEN: ${{ steps.google.outputs.access_token }}
+          GSC_SITE_URL: ${{ vars.GSC_SITE_URL }}

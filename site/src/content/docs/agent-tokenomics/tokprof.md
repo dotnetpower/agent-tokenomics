@@ -1,4 +1,7 @@
 ---
+created: 2026-11-06
+updated: 2026-11-11
+dateSource: git
 title: "tokprof: Install & Usage"
 description: Install tokprof from PyPI and profile LLM agent token usage per session, turn, and call without changing agent code.
 track: agent

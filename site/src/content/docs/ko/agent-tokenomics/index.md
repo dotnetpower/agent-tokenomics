@@ -1,4 +1,7 @@
 ---
+created: 2026-11-03
+updated: 2026-11-19
+dateSource: git
 title: "에이전트 토큰 이코노믹스 (Tokenomics · Token Economics)"
 description: "LLM 에이전트의 토큰 이코노믹스(Token Economics, 토큰 경제학) 6단계 문제 해결 절차와 tokprof 프로파일링 및 골든 데이터셋 평가 가이드입니다."
 track: agent
@@ -25,7 +28,7 @@ Diagnose → Isolate → Prove → Improve → Result
 | [5. 결과](05-result/) | 품질 저하 없이 비용이 줄었는가? | 유지 / 되돌리기 결정 |
 | [6. 골든 데이터셋과 루브릭 평가](06-golden-dataset-and-rubric/) | 단일·멀티턴 정답(키워드·의도)과 품질을 어떻게 채점하는가? | 엑셀(CSV) 평가셋 및 하이브리드 루브릭 |
 
-이 외에 [tokprof: 설치 및 사용법](tokprof/), [TokenEconomizer 사례 연구](case-tokeneconomizer/), 개선 방법과 관련된 [논문 순위 목록](../papers/),
+이 외에 [tokprof: 설치 및 사용법](tokprof/), [TokenEconomizer 사례 연구](case-tokeneconomizer/), [코딩 에이전트 토큰·캐시·구독 한도 해부 (Claude · Copilot · Codex)](coding-agent-quotas-and-caching/), 개선 방법과 관련된 [논문 순위 목록](../papers/),
 실행 가능한 [측정 스크립트](https://github.com/dotnetpower/agent-tokenomics/tree/main/examples)도 제공합니다.
 
 <figure class="at-doc-figure">

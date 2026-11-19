@@ -1,101 +1,63 @@
 ---
+created: 2026-11-03
+updated: 2026-11-19
+dateSource: git
 title: Instructions and tools
 description: "Cut recurring input token overhead in VS Code GitHub Copilot by trimming always-on custom instructions (copilot-instructions.md, AGENTS.md) and tool schemas."
 track: copilot
-verified: 2026-11-03
+verified: 2026-11-19
 sidebar:
   order: 4
 ---
 
+> **Scope: public documentation reviewed on 2026-11-19.** Prices, policies, UI, and settings can change. Check the original source for your client/version/harness. This date does not claim a new installation, billing, or model-quality experiment.
+
 ## Problem
 
-Custom instructions and tool definitions included in a request add recurring input. Unused or bloated items are a fixed tax; some tool schemas can be loaded on demand (see [MCP audit](../09-mcp-audit/)).
-
-<figure class="at-doc-figure">
-  <div class="at-diag-stack">
-    <div class="at-diag-row" aria-label="Unscoped instructions and 40 tools: fixed overhead 82%, task 18%">
-      <span>Unscoped instructions + 40 tools</span>
-      <div class="at-diag-bar"><div class="at-diag-seg seg-miss" style="width:82%">Fixed 82%</div><div class="at-diag-seg seg-user" style="width:18%">Task 18%</div></div>
-      <span>100%</span>
-    </div>
-    <div class="at-diag-row" aria-label="applyTo scoped and pruned tools: fixed overhead 22%, task 18%">
-      <span>applyTo scoped + pruned tools</span>
-      <div class="at-diag-bar"><div class="at-diag-seg seg-hit" style="width:22%">Fixed 22%</div><div class="at-diag-seg seg-user" style="width:18%">Task 18%</div></div>
-      <span>40%</span>
-    </div>
-  </div>
-  <figcaption>Synthetic illustration, not a measured result: against the original input, fixed overhead falls from 82% to 22%, and the task remains at 18%; the new total is 40% of the original. Scoping and pruning reduce fixed overhead while the task stays the same; actual savings vary. Colors distinguish configurations, not cache hits or misses.</figcaption>
-</figure>
-
-<figure class="at-doc-figure">
-  <img src="https://code.visualstudio.com/assets/docs/agent-customization/customization/chat-customizations-editor-2.png" alt="VS Code chat customizations editor showing agent instruction settings" loading="lazy" />
-  <figcaption>Manage agent customizations in VS Code. Source: <a href="https://code.visualstudio.com/docs/agent-customization/overview">VS Code Docs — Agent Customization Overview</a>.</figcaption>
-</figure>
+Loaded instructions and tool schemas can recur across requests. More guidance is not automatically better, but deleting non-obvious project constraints can create expensive rework.
 
 ## Actions
 
-**Custom instructions** (`.github/copilot-instructions.md`, `*.instructions.md`, `AGENTS.md`)
+1. Keep concise, confirmed build/test commands and repository-specific constraints. Remove duplicate rules and discoverable project summaries.
+2. Distinguish always-on guidance, path-scoped rules, and on-demand skills. Applicability and discovery depend on the harness; follow [the instruction reference](https://code.visualstudio.com/docs/agents/reference/custom-instructions-reference).
+3. Use a canonical rule per scope. Do not assume every discovered file was included, or every included instruction was followed.
+4. Configure task-relevant tools using [the client tool controls](https://code.visualstudio.com/docs/agents/run/tools). An enabled MCP server does not prove that every full schema was sent upfront.
+5. For deterministic batches, use a reviewed script and return a bounded summary including failures. Do not replace required permission checks with a broad terminal workaround.
 
-- Keep only *stable, high-value* facts: build/test commands that differ from defaults, required env
-  vars, where generated files live, conventions the agent cannot infer.
-- Scope with `applyTo` in `*.instructions.md` so language- or folder-specific rules load only where they
-  apply. Think in three tiers: **always-on** (few rules that apply every time), **conditional** (`applyTo`
-  path rules), and **on-demand** (skills or notes for occasional workflows such as PR review).
-- Delete anything the agent can discover cheaply from the code. Do not paste long style guides.
-- Facts stated once in instructions save the agent from rediscovering them in every session.
-- Avoid duplicating rules across `copilot-instructions.md`, `AGENTS.md`, `CLAUDE.md`, and `*.instructions.md`. Applicable files can be injected together, duplicating fixed prefix tokens; keep one canonical source per scope and check what actually loaded.
-- Write the rules tersely (declarative rules, no filler); the file is re-sent on every request.
-- For tool-routing and fallback instructions, consider a **BPE-aligned formula layout** (`need => tool`, `condition -> action`, `>` priority chains; see [Prompt and output style](../06-prompt-and-output-style/#4-bpe-aligned-formula-notation)). As a VS Code reference case, converting the auto-loaded `.instructions.md` in [dotnetpower/code-context](https://github.com/dotnetpower/code-context) from 106-line prose (9,127 bytes, 2,048 `o200k_base` tokens) to a 26-line BPE-aligned formula specification (2,688 bytes, 718 tokens) cut per-turn instruction tokens by **64.9%** while retaining **100% (31/31)** rule-recognition accuracy across 12 edge-case scenarios.
+For the **Copilot harness**, use **Chat: Open Customizations → Tools**. Client-tool selections persist for the harness/host and can affect other sessions; they are not request-only overrides. Local-harness controls differ. Review scope before changing shared selections.
 
-**Do not auto-generate and forget.** An ETH Zurich study of repository context files (arXiv 2602.11988) found
-that context files do not generally improve task success while increasing inference cost by over 20% on
-average; repository overviews were not helpful, while instructions for **non-standard practices** were
-followed. Treat the file like a bug tracker: add a line when the agent hits a real "landmine", delete lines the
-agent can learn from the code, and re-evaluate when the code changes.
+| Surface | Inspect | Important limit |
+|---|---|---|
+| VS Code | Customization diagnostics and Chat Debug request content | Local and Copilot activation/tool behavior can differ. |
+| CLI | copilot instruction list; /context; /mcp | Discovery listing is not proof of inclusion in every request. |
+| SDK | Configured session instructions/tools and usage events | Confirm behavior against the pinned SDK/runtime schema. |
 
-| Keep (landmines) | Delete (self-discoverable) |
-|------------------|----------------------------|
-| "Use `uv`, not `pip`" | "This is a Python project" |
-| "Run tests with `--no-cache`" | "Tests live in `tests/`" |
-| "Do not refactor `auth/` — audit pending" | "We use PostgreSQL" |
-| "Deploy requires VPN" | "Code quality matters" (empty advice) |
-
-**Tool catalog**
-
-- Use **Configure Tools** in the chat input to enable only the tools or MCP servers the current task needs.
-- In custom agents, set the `tools` property to a narrow, task-specific list.
-- Prefer one focused CLI (invoked through the terminal tool) over loading dozens of single-purpose MCP tools
-  — if your organization can maintain and secure it.
-- Choose tools **before** starting a session: enabling an MCP server mid-session changes the tool
-  definitions and can break prompt-cache reuse (visible as the first divergence in the Cache Explorer).
-
-**Batch deterministic loops**
-
-- For bulk or polling workflows, run a reviewed script via the terminal and give the model only the summary,
-  rather than many tool calls whose outputs all land in context.
+See [instruction discovery, inclusion, and adherence diagnostics](https://code.visualstudio.com/docs/agents/agent-troubleshooting/chat-debug-view). Use [the MCP audit](../09-mcp-audit/) for catalog measurements.
 
 ## How to verify
 
-In Agent Debug Logs, compare input tokens of the first request before and after trimming. Then run the
-baseline task and compare session credits. Re-check quality: did the agent start rediscovering things?
+Remove one duplicate or scope one rule. Repeat a fixed task; compare first-request input, full-session credits, missed constraints, retries, and tests. Keep the change only if it preserves success.
+
+[Formula notation examples](../06-prompt-and-output-style/#4-bpe-aligned-formula-notation) can measure text reduction, but a shorter rule or retained keyword does not establish model comprehension. Earlier recognition-accuracy claims without a reproducible model-evaluation record are not used as evidence here.
 
 ## Trade-offs
 
-- Over-pruned instructions cause repeated discovery; over-pruned tools cause failed or manual workarounds.
-- Benchmark scripted versus interactive versions — savings depend on the tools and results.
+An overly small tool set may cause more searching or manual work. Defer optional guidance rather than deleting indispensable constraints. Mid-session changes can affect request layout; inspect reported reuse instead of assuming a cache miss.
 
 ## Further reading (papers)
 
 Ordered by venue tier, then citations. Findings are hypotheses to verify on your own workload; see the full list in [Papers](../../papers/).
 
-- [Batch Prompting: Efficient Inference with Large Language Model APIs](https://arxiv.org/abs/2301.08721) — EMNLP 2023, 154 citations. Packs several samples into one prompt so instruction tokens are shared.
-- [MCP-Zero: Active Tool Discovery for Autonomous LLM Agents](https://arxiv.org/abs/2506.01056) — preprint 2025, 55 citations. Lets the agent request tools on demand instead of injecting all tool schemas.
-- [RAG-MCP: Mitigating Prompt Bloat in LLM Tool Selection via Retrieval-Augmented Generation](https://arxiv.org/abs/2505.03275) — preprint 2025, 41 citations. Retrieves only the relevant MCP tool descriptions instead of loading every tool (prompt bloat).
-- [Evaluating AGENTS.md: Are Repository-Level Context Files Helpful for Coding Agents?](https://arxiv.org/abs/2602.11988) — preprint 2026, 36 citations. Repository context files did not generally improve task success and raised inference cost by over 20% on average.
+- [Batch Prompting: Efficient Inference with Large Language Model APIs](https://arxiv.org/abs/2301.08721) - EMNLP 2023, 154 citations. Packs several samples into one prompt so instruction tokens are shared.
+- [MCP-Zero: Active Tool Discovery for Autonomous LLM Agents](https://arxiv.org/abs/2506.01056) - preprint 2025, 55 citations. Lets the agent request tools on demand instead of injecting all tool schemas.
+- [RAG-MCP: Mitigating Prompt Bloat in LLM Tool Selection via Retrieval-Augmented Generation](https://arxiv.org/abs/2505.03275) - preprint 2025, 41 citations. Retrieves only the relevant MCP tool descriptions instead of loading every tool (prompt bloat).
+- [Evaluating AGENTS.md: Are Repository-Level Context Files Helpful for Coding Agents?](https://arxiv.org/abs/2602.11988) - preprint 2026, 36 citations. Repository context files did not generally improve task success and raised inference cost by over 20% on average.
 
 ## Sources
 
-- [Optimize AI credit usage — Keep the tool catalog focused, Batch repetitive operations, Ground the agent](https://code.visualstudio.com/docs/agents/guides/optimize-usage)
-- [Diagnose prompt caching with the Cache Explorer](https://code.visualstudio.com/docs/agents/agent-troubleshooting/cache-explorer)
-- [Evaluating AGENTS.md: Are Repository-Level Context Files Helpful for Coding Agents? (arXiv:2602.11988)](https://arxiv.org/abs/2602.11988)
-- [MCP audit](../09-mcp-audit/) for the deeper tool-catalog procedure
+- [code.visualstudio.com: harness](https://code.visualstudio.com/blogs/2026/11/18/copilot-harness)
+- [code.visualstudio.com: instructions](https://code.visualstudio.com/docs/agents/reference/custom-instructions-reference)
+- [code.visualstudio.com: debug](https://code.visualstudio.com/docs/agents/agent-troubleshooting/chat-debug-view)
+- [code.visualstudio.com: tools](https://code.visualstudio.com/docs/agents/run/tools)
+- [docs.github.com: context](https://docs.github.com/en/copilot/concepts/prompting-and-context/context-management)
+- [docs.github.com: mcp](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers)

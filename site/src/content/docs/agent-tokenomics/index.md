@@ -1,4 +1,7 @@
 ---
+created: 2026-11-03
+updated: 2026-11-19
+dateSource: git
 title: "Agent Tokenomics (Token Economics)"
 description: "LLM agent tokenomics and token economics troubleshooting guide: Diagnose, Isolate, Prove, Improve, and verify quality with tokprof and golden datasets."
 track: agent
@@ -25,7 +28,7 @@ Diagnose → Isolate → Prove → Improve → Result
 | [5. Result](05-result/) | Did cost fall without hurting quality? | Keep / revert decision |
 | [6. Golden dataset and rubric evaluation](06-golden-dataset-and-rubric/) | How do you grade single-turn and multi-turn quality (keywords + intent)? | Excel (CSV) dataset & hybrid rubric |
 
-Plus [tokprof: Install & Usage](tokprof/), a [case study of TokenEconomizer](case-tokeneconomizer/), the [ranked paper list](../papers/) behind the fixes, and a runnable
+Plus [tokprof: Install & Usage](tokprof/), a [case study of TokenEconomizer](case-tokeneconomizer/), the [Coding Agent Token, Cache & Quota Anatomy (Claude · Copilot · Codex)](coding-agent-quotas-and-caching/), the [ranked paper list](../papers/) behind the fixes, and a runnable
 [measurement script](https://github.com/dotnetpower/agent-tokenomics/tree/main/examples).
 
 <figure class="at-doc-figure">

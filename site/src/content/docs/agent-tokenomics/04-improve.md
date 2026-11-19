@@ -1,4 +1,7 @@
 ---
+created: 2026-11-03
+updated: 2026-11-06
+dateSource: git
 title: "4. Improve"
 description: "LLM agent tokenomics Stage 4 (Improve): apply one targeted fix per experiment — micro-skills, tool pruning, loop guards, output truncation, or prompt caching."
 track: agent

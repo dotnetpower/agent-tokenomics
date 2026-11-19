@@ -1,58 +1,51 @@
 ---
+created: 2026-11-03
+updated: 2026-11-19
+dateSource: git
 title: "Copilot 사용량은 어떻게 과금되는가"
 description: "VS Code GitHub Copilot 토큰 이코노믹스 과금 가이드: AI 크레딧 기반 사용량 과금(입력·캐시·출력 토큰 요율)과 프리미엄 요청 배수를 설명합니다."
 track: copilot
-verified: 2026-11-03
+verified: 2026-11-19
 sidebar:
   order: 1
 ---
 
+> **적용 기준: 2026-11-19 공개 문서 검토.** 가격·정책·화면·설정은 바뀔 수 있습니다. 클라이언트·버전·하네스에 맞는 원문을 확인합니다. 이 날짜는 설치 환경·실청구·모델 품질 실험을 새로 재현했다는 뜻이 아닙니다.
+
 ## 문제
 
-비용을 줄이려면 먼저 과금 방식을 알아야 합니다. 현재 두 가지 과금 모델이 있으며, 각 모델에 맞는 절약 방법이 다릅니다.
+총토큰 수, GitHub AI Credits, 기존 프리미엄 요청은 서로 다른 계기판입니다. 절약 방법을 고르기 전에 본인에게 적용되는 과금 방식을 확인해야 합니다.
 
-## 달라진 점
+## 조치
 
-- **사용량 기반 과금(현재).** GitHub은 **2026년 6월 1일**부터 Copilot 사용량에 **GitHub AI 크레딧**을 차감한다고 발표했습니다.
-  크레딧은 **모델**과 **처리한 토큰 수**에 따라 다른 비율로 차감됩니다. 각 플랜에는 월별 기본 제공량이 포함됩니다.
-- **기존 프리미엄 요청 과금.** 기존 연간 플랜을 사용하던 일부 Pro/Pro+ 구독자는 요청 기반 과금을 유지했습니다.
-  이 방식에서는 채팅에서 보낸 프롬프트 하나가 모델 배수를 곱한 프리미엄 요청 1건으로 계산되며,
-  에이전트 실행 중의 자율적인 도구 호출은 따로 계산하지 않습니다.
-
-| | 사용량 기반(AI 크레딧) | 기존 방식(프리미엄 요청) |
+| 과금 경로 | 측정 대상 | 구분할 경계 |
 |---|---|---|
-| 단위 | 토큰 × 모델 요율 | 프롬프트 × 모델 배수 |
-| 긴 채팅 기록 | 비용 증가(입력으로 다시 전송) | 토큰 단위로 과금하지 않음 |
-| 큰 도구 목록/지침 | 비용 증가(요청마다 전송) | 토큰 단위로 과금하지 않음 |
-| 가장 효과적인 방법 | 컨텍스트 축소, 적절한 모델 선택 | 프롬프트 수 감소, 배수가 낮은 모델 선택 |
+| 개인 사용량 기반 요금제 | 모델별 입력·캐시 읽기·해당되는 캐시 쓰기·출력 요금과 계정 크레딧 | 기본 크레딧과 가변 추가 제공량을 고정 토큰 한도로 해석하지 않습니다. |
+| Business / Enterprise | 소비량·공유 제공량·사용자 예산·추가 사용 정책 | 사용자 예산은 사용을 중단하지만 지출 한도는 사용 중단 옵션을 켜야 강제됩니다. |
+| 기존 연간 Pro/Pro+ | 사용자 프롬프트와 모델·기능별 배수 | 자율 도구 호출마다 프리미엄 요청이 추가되는 것은 아닙니다. |
+| SDK BYOK | 제공자 사용량과 청구 | GitHub가 과금하는 모델 사용량과 별도입니다. |
 
-절약 방법을 고르기 전에 GitHub Copilot 청구 설정에서 사용 중인 플랜을 확인하세요.
+[GitHub의 공식 환산은 1 AI 크레딧 = $0.01 USD입니다](https://docs.github.com/en/copilot/concepts/billing-and-usage/individuals/billing). 제공자의 할인율을 가정하지 말고 [GitHub 모델·컨텍스트 구간별 요금표](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing)를 사용합니다. [기존 요청 과금의 대상·기능 규칙](https://docs.github.com/en/copilot/reference/copilot-billing/request-based-billing-legacy/copilot-requests)과 [SDK BYOK](https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/byok)도 따로 확인합니다.
 
-<figure class="at-doc-figure">
-  <img src="https://code.visualstudio.com/assets/docs/agents/optimize-usage-guide/copilot-status-dashboard.png" alt="VS Code Copilot 상태 대시보드에서 사용량을 확인하는 화면" loading="lazy" />
-  <figcaption>Copilot 상태 대시보드에서 사용량을 확인합니다. 출처: <a href="https://code.visualstudio.com/docs/agents/guides/optimize-usage">VS Code Docs — Optimize AI credit usage in VS Code</a>.</figcaption>
-</figure>
+### 캐시 입력과 과금
 
-## 모든 요청에서 토큰이 중요한 이유
+대화의 논리적 입력이 반복되어도 네트워크 바이트까지 매번 동일하게 재전송되는 것은 아닙니다. 재사용 가능한 접두부는 캐시 읽기 단가로 처리될 수 있습니다. 이미 캐시를 포함한 입력 합계에 캐시 읽기를 다시 더하거나, 추론을 포함한 청구 출력에 추론을 더하지 않습니다.
 
-요청할 때마다 **입력 토큰**(시스템 프롬프트, 지침, 도구 정의, 지금까지의 전체 대화, 첨부 파일, 도구 결과)을 보내고
-**출력 토큰**(추론 토큰 포함)을 받습니다. 대화가 길어질수록 입력이 늘어나므로, 오래된 컨텍스트에도 비용이 반복해서 듭니다.
-제공자는 변경되지 않은 요청 접두부를 재사용할 수 있으며(**프롬프트 캐싱**), 요청의 앞부분이 안정적으로 유지되면
-비용과 지연 시간이 줄어듭니다.
+캐시는 모델·하네스·요청 구성·보존 시간에 따라 다릅니다. 모델·강도 변경이 영향을 줄 수 있지만 **모든 추론 강도 변경이 전체 캐시 미적중을 보장하지는 않습니다.** [보고된 재사용과 요청 차이](https://code.visualstudio.com/docs/agents/agent-troubleshooting/cache-explorer)를 확인합니다. 요청 차이는 제공자 과금의 증거가 아니며 과거 배포 보고서를 영구 기본값으로 해석해서도 안 됩니다.
 
-<a id="cached-input-and-billing"></a>
-### 캐시된 입력과 과금
+## 확인 방법
 
-접두부 캐시에 적중하면 AI 크레딧 과금에서는 `cached_input_tokens`에 일반 입력 요율 대신 해당 모델의 할인된 캐시 읽기 요율이 적용됩니다. 기존 프리미엄 요청 과금에서는 캐시 적중 여부와 관계없이 프롬프트당 `1 × 모델 배수`만큼 요청을 사용합니다. 다만 캐싱은 지연 시간과 속도 제한 부담을 줄이는 데 도움이 될 수 있습니다. 모델 선택기에 마우스를 올려 적용 요율을 확인하고 Agent Debug Logs에서 요청의 캐시 사용량을 살펴보세요. 실제 청구 내용은 플랜의 사용량 보고서에서도 확인합니다.
+요금제, 클라이언트·버전, 하네스, 인증, 모델, 작업 성공 여부, 계정 수치를 기록합니다. 요청·세션 크레딧을 계정 계기판과 대조하고 비공개 항목은 0 대신 **확인 불가**로 표시합니다. [제품별 상세 비교](../../agent-tokenomics/coding-agent-quotas-and-caching/)도 참고합니다.
 
-## 트레이드오프
+## 절충점
 
-이 가이드의 방법은 *컨텍스트*와 *비용* 사이에서 균형을 잡는 데 도움이 됩니다. 모델에 필요한 컨텍스트를 제거하면
-재시도와 재작업이 생기고, 절약한 것보다 비용이 더 들 수 있습니다.
+입력을 줄여 재시도가 늘면 절약이 아닙니다. 실패·위임 작업을 포함한 성공 작업당 비용을 비교합니다.
 
 ## 출처
 
-- [GitHub Copilot is moving to usage-based billing (GitHub Blog, 2026-04-27)](https://github.blog/news-insights/company-news/github-copilot-is-moving-to-usage-based-billing/)
-- [Usage-based billing for individuals (GitHub Docs)](https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-individuals)
-- [Requests in GitHub Copilot — legacy (GitHub Docs)](https://docs.github.com/en/copilot/concepts/billing/copilot-requests)
-- [Optimize AI credit usage in VS Code](https://code.visualstudio.com/docs/agents/guides/optimize-usage)
+- [code.visualstudio.com: harness](https://code.visualstudio.com/blogs/2026/11/18/copilot-harness)
+- [docs.github.com: billing](https://docs.github.com/en/copilot/concepts/billing-and-usage/individuals/billing)
+- [docs.github.com: org](https://docs.github.com/en/copilot/concepts/billing-and-usage/organizations-and-enterprises/billing)
+- [docs.github.com: rates](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing)
+- [docs.github.com: legacy](https://docs.github.com/en/copilot/reference/copilot-billing/request-based-billing-legacy/copilot-requests)
+- [code.visualstudio.com: cache](https://code.visualstudio.com/docs/agents/agent-troubleshooting/cache-explorer)

@@ -1,7 +1,8 @@
 # robots.txt for agent-tokenomics documentation site
 # https://dotnetpower.github.io/agent-tokenomics/
 # Public bilingual (English / Korean) documentation — all search and
-# generative-engine crawlers are welcome to index the published guidance.
+# search/retrieval crawlers may index the published guidance.
+# Training-only crawlers are disallowed below. This voluntary policy is not access control.
 #
 # Structured LLM index: https://dotnetpower.github.io/agent-tokenomics/llms.txt
 # Full LLM corpus:      https://dotnetpower.github.io/agent-tokenomics/llms-full.txt
@@ -41,33 +42,33 @@ Allow: /
 User-agent: Perplexity-User
 Allow: /
 
-# Training-only controls & generative-engine crawlers:
+# Training-only crawlers (separate from search/retrieval):
 User-agent: GPTBot
-Allow: /
+Disallow: /
 
 User-agent: ClaudeBot
-Allow: /
+Disallow: /
 
 User-agent: Claude-Web
-Allow: /
+Disallow: /
 
 User-agent: anthropic-ai
-Allow: /
+Disallow: /
 
 User-agent: Google-Extended
-Allow: /
+Disallow: /
 
 User-agent: Applebot-Extended
-Allow: /
+Disallow: /
 
 User-agent: CCBot
-Allow: /
+Disallow: /
 
 User-agent: cohere-ai
-Allow: /
+Disallow: /
 
 User-agent: Bytespider
-Allow: /
+Disallow: /
 
 User-agent: Amazonbot
 Allow: /

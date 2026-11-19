@@ -1,4 +1,7 @@
 ---
+created: 2026-11-03
+updated: 2026-11-06
+dateSource: git
 title: "0. Concepts: Tokenomics & Token Economics for LLM Agents"
 description: "Core concepts of LLM tokenomics and token economics: stateless re-sending, request anatomy, agent loop fan-out, pricing, prompt caching, and context rot."
 track: agent

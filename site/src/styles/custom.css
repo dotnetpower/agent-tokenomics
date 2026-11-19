@@ -75,6 +75,14 @@ header.header {
   word-break: break-word;
 }
 
+@media (max-width: 49.99rem) {
+  .sl-markdown-content table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+
 /* Dense tables (5+ columns): compact font, tighter padding, and preserved first-column IDs */
 .sl-markdown-content table:has(th:nth-child(5)),
 .sl-markdown-content table:has(th:nth-child(5)) td {

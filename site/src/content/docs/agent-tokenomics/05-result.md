@@ -1,4 +1,7 @@
 ---
+created: 2026-11-03
+updated: 2026-11-06
+dateSource: git
 title: "5. Result"
 description: "LLM agent tokenomics Stage 5 (Result): re-measure token cost, task pass rate (quality guardrail), and latency against baseline to decide keep or revert."
 track: agent

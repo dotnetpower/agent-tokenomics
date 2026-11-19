@@ -1,39 +1,54 @@
 ---
+created: 2026-11-03
+updated: 2026-11-19
+dateSource: git
 title: Checklist
 description: "One-page Copilot tokenomics checklist: high-impact habits before, during, and after VS Code GitHub Copilot sessions to cut token and AI credit spend."
 track: copilot
-verified: 2026-11-03
+verified: 2026-11-19
 sidebar:
   order: 10
 ---
 
-Impact tiers are qualitative starting priorities, not measured savings; impact varies by billing plan and workload. Confirm cost and quality against your baseline.
+> **Scope: public documentation reviewed on 2026-11-19.** Prices, policies, UI, and settings can change. Check the original source for your client/version/harness. This date does not claim a new installation, billing, or model-quality experiment.
 
-## Before you start a session
+## Before a session
 
-- [ ] [High] New task → new chat. Side question → `/fork`.
-- [ ] [High] Only the tools/MCP servers this task needs are enabled.
-- [ ] [High] Model chosen deliberately (auto by default); thinking effort left at default.
-- [ ] [Medium] Noisy paths excluded (`.gitignore`, `files.exclude`, `search.exclude`).
-- [ ] [High] Prompt names the files/errors/constraints and the success criteria.
-- [ ] [Medium] Prompt ends with an output limit (`Code only.` / `3 bullets max.`); one task per prompt.
-- [ ] [Medium] Standing instructions and rules are written in English, terse, and de-duplicated.
+- [ ] Record client/version, Copilot or Local harness, authentication, and billing mode.
+- [ ] Choose task-appropriate model/effort; record Auto's actual choice where exposed.
+- [ ] Supply relevant files, error, constraints, and acceptance tests.
+- [ ] Confirm loaded instructions and needed tools, not merely installed servers.
+- [ ] Keep a clear language and required test/failure reporting; English and delegation are not mandatory.
+- [ ] Start unrelated work in a new chat; fork only when existing context is useful.
 
 ## During
 
-- [ ] [Medium] Use #-mentions for known files; `#codebase` only when you need search.
-- [ ] [High] Complex change? Plan first, then implement; delegate bounded pieces to cheaper subagents.
-- [ ] [High] Ambiguous task? Use Ask/Plan before Agent; give a clear "done" criterion.
-- [ ] [High] Session getting long and still needed? `/compact` with a focus hint.
-- [ ] [Medium] Bulk/polling work → run a script, hand the model the summary.
+- [ ] Use focused search and complete relevant definitions; bound new outputs.
+- [ ] Keep exit status, warnings, test counts, and unresolved failures.
+- [ ] Use planning for uncertainty and subagents for substantial independent work.
+- [ ] Count parent and child usage once; record retries.
+- [ ] Compact when useful; verify critical decisions survived.
+- [ ] Distinguish prompt retry guards, supported request limits, and enforced budgets.
 
-## Weekly review
+## After and weekly
 
-- [ ] [Low] Open the Copilot status dashboard: monthly allowance used?
-- [ ] [Medium] Find your three most expensive sessions (context-window popover). What made them large?
-- [ ] [Low] Run `/chronicle:cost-tips` if available; otherwise inspect Agent Debug Logs Summary and Cache Explorer.
-- [ ] [High] Prune instructions and tools you never needed ([MCP audit](../09-mcp-audit/)).
+- [ ] Fill [the baseline record](../02-measure-usage/): actual credits, time, retries, and success.
+- [ ] Label unavailable fields as not exposed; do not add cached input or reasoning twice.
+- [ ] Separate local retrieval estimates from provider cache and actual billing.
+- [ ] Check the account allowance and paid-usage/budget policy.
+- [ ] Keep a change only if cost and quality together improve.
 
-## When in doubt
+## How to verify
 
-Measure ([page 2](../02-measure-usage/)), change one thing, measure again, keep it only if quality held.
+Choose one completed task and trace each checked item to logs, actual settings, or test results. A ticked checklist is not proof on its own.
+
+## Trade-offs
+
+This is a workflow, not a savings guarantee. [Model choice](../05-models-and-planning/), [MCP audit](../09-mcp-audit/), and [budget guards](../08-agent-modes-and-budget/) contain the conditions. Do not optimize reported cache reuse by removing necessary context.
+
+## Sources
+
+- [code.visualstudio.com: harness](https://code.visualstudio.com/blogs/2026/11/18/copilot-harness)
+- [code.visualstudio.com: optimize](https://code.visualstudio.com/docs/agents/guides/optimize-usage)
+- [code.visualstudio.com: cache](https://code.visualstudio.com/docs/agents/agent-troubleshooting/cache-explorer)
+- [docs.github.com: billing](https://docs.github.com/en/copilot/concepts/billing-and-usage/individuals/billing)

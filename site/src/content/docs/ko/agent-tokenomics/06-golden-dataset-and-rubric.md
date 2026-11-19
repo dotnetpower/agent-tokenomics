@@ -1,4 +1,7 @@
 ---
+created: 2026-11-06
+updated: 2026-11-12
+dateSource: git
 title: "6. 골든 데이터셋과 루브릭 평가"
 description: "단일 턴·멀티턴 에이전트의 토큰 최적화 전후 품질을 검증하기 위한 엑셀(CSV) 골든 데이터셋 설계, 키워드·의도 하이브리드 채점, 루브릭 평가 방법입니다."
 track: agent

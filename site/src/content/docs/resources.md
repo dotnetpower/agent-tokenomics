@@ -1,4 +1,7 @@
 ---
+created: 2026-11-03
+updated: 2026-11-06
+dateSource: git
 title: Resources
 description: Repositories, papers, and docs for saving tokens. Curated and checked for existence on 2026-11-03.
 sidebar:

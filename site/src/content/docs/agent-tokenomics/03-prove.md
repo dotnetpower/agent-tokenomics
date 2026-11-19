@@ -1,4 +1,7 @@
 ---
+created: 2026-11-03
+updated: 2026-11-06
+dateSource: git
 title: "3. Prove the problem"
 description: "LLM agent tokenomics Stage 3 (Prove): reproduce token waste on a frozen task set and quantify cost and confidence intervals across repeat runs."
 track: agent

@@ -1,4 +1,7 @@
 ---
+created: 2026-11-03
+updated: 2026-11-19
+dateSource: git
 title: "0. 개념: LLM 에이전트 토큰 이코노믹스(Token Economics)의 원리"
 description: "LLM 토큰 이코노믹스(Tokenomics · Token Economics, 토큰 경제학)의 핵심 개념인 stateless 재전송, 요청 구성, 에이전트 루프, 과금 차원, 프롬프트 캐싱, 컨텍스트 열화를 살펴봅니다."
 track: agent
@@ -168,7 +171,7 @@ input tokens ≈ n × prefix + Σ(history and tool results accumulated before ea
 
 제공자는 최근에 처리한 요청과 **앞부분이 가장 길게 일치하는 접두부**를 재사용할 수 있습니다. 캐시가 적중하려면 요청의 시작 부분이 *완전히 동일*해야 합니다. 지침 순서를 바꾸거나 도구 목록을 수정하거나 기록을 다시 쓰면, 달라진 지점부터는 캐시를 재사용할 수 없습니다. 동작은 제공자, 모델, 배포 유형에 따라 다르며 모델을 바꾸면 이전 모델의 캐시를 재사용하지 못합니다.
 
-설계할 때는 **고정된 내용을 앞에 두고, 바뀌는 내용을 뒤에 두며, 기록은 기존 내용을 수정하지 않고 추가**하세요. 직접 개발한 에이전트에서는 [`tokprof`](../01-diagnose/#코드-변경-없이-프로파일링하기-tokprof)로 호출별 `cached_tokens` 비중과 시스템 프롬프트 해시 변동을 확인할 수 있습니다. 제공자의 공식 안내와 가격표도 참고하세요. [Azure OpenAI](https://learn.microsoft.com/ko-kr/azure/ai-foundry/openai/how-to/prompt-caching), [OpenAI](https://developers.openai.com/api/docs/guides/prompt-caching), [Anthropic Claude](https://platform.claude.com/docs/en/build-with-claude/prompt-caching), [Google Gemini](https://ai.google.dev/gemini-api/docs/caching), [Azure OpenAI 요금](https://azure.microsoft.com/ko-kr/pricing/details/cognitive-services/openai-service/).
+설계할 때는 **고정된 내용을 앞에 두고, 바뀌는 내용을 뒤에 두며, 기록은 기존 내용을 수정하지 않고 추가**하세요. 직접 개발한 에이전트에서는 [`tokprof`](../01-diagnose/#profile-without-changing-code-tokprof)로 호출별 `cached_tokens` 비중과 시스템 프롬프트 해시 변동을 확인할 수 있습니다. 제공자의 공식 안내와 가격표도 참고하세요. [Azure OpenAI](https://learn.microsoft.com/ko-kr/azure/ai-foundry/openai/how-to/prompt-caching), [OpenAI](https://developers.openai.com/api/docs/guides/prompt-caching), [Anthropic Claude](https://platform.claude.com/docs/en/build-with-claude/prompt-caching), [Google Gemini](https://ai.google.dev/gemini-api/docs/caching), [Azure OpenAI 요금](https://azure.microsoft.com/ko-kr/pricing/details/cognitive-services/openai-service/).
 
 <figure class="at-doc-figure">
   <div class="at-diag-stack">

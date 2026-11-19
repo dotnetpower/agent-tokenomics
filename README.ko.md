@@ -90,6 +90,7 @@ tokprof --lang ko
 | 06 | [골든 데이터셋과 루브릭 평가](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/06-golden-dataset-and-rubric/) | 단일 턴·멀티턴 품질 검증을 위한 엑셀(CSV) 골든 데이터셋과 키워드·의도 하이브리드 채점 |
 | 도구 | [`tokprof`: 설치 및 사용법](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/tokprof/) | eBPF, 로컬 게이트웨이, 프로세스 내부 훅을 통한 무수정 토큰 프로파일링 |
 | 사례 | [사례 연구: TokenEconomizer](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/case-tokeneconomizer/) | SWE-Bench 평균 비용을 18.4~30.9% 줄인 `microsoft/TokenEconomizer` 설계 분석 |
+| 해부 | [코딩 에이전트 토큰·캐시·구독 한도 해부 (Claude · Copilot · Codex)](https://dotnetpower.github.io/agent-tokenomics/ko/agent-tokenomics/coding-agent-quotas-and-caching/) | 총토큰 vs API 비용 vs 구독 한도(Ultra/5h/주간), 캐시 읽기·쓰기 단가와 캐시 착시 비교 |
 
 ### 참고 자료 및 연구
 
@@ -99,6 +100,42 @@ tokprof --lang ko
 
 ---
 
+## 검색 및 에이전트 제공 방식
+
+**2026-11-15** 기준 빌드·HTTP 검증 게이트를 적용합니다. 이 프로젝트는 영어·한국어 문서 사이트입니다. 평점·결제·ACP/AP2·OAuth·에이전트 계정 발급 기능을 선언하지 않습니다.
+
+| 영역 | 제공 방식과 검증 범위 |
+|---|---|
+| 렌더링 | Astro/Starlight 정적 HTML입니다. 영어는 `/agent-tokenomics/`, 한국어는 `/agent-tokenomics/ko/`에 있으며 디렉터리 라우트는 `/`로 끝납니다. 단독 HTML 보고서의 번역본을 임의로 만들지 않습니다. |
+| 검색 | 페이지 주제를 앞세운 제목, OG/Twitter 메타 일치, 단일 H1, 실재하는 번역 간 상호 연결, PNG 소셜 이미지, 렌더링 결과 기반 sitemap/RSS와 본문 요약을 제공합니다. |
+| 에이전트 | 페이지별 `index.md` 대체 문서(보고서는 `.html.md`), `llms.txt`, 렌더링 기반 `llms-full.txt`, 무인증 `GET api/pages.json`, OpenAPI 3.1, 카탈로그와 `auth.md`를 제공합니다. |
+| 정직성 | 비용과 작업 성공률을 함께 확인합니다. 외부 보고 수치는 독립 검증 결과가 아닙니다. 발행일·수정일을 임의로 생성하지 않습니다. 검색·조회 봇은 허용하고 학습 전용 봇은 별도 차단합니다. |
+
+```bash
+npm --prefix site ci
+npm --prefix site run check:pairs -- --strict
+npm --prefix site run build
+npm --prefix site run check:seo
+npm --prefix site test
+npm --prefix site run check:http
+npm --prefix site exec -- playwright install chromium
+npm --prefix site run test:browser
+```
+
+전체 HTTP 검사는 임시 서버를 시작해 색인 가능 페이지의 HTML·Markdown 응답과 디스커버리·캐시 헤더를 확인한 뒤 서버를 종료합니다. 이것만으로 운영 CDN의 동작까지 입증하지는 않습니다.
+
+**GitHub Pages의 한계:** 프로젝트 사이트는 사용자 정의 응답 헤더, `Accept` 협상, 도메인 루트의 `robots.txt`·`.well-known`·IndexNow 파일을 제어할 수 없습니다. 배포 후 검사는 `check:http -- --url=https://dotnetpower.github.io/agent-tokenomics/ --static-host`로 수행하며 **전체 HTTP 에이전트 준비도는 인증하지 않습니다**. 워크플로는 실제 업로드한 산출물을 다시 검사하며 실패하면 색인 제출을 막습니다. 루트 robots 정책은 도메인 소유자의 설정이나 아래 서버 배포가 필요합니다.
+
+전체 요구사항을 적용하려면 Node 22에서 `npm --prefix site run serve`를 HTTPS 프록시 뒤에 배포합니다. 서버 외부 접근이 필요한 환경에서만 `HOST=0.0.0.0`을 지정하며 기본 `PORT`는 4321입니다. 서버는 빌드 디렉터리만 제공하고 실제 404/noindex, 루트 디스커버리 별칭, 올바른 MIME과 `Link` 헤더를 반환합니다. HTML과 Markdown 모두 `Vary: Accept, Accept-Encoding`, `Cache-Control: no-store`, `CDN-Cache-Control: no-store`를 사용합니다. 프록시는 헤더를 보존하고 자체 캐시를 우회해야 합니다. 원본 서버뿐 아니라 **공개 CDN URL**에서 전체 검사를 실행합니다.
+
+도메인 루트에 배포하려면 직접 제어하는 실제 도메인으로 `SITE_URL=https://your-actual-domain.example BASE_PATH=/ npm --prefix site run build`를 실행하고 같은 환경 변수로 검증합니다. 워크플로에서도 저장소 변수 `SITE_URL`·`BASE_PATH`을 사용할 수 있으며 실제 Pages 도메인·경로와 일치해야 합니다. 프로젝트 경로용 산출물을 다른 도메인에 그대로 복사하지 않습니다. 동일 산출물을 정준 도메인의 HTTP 서버에 배포한 뒤 저장소 변수 `AGENT_PREFLIGHT_URL`을 설정하면 공개 HTTP 전체 검사가 활성화됩니다.
+
+**소유권 확인과 색인 제출:** 기존 Google 확인 토큰을 유지합니다. 실제 토큰이 있을 때 빌드 변수 `PUBLIC_GOOGLE_SITE_VERIFICATION`으로 교체하거나 `PUBLIC_NAVER_SITE_VERIFICATION`으로 네이버 메타를 추가합니다. 토큰을 임의로 만들지 않습니다. 배포 후 GSC·IndexNow 자동 제출을 사용하려면 `ENABLE_INDEX_SUBMISSION=true`, Search Console 속성에 권한을 가진 서비스 계정의 비밀 `GSC_SERVICE_ACCOUNT_JSON`, 필요하면 `GSC_SITE_URL`을 설정합니다. 기본 속성은 정준 사이트 루트 URL-prefix입니다. Search Console API도 활성화해야 합니다. 워크플로는 단기 액세스 토큰을 발급받고 배포된 IndexNow 키를 확인한 뒤 명시적 `keyLocation`으로 IndexNow 배치 POST와 GSC sitemap PUT을 실행합니다. 자격 증명 누락·제출 거절은 오류로 처리합니다. 제출은 색인을 보장하지 않으며, 설정 전에는 자동 제출이 비활성화됩니다.
+
+**레이아웃 안정성:** 요약과 컨텍스트 예산 체커에 공간을 예약합니다. 체커는 사용자가 측정한 토큰 수만 계산하며 기본값은 가상 예시임을 표시합니다. 브라우저 게이트는 영어·한국어의 데스크톱·모바일 화면에서 폰트 로드 후 실험실 `CLS < 0.10`, 재계산 시 위젯 높이 유지, 잘못된 입력 거절을 검사합니다. 실제 사용자 지표 달성을 단정하는 결과는 아니므로 운영 URL에서 실사용 측정을 반복합니다.
+
+관련 표준: [RFC 8288](https://www.rfc-editor.org/rfc/rfc8288), [RFC 9727](https://www.rfc-editor.org/rfc/rfc9727), [OpenAPI 3.1](https://spec.openapis.org/oas/v3.1.0), [IndexNow](https://www.indexnow.org/documentation), [GSC Sitemaps API](https://developers.google.com/webmaster-tools/v1/sitemaps/submit). `auth.md`는 독립적으로 읽을 수 있는 정책 문서이며 IETF 인증 표준이라고 주장하지 않습니다.
+
 ## 저장소 구조
 
 | 경로 | 내용 |
@@ -106,7 +143,7 @@ tokprof --lang ko
 | `site/` | Astro Starlight 문서 사이트(`https://dotnetpower.github.io/agent-tokenomics/`)입니다. 영어 문서는 `site/src/content/docs/`, 한국어 문서는 `site/src/content/docs/ko/`에 있습니다. 영문 README는 [README.md](README.md)를 참조하세요. |
 | `profiler/` | [`tokprof`](https://pypi.org/project/tokprof/): 코드를 수정하지 않고 세션별·턴별·호출별 입력 토큰을 시스템 프롬프트, 대화 이력, 사용자 프롬프트, 도구 관련 항목으로 분해하는 네이티브 Rust 토큰 프로파일러입니다(`pip install tokprof` / `uvx tokprof`). |
 | `examples/` | 재현 가능한 측정 스크립트 및 샘플 데이터: `token_report.py` + `sample-requests.jsonl`; `count_tokens.py`; `formula_prompt_en.py`, `formula_prompt_ko.py`, `formula_prompt.py` + `test_formula_prompt.py`; `prompt_budget.py` + `sample-pipeline.json`; `golden_dataset_tool.py` + `sample-golden-dataset.csv`/`.xlsx`; `papers.json` + `papers-ko.json` + `fetch_paper_meta.py` + `build_papers.py`. |
-| `llms.txt` | 생성형 검색 엔진(GEO)과 코딩 에이전트가 프로젝트 구조를 한 번에 파악할 수 있도록 정리한 [llmstxt.org](https://llmstxt.org/) 표준 색인 파일입니다(`site/public/llms-full.txt`와 연동). |
+| `llms.txt` | 생성형 검색 엔진과 코딩 에이전트를 위한 [llmstxt.org](https://llmstxt.org/) 색인입니다. `site/public/llms.txt`와 동기화하며, 빌드 시 렌더링 기반 코퍼스를 `site/dist/llms-full.txt`에 생성합니다. |
 | `.github/copilot-instructions.md` | 이 저장소의 문서 작성 및 한영 대칭 규칙입니다. |
 
 ---
@@ -125,6 +162,8 @@ Linux에서는 `tokprof start`가 eBPF TLS uprobe를 통해 이미 실행 중인
 ---
 
 ## 개발 및 검증
+
+모든 사이트 페이지에 `created`, `updated`(`YYYY-MM-DD`), `dateSource`가 필요합니다. 과거 Git 최초 등록일을 쓰면 `git`, 최초 작성일을 모르는 기록 시작일이면 `recorded`를 지정합니다. `updated`는 내용 변경 시 갱신하고 번역별 이력을 유지합니다. `verified`는 관련 출처를 확인했을 때만 갱신하며 재빌드 날짜로 덮어쓰지 않습니다. `npm --prefix site run check:dates`와 빌드는 누락·유효하지 않은 날짜·미래 날짜·날짜 역전을 검사합니다. 논문 페이지는 `examples/build_papers.py`로 생성하며 내용이 같은 재실행에서는 날짜를 유지합니다.
 
 ```bash
 npm --prefix site ci
